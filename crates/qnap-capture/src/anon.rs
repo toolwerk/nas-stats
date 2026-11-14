@@ -232,6 +232,16 @@ impl Anonymizer {
         }
     }
 
+    /// Adds a secret of this run (password, session id), even if it
+    /// looks like a flag or a small number.
+    pub fn add_secret(&mut self, real: &str) {
+        if real.chars().count() >= 3 {
+            self.known
+                .entry(real.to_lowercase())
+                .or_insert_with(|| REDACTED.to_owned());
+        }
+    }
+
     /// Consistent replacement from a numbered family.
     fn numbered(&mut self, family: &str, value: &str, make: impl Fn(usize) -> String) -> String {
         let map = self.maps.entry(family.to_owned()).or_default();
@@ -243,7 +253,8 @@ impl Anonymizer {
 
     /// Replacement for a value under a classified key, `None` to keep it.
     fn map_value(&mut self, kind: Kind, value: &str) -> Option<String> {
-        if is_neutral(value) {
+        // A secret is replaced whatever it looks like.
+        if value.trim().is_empty() || (kind != Kind::Secret && is_neutral(value)) {
             return None;
         }
         let replacement = match kind {
@@ -819,6 +830,21 @@ mod tests {
         a.learn("1.xml", first);
         a.learn("2.xml", second);
         assert_eq!(xml(&mut a, first), "<r><note>Share 1 is full</note></r>");
+    }
+
+    #[test]
+    fn secrets_are_replaced_even_if_neutral() {
+        let mut a = Anonymizer::new();
+        let out = xml(
+            &mut a,
+            "<r><session_timeout>30</session_timeout><pwd>1</pwd></r>",
+        );
+        assert_eq!(
+            out,
+            "<r><session_timeout>REDACTED</session_timeout><pwd>REDACTED</pwd></r>"
+        );
+        a.add_secret("1234");
+        assert_eq!(a.scrub("pin 1234"), "pin REDACTED");
     }
 
     #[test]

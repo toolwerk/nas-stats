@@ -516,7 +516,7 @@ fn anonymize(raw: &Path, anon: &Path, secrets: &[String]) -> ExitCode {
     // Password and session id of this run, kept in memory only: a file
     // that still holds one is refused.
     for form in secrets.iter().flat_map(|s| secret_forms(s)) {
-        a.add_known(&form, REDACTED);
+        a.add_secret(&form);
     }
     if let Ok(meta) = fs::read_to_string(raw.join("meta.txt")) {
         for line in meta.lines() {
