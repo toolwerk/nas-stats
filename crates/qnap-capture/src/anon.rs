@@ -58,6 +58,7 @@ pub fn classify(key: &str, json: bool) -> Option<Kind> {
     } else if ["hostname", "server_name", "servername", "nas_name"].contains(&k.as_str()) {
         Some(Kind::Host)
     } else if k == "authsid"
+        || k == "suid"
         || k == "sid"
         || [
             "token", "pwd", "password", "cuid", "session", "jwt", "cookie",
@@ -166,6 +167,32 @@ fn is_word_char(c: Option<char>) -> bool {
     c.is_some_and(|c| c.is_alphanumeric())
 }
 
+/// Part of a name: a known value inside `CACHEDEV1_DATA` or
+/// `container-station` is not that value.
+fn is_name_char(c: Option<char>) -> bool {
+    c.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Names QTS gives every device (shares, volume). They identify
+/// nothing and also appear in system paths, so the text pass leaves
+/// them alone; under their key they are still replaced.
+const DEFAULT_NAMES: &[&str] = &[
+    "data",
+    "public",
+    "web",
+    "multimedia",
+    "download",
+    "recordings",
+    "homes",
+    "home",
+    "container",
+    "usb",
+    "admin",
+    "administrators",
+    "everyone",
+    "guest",
+];
+
 struct Patterns {
     ipv4_run: Regex,
     ipv6_run: Regex,
@@ -225,7 +252,11 @@ impl Anonymizer {
     /// everywhere.
     pub fn add_known(&mut self, real: &str, replacement: &str) {
         let real = real.trim();
-        if real.chars().count() >= 3 && !is_neutral(real) {
+        if real.chars().count() >= 3
+            && !is_neutral(real)
+            && real != replacement
+            && !DEFAULT_NAMES.contains(&real.to_lowercase().as_str())
+        {
             self.known
                 .entry(real.to_lowercase())
                 .or_insert_with(|| replacement.to_owned());
@@ -292,13 +323,22 @@ impl Anonymizer {
         Regex::new(&format!("(?i)(?:{alternation})")).ok()
     }
 
-    /// Matches of known values that stand alone (no letter or digit
-    /// directly before or after), as `(start, end, replacement)`.
+    /// Matches of known values that stand alone (no letter, digit, `_`
+    /// or `-` directly before or after), as `(start, end, replacement)`.
+    ///
+    /// Replacements already in the text are skipped: a share called
+    /// `Container` must not hit `container-1`, and `REDACTED` is no leak.
     fn known_matches(&self, re: &Regex, text: &str) -> Vec<(usize, usize, String)> {
+        let protected = self.replacement_ranges(text);
         re.find_iter(text)
             .filter(|m| {
-                !is_word_char(text[..m.start()].chars().next_back())
-                    && !is_word_char(text[m.end()..].chars().next())
+                !is_name_char(text[..m.start()].chars().next_back())
+                    && !is_name_char(text[m.end()..].chars().next())
+            })
+            .filter(|m| {
+                !protected
+                    .iter()
+                    .any(|(s, e)| m.start() < *e && *s < m.end())
             })
             .filter_map(|m| {
                 self.known
@@ -306,6 +346,32 @@ impl Anonymizer {
                     .map(|r| (m.start(), m.end(), r.clone()))
             })
             .collect()
+    }
+
+    /// Where replacement values (`Share 1`, `container-2`, `REDACTED`)
+    /// stand in `text`.
+    fn replacement_ranges(&self, text: &str) -> Vec<(usize, usize)> {
+        let mut replacements: Vec<&str> = self
+            .known
+            .values()
+            .map(String::as_str)
+            .chain(
+                self.maps
+                    .values()
+                    .flat_map(|m| m.values().map(String::as_str)),
+            )
+            .chain([REDACTED, DEMO_HOST])
+            .collect();
+        replacements.sort_by_key(|r| std::cmp::Reverse(r.len()));
+        replacements.dedup();
+        let alternation = replacements
+            .iter()
+            .map(|r| regex::escape(r))
+            .collect::<Vec<_>>()
+            .join("|");
+        Regex::new(&alternation)
+            .map(|re| re.find_iter(text).map(|m| (m.start(), m.end())).collect())
+            .unwrap_or_default()
     }
 
     fn replace_known(&mut self, text: &str) -> String {
@@ -724,6 +790,7 @@ mod tests {
         assert_eq!(classify("pwd", false), Some(Kind::Secret));
         assert_eq!(classify("Password", false), Some(Kind::Secret));
         assert_eq!(classify("qcloud_cuid", false), Some(Kind::Secret));
+        assert_eq!(classify("SUID", false), Some(Kind::Secret));
         assert_eq!(classify("jwt", true), Some(Kind::Secret));
         assert_eq!(classify("session_id", true), Some(Kind::Secret));
         assert_eq!(classify("Cookie", true), Some(Kind::Secret));
@@ -848,11 +915,46 @@ mod tests {
     }
 
     #[test]
+    fn replacements_are_no_leaks() {
+        let mut a = Anonymizer::new();
+        let input = "<r><shareName>Plexdaten</shareName><authSid>REDACTED</authSid><note>Plexdaten ok</note></r>";
+        let (_, _) = a.anonymize("x.xml", input);
+        let (out, _) = a.anonymize(
+            "cs.json",
+            r#"{"name":"plex","path":"/share/Plexdaten/plex"}"#,
+        );
+        let v: Value = serde_json::from_str(&out).expect("json");
+        assert_eq!(v["name"], "container-1");
+        assert_eq!(v["path"], "/share/Share 1/container-1");
+        let (out, values) = a.anonymize("x.xml", input);
+        assert!(out.contains("<note>Share 1 ok</note>"), "{out}");
+        assert!(a.leaks(&values).is_empty(), "{values}");
+        assert!(a.leaks("container-1 REDACTED").is_empty());
+    }
+
+    #[test]
+    fn default_names_stay_in_text() {
+        let mut a = Anonymizer::new();
+        let input = "<r><volumeLabel>DATA</volumeLabel><shareName>Container</shareName><path>/share/CACHEDEV1_DATA/.qpkg/container-station/data</path></r>";
+        let (out, values) = a.anonymize("x.xml", input);
+        assert_eq!(
+            out,
+            "<r><volumeLabel>Volume 1</volumeLabel><shareName>Share 1</shareName><path>/share/CACHEDEV1_DATA/.qpkg/container-station/data</path></r>"
+        );
+        assert!(a.leaks(&values).is_empty());
+    }
+
+    #[test]
     fn known_values_need_word_boundaries() {
         let mut a = Anonymizer::new();
         a.add_known("local", REDACTED);
         a.add_known("ab", REDACTED); // too short, ignored
+        a.add_known("kellernas", DEMO_HOST);
         assert_eq!(a.scrub("localhost local ab"), "localhost REDACTED ab");
+        assert_eq!(
+            a.scrub("kellernas_1 kellernas-x /kellernas/"),
+            "kellernas_1 kellernas-x /nas-demo/"
+        );
     }
 
     #[test]
