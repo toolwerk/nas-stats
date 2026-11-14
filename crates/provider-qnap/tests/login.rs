@@ -432,3 +432,24 @@ async fn no_login_after_logout_until_the_user_acts() {
         Ok(SYSINFO.to_owned())
     );
 }
+
+#[tokio::test]
+async fn http_401_after_renewal_is_permission_denied_without_block() {
+    let fake = FakeTransport::new(vec![
+        Ok(LOGIN_OK),
+        Err(ProviderError::LoginFailed),
+        Ok(LOGIN_OK),
+        Err(ProviderError::LoginFailed),
+        Ok(SYSINFO),
+    ]);
+    let client = QnapClient::new(&fake, "monitor", "pw");
+    assert_eq!(
+        client.get_xml("container", &[]).await,
+        Err(ProviderError::PermissionDenied)
+    );
+    assert_eq!(
+        client.get_xml(SYSINFO_PATH, &[]).await,
+        Ok(SYSINFO.to_owned())
+    );
+    assert_eq!(logins(&fake), 2);
+}

@@ -56,10 +56,11 @@ impl<T: Transport> QnapClient<T> {
     /// `GET /cgi-bin/<path>` with the session, body of the `QDocRoot` answer.
     ///
     /// Logs in first when there is no session. When the NAS answers
-    /// `authPassed` 0, logs in again once and repeats the request once; is
-    /// it still 0, the account may not call this endpoint
-    /// ([`ProviderError::PermissionDenied`]) and the session stays. While
-    /// logins are blocked, returns the blocking error without a request.
+    /// `authPassed` 0 or HTTP 401, logs in again once and repeats the
+    /// request once; is it still refused, the account may not call this
+    /// endpoint ([`ProviderError::PermissionDenied`]) and the session stays.
+    /// While logins are blocked, returns the blocking error without a
+    /// request; after [`QnapClient::logout`], [`ProviderError::LoginFailed`].
     pub async fn get_xml(
         &self,
         path: &str,
@@ -83,9 +84,12 @@ impl<T: Transport> QnapClient<T> {
             // try once more (such errors do not block).
             self.session(&mut state).await?
         };
-        self.fetch(path, query, &sid)
-            .await?
-            .ok_or(ProviderError::PermissionDenied)
+        match self.fetch(path, query, &sid).await? {
+            Some(body) => Ok(body),
+            // Logged out meanwhile: the refusal is the logout, not a right.
+            None if self.state.lock().await.closed => Err(ProviderError::LoginFailed),
+            None => Err(ProviderError::PermissionDenied),
+        }
     }
 
     /// User action „Erneut anmelden“: lifts the block and logs in once.
@@ -109,7 +113,7 @@ impl<T: Transport> QnapClient<T> {
     }
 
     /// Ends the session at the NAS, for removing the NAS. Without a session
-    /// nothing is sent. The session is forgotten even when the request
+    /// nothing is sent, but the client still stays logged out. The session is forgotten even when the request
     /// fails; the answer itself is not checked and nothing is retried.
     /// Afterwards [`QnapClient::get_xml`] logs in no more and answers
     /// [`ProviderError::LoginFailed`] without a request, also for requests
