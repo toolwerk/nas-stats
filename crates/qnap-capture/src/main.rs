@@ -523,10 +523,9 @@ fn anonymize(raw: &Path, anon: &Path, secrets: &[String]) -> ExitCode {
             match line.split_once('=') {
                 // An IP as host is handled by the address rules.
                 Some(("host", host)) if host.parse::<std::net::IpAddr>().is_err() => {
+                    // Only the full name: a first label like `nas` or
+                    // `qnap` would hit ordinary values.
                     a.add_known(host, DEMO_HOST);
-                    if let Some((first, _)) = host.split_once('.') {
-                        a.add_known(first, DEMO_HOST);
-                    }
                 }
                 Some(("user", user)) => a.add_known(user, REDACTED),
                 _ => {}

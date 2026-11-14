@@ -48,6 +48,18 @@ const FLAG_WORDS: &[&str] = &[
     "enabled", "disable", "disabled", "-", "--",
 ];
 
+/// Keys that describe a setting (`userType`, `session_timeout`,
+/// `ddns_enable`) rather than hold a name or secret. Password-like keys
+/// never count as such.
+fn is_descriptive(k: &str) -> bool {
+    !["pwd", "password", "token"].iter().any(|s| k.contains(s))
+        && [
+            "type", "timeout", "enable", "enabled", "expiry", "count", "support", "status",
+        ]
+        .iter()
+        .any(|s| k.ends_with(s))
+}
+
 /// Classifies a key. `json` adds the Docker-style `name`/`names` of
 /// Container Station.
 pub fn classify(key: &str, json: bool) -> Option<Kind> {
@@ -57,6 +69,8 @@ pub fn classify(key: &str, json: bool) -> Option<Kind> {
         Some(Kind::Serial)
     } else if ["hostname", "server_name", "servername", "nas_name"].contains(&k.as_str()) {
         Some(Kind::Host)
+    } else if is_descriptive(&k) {
+        None
     } else if k == "authsid"
         || k == "suid"
         || k == "sid"
@@ -165,12 +179,6 @@ fn ipv6_in_run(run: &str) -> Option<(usize, usize, Ipv6Addr)> {
 
 fn is_word_char(c: Option<char>) -> bool {
     c.is_some_and(|c| c.is_alphanumeric())
-}
-
-/// Part of a name: a known value inside `CACHEDEV1_DATA` or
-/// `container-station` is not that value.
-fn is_name_char(c: Option<char>) -> bool {
-    c.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-')
 }
 
 /// Names QTS gives every device (shares, volume). They identify
@@ -323,8 +331,9 @@ impl Anonymizer {
         Regex::new(&format!("(?i)(?:{alternation})")).ok()
     }
 
-    /// Matches of known values that stand alone (no letter, digit, `_`
-    /// or `-` directly before or after), as `(start, end, replacement)`.
+    /// Matches of known values that stand alone (no letter or digit
+    /// directly before or after, so `kellernas_snap` is a hit), as
+    /// `(start, end, replacement)`.
     ///
     /// Replacements already in the text are skipped: a share called
     /// `Container` must not hit `container-1`, and `REDACTED` is no leak.
@@ -332,8 +341,8 @@ impl Anonymizer {
         let protected = self.replacement_ranges(text);
         re.find_iter(text)
             .filter(|m| {
-                !is_name_char(text[..m.start()].chars().next_back())
-                    && !is_name_char(text[m.end()..].chars().next())
+                !is_word_char(text[..m.start()].chars().next_back())
+                    && !is_word_char(text[m.end()..].chars().next())
             })
             .filter(|m| {
                 !protected
@@ -806,6 +815,9 @@ mod tests {
         assert_eq!(classify("name", true), Some(Kind::Container));
         assert_eq!(classify("Names", true), Some(Kind::Container));
         assert_eq!(classify("name", false), None);
+        assert_eq!(classify("userType", false), None);
+        assert_eq!(classify("session_timeout", false), None);
+        assert_eq!(classify("password_status", false), Some(Kind::Secret));
         assert_eq!(classify("cpu_usage", false), None);
     }
 
@@ -904,11 +916,11 @@ mod tests {
         let mut a = Anonymizer::new();
         let out = xml(
             &mut a,
-            "<r><session_timeout>30</session_timeout><pwd>1</pwd></r>",
+            "<r><session_id>30</session_id><session_timeout>30</session_timeout><pwd>1</pwd></r>",
         );
         assert_eq!(
             out,
-            "<r><session_timeout>REDACTED</session_timeout><pwd>REDACTED</pwd></r>"
+            "<r><session_id>REDACTED</session_id><session_timeout>30</session_timeout><pwd>REDACTED</pwd></r>"
         );
         a.add_secret("1234");
         assert_eq!(a.scrub("pin 1234"), "pin REDACTED");
@@ -952,9 +964,10 @@ mod tests {
         a.add_known("kellernas", DEMO_HOST);
         assert_eq!(a.scrub("localhost local ab"), "localhost REDACTED ab");
         assert_eq!(
-            a.scrub("kellernas_1 kellernas-x /kellernas/"),
-            "kellernas_1 kellernas-x /nas-demo/"
+            a.scrub("kellernas_1 kellernas-x /kellernas/ kellernas2"),
+            "nas-demo_1 nas-demo-x /nas-demo/ kellernas2"
         );
+        assert_eq!(a.leaks("job kellernas_snap"), vec!["known real value"]);
     }
 
     #[test]

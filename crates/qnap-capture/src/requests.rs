@@ -13,13 +13,26 @@ pub struct Request {
 }
 
 /// Query keys whose value names the action of a CGI call.
-const ACTION_KEYS: &[&str] = &["func", "subfunc", "act", "action", "op"];
+const ACTION_KEYS: &[&str] = &[
+    "func", "subfunc", "act", "action", "op", "do", "todo", "cmd", "command",
+];
 
 /// Action values starting with one of these change something (or start
 /// a job, or write a log entry) and are refused.
 const WRITING: &[&str] = &[
     "set", "save", "apply", "add", "del", "remove", "create", "edit", "format", "reboot",
-    "shutdown", "restart", "start", "stop", "run", "log",
+    "shutdown", "restart", "start", "stop", "run", "log", "umount", "unmount", "mount", "eject",
+    "update", "upgrade", "enable", "disable", "reset", "scan", "test", "wake", "standby", "kill",
+    "wipe", "erase", "clean", "clear", "init", "import", "restore", "repair",
+];
+
+/// The same verbs as one part of a value (`hd_delete`, `smart_test`).
+/// `update` and `log` are left out here: `firm_update` only reads.
+const WRITING_PART: &[&str] = &[
+    "set", "save", "apply", "add", "del", "delete", "remove", "create", "edit", "format", "reboot",
+    "shutdown", "restart", "start", "stop", "run", "umount", "unmount", "mount", "eject",
+    "upgrade", "enable", "disable", "reset", "scan", "test", "wake", "standby", "kill", "wipe",
+    "erase", "clean", "clear", "init", "import", "restore", "repair",
 ];
 
 /// Checks one request. The error says what is wrong.
@@ -50,6 +63,14 @@ pub fn check_request(name: &str, target: &str) -> Result<(), String> {
             if let Some(word) = WRITING.iter().find(|w| value.starts_with(**w)) {
                 return Err(format!(
                     "`{key}={value}` starts with `{word}` and may change the NAS"
+                ));
+            }
+            if let Some(word) = value
+                .split(['_', '-', '.'])
+                .find(|part| WRITING_PART.contains(part))
+            {
+                return Err(format!(
+                    "`{key}={value}` contains `{word}` and may change the NAS"
                 ));
             }
         }
@@ -158,12 +179,21 @@ mod tests {
             ("func", "run_now"),
             ("func", "log_clear"),
             ("chart_func", "set_x"),
+            ("func", "umount_external"),
+            ("func", "eject"),
+            ("func", "hd_delete"),
+            ("func", "smart_test"),
+            ("func", "hd_standby"),
+            ("func", "update_all"),
+            ("do", "reset"),
+            ("cmd", "wake"),
         ] {
             let target = format!("a.cgi?{key}={value}");
             assert!(check_request("a", &target).is_err(), "{target}");
         }
-        // Only the action keys count.
+        // Only the action keys count, and `firm_update` only reads.
         assert!(check_request("a", "a.cgi?mode=set").is_ok());
+        assert!(check_request("a", "a.cgi?subfunc=firm_update").is_ok());
     }
 
     #[test]

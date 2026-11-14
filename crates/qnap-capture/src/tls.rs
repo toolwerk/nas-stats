@@ -128,8 +128,9 @@ impl ServerCertVerifier for PinVerifier {
     }
 }
 
-/// Blocking HTTP client that trusts only the pinned certificate, keeps
-/// cookies (Container Station) and gives up after 20 seconds.
+/// Blocking HTTP client that trusts only the pinned certificate, speaks
+/// only HTTPS, follows no redirects, keeps cookies (Container Station)
+/// and gives up after 20 seconds.
 pub fn client(pin: Option<&str>) -> Result<(reqwest::blocking::Client, Seen), String> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let verifier = PinVerifier::new(pin, Arc::clone(&provider));
@@ -143,6 +144,10 @@ pub fn client(pin: Option<&str>) -> Result<(reqwest::blocking::Client, Seen), St
     let client = reqwest::blocking::Client::builder()
         .tls_backend_preconfigured(config)
         .cookie_store(true)
+        // No redirects: a 307 to http:// would resend password and sid
+        // to a device nobody pinned.
+        .redirect(reqwest::redirect::Policy::none())
+        .https_only(true)
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|e| format!("HTTP client: {e}"))?;
