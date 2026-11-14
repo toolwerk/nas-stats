@@ -14,7 +14,7 @@ pub struct Request {
 
 /// Query keys whose value names the action of a CGI call.
 const ACTION_KEYS: &[&str] = &[
-    "func", "subfunc", "act", "action", "op", "do", "todo", "cmd", "command",
+    "func", "subfunc", "act", "action", "op", "do", "todo", "cmd", "command", "store",
 ];
 
 /// Action values starting with one of these change something (or start
@@ -212,6 +212,8 @@ mod tests {
             ("func", "hdDelete"),
             ("func", "doSmartTest"),
             ("func", "volumeFormat"),
+            ("store", "deletePool"),
+            ("store", "poolRemove"),
         ] {
             let target = format!("a.cgi?{key}={value}");
             assert!(check_request("a", &target).is_err(), "{target}");
