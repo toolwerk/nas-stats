@@ -12,3 +12,4 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - `ProviderError::Unreachable` carries a detail for the log (#3).
 - Project skeleton: Rust workspace with the `nas-model` crate, CI, setup script.
 - `nas-model`: shared types for NAS, system status, volumes, disks, backups, UPS, fans, containers, alerts, interfaces, snapshots and samples, the `Provider` trait with `ProviderError`, and salted hashing of disk serials (#2).
+- `qnap-capture`: records the answers of an own QNAP read-only (pinned certificate, one login, request list checked for commands) and anonymises them for the fixtures (#1).
