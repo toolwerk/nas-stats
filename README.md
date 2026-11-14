@@ -30,6 +30,8 @@ SwiftUI (iOS, macOS, Widgets) ──UniFFI── Rust-Core
 
 Windows und Linux folgen später über Tauri aus demselben Rust-Core.
 
+Ein klickbares Mockup der Übersicht, des NAS-Details, des Verlaufs mit Prognose, der Widgets und der Mac-Menüleiste liegt unter `docs/mockup/nas-stats-mockup.html` (Demo-Werte).
+
 ## Voraussetzungen
 
 - Rust (stable)
