@@ -14,11 +14,13 @@ authors = ["Frank Neumann-Staude <frank@staude.net>"]
 [workspace.dependencies]
 nas-model = { path = "crates/nas-model" }
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
 thiserror = "2.0.21"
-sha2 = "0.10.9"
 # rustls with ring only, no aws-lc. reqwest gets the finished ClientConfig
 # (tls_backend_preconfigured), so rustls must be the version reqwest uses.
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "query", "form", "http2", "charset"] }
+# HTTP/1.1 only: the ClientConfig sets no ALPN, so no http2 feature.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "query", "form", "charset"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "net", "time", "macros"] }
