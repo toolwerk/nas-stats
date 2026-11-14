@@ -52,9 +52,11 @@ pub struct SystemStatus {
 /// Hashes a disk serial number together with the local NAS id.
 ///
 /// SHA-256 over `nas_id`, a zero byte and the trimmed serial, as 64 lowercase
-/// hex characters. The local id keeps the serial from being recovered by
-/// trying known serial ranges, while the same disk on the same NAS keeps its
-/// hash. The plain serial is never stored.
+/// hex characters. The same disk on the same NAS keeps its hash, while the
+/// same disk on another NAS gets a different one, so hashes cannot be looked
+/// up in precomputed tables or matched across devices. The local id is no
+/// secret: whoever holds it can still try candidate serials, so a hash does
+/// not belong in data shared outside the app. The plain serial is never stored.
 pub fn hash_serial(nas_id: &str, serial: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(nas_id.as_bytes());
