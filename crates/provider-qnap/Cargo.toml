@@ -1,0 +1,20 @@
+[package]
+name = "provider-qnap"
+description = "QNAP QTS provider for NAS Stats: login over authLogin.cgi with a session and a hard stop after a rejected login."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+nas-model = { workspace = true }
+nas-http = { workspace = true }
+base64 = { workspace = true }
+roxmltree = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

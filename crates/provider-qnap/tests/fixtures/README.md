@@ -37,11 +37,14 @@ Echte Antworten eines eigenen QNAP, aufgezeichnet mit `qnap-capture` (Issue #1) 
 | `sysinfo.user.xml` | wie `sysinfo.xml`; alle anderen CGI-Abfragen liefern für dieses Konto dieselbe Antwort | normaler Benutzer |
 | `cs_login.user.json` | wie `cs_login.json` | normaler Benutzer |
 | `cs_container.user.json` | wie `cs_container.json`, HTTP 401 | normaler Benutzer |
+| `login_wrong_password.xml` | `POST authLogin.cgi` mit falschem Passwort, **nachgebaut** (#4) | – |
+| `login_2sv.xml` | `POST authLogin.cgi` bei aktiver 2-Stufen-Verifizierung, **nachgebaut** (#4) | – |
 
 ## Antworten
 
 - Jede CGI-Antwort hat `QDocRoot` mit `authPassed`; die meisten Werte stehen in CDATA. Viele Antworten (z.B. `external_devices.xml`) wiederholen den Block `model`/`firmware`/`hostname` aus `sysinfo`.
 - Ein Konto ohne Admin-Rechte meldet sich an (`authPassed` 1, `isAdmin` 0), bekommt aber auf jede Abfrage nur `authPassed` 0 ohne Daten. Die Container Station antwortet `forbidden: not admin user`.
+- `login_wrong_password.xml` und `login_2sv.xml` sind nicht aufgezeichnet (ein Fehlversuch zählt bei QTS für die Sperre), sondern in der Form der anderen Antworten nachgebaut, nach NAS Pulse und der früheren Login-Doku (`errorValue`, `need_2sv`).
 - Eine ungültige Session antwortet mit HTTP 200 und `authPassed` 0, nicht mit 401.
 - `QSM40bandwidth` liefert auf QTS 5.2.11 nur `authPassed` 1 ohne Werte; die Bandbreite kommt aus `bandwidth`.
 - `syshealth.xml` meldet `warning`, `firmware.xml` `newVersion` `none`.
