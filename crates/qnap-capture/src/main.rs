@@ -34,6 +34,9 @@ const USAGE: &str = "\
 qnap-capture --host HOST[:PORT] [--pin SHA256] [--label NAME] [--out DIR] [--requests FILE]
 qnap-capture anonymize RAW_DIR ANON_DIR";
 
+/// First labels of a host name too common to treat as the device name.
+const GENERIC_HOST_LABELS: &[&str] = &["qnap", "server", "storage", "backup", "local", "home"];
+
 const PAUSE: Duration = Duration::from_secs(1);
 
 #[derive(Debug, PartialEq, Eq)]
@@ -523,9 +526,15 @@ fn anonymize(raw: &Path, anon: &Path, secrets: &[String]) -> ExitCode {
             match line.split_once('=') {
                 // An IP as host is handled by the address rules.
                 Some(("host", host)) if host.parse::<std::net::IpAddr>().is_err() => {
-                    // Only the full name: a first label like `nas` or
-                    // `qnap` would hit ordinary values.
                     a.add_known(host, DEMO_HOST);
+                    // The device name in front of the domain, unless it is
+                    // a generic word that would hit ordinary values.
+                    if let Some((first, _)) = host.split_once('.')
+                        && first.len() >= 4
+                        && !GENERIC_HOST_LABELS.contains(&first.to_ascii_lowercase().as_str())
+                    {
+                        a.add_known(first, DEMO_HOST);
+                    }
                 }
                 Some(("user", user)) => a.add_known(user, REDACTED),
                 _ => {}
@@ -748,7 +757,7 @@ mod tests {
         .expect("meta");
         fs::write(
             raw.join("sysinfo.xml"),
-            "<r><hostname>kellernas</hostname><ip>10.0.0.2</ip><note>frank</note></r>",
+            "<r><hostname>other</hostname><ip>10.0.0.2</ip><note>frank kellernas</note></r>",
         )
         .expect("xml");
         // The share name hides in a JSON key, which the rules leave alone.
@@ -760,7 +769,7 @@ mod tests {
         assert_eq!(code, ExitCode::FAILURE);
         assert_eq!(
             sysinfo,
-            "<r><hostname>nas-demo</hostname><ip>192.0.2.1</ip><note>REDACTED</note></r>"
+            "<r><hostname>nas-demo</hostname><ip>192.0.2.1</ip><note>REDACTED nas-demo</note></r>"
         );
         assert!(!json_written);
     }

@@ -51,13 +51,24 @@ const FLAG_WORDS: &[&str] = &[
 /// Keys that describe a setting (`userType`, `session_timeout`,
 /// `ddns_enable`) rather than hold a name or secret. Password-like keys
 /// never count as such.
-fn is_descriptive(k: &str) -> bool {
-    !["pwd", "password", "token"].iter().any(|s| k.contains(s))
+fn is_descriptive(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    !["pwd", "password", "token", "sid", "jwt", "cookie", "serial"]
+        .iter()
+        .any(|s| k.contains(s))
         && [
             "type", "timeout", "enable", "enabled", "expiry", "count", "support", "status",
         ]
         .iter()
         .any(|s| k.ends_with(s))
+}
+
+/// A setting value: one short word (`local`, `1800`, `ldap_ad`), no
+/// name with dots, spaces or `@`. Anything else under a descriptive key
+/// is still treated by the key rules.
+fn is_setting_value(value: &str) -> bool {
+    let v = value.trim();
+    v.len() <= 12 && v.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Classifies a key. `json` adds the Docker-style `name`/`names` of
@@ -69,8 +80,6 @@ pub fn classify(key: &str, json: bool) -> Option<Kind> {
         Some(Kind::Serial)
     } else if ["hostname", "server_name", "servername", "nas_name"].contains(&k.as_str()) {
         Some(Kind::Host)
-    } else if is_descriptive(&k) {
-        None
     } else if k == "authsid"
         || k == "suid"
         || k == "sid"
@@ -504,6 +513,7 @@ impl Anonymizer {
     /// Value under a key: key rule first, then the text pass.
     fn value(&mut self, key: Option<&str>, value: &str, json: bool) -> String {
         let mapped = key
+            .filter(|k| !(is_descriptive(k) && is_setting_value(value)))
             .and_then(|k| classify(k, json))
             .and_then(|kind| self.map_value(kind, value));
         self.scrub(mapped.as_deref().unwrap_or(value))
@@ -815,9 +825,8 @@ mod tests {
         assert_eq!(classify("name", true), Some(Kind::Container));
         assert_eq!(classify("Names", true), Some(Kind::Container));
         assert_eq!(classify("name", false), None);
-        assert_eq!(classify("userType", false), None);
-        assert_eq!(classify("session_timeout", false), None);
-        assert_eq!(classify("password_status", false), Some(Kind::Secret));
+        assert!(is_descriptive("userType") && is_descriptive("session_timeout"));
+        assert!(!is_descriptive("password_status") && !is_descriptive("serial_type"));
         assert_eq!(classify("cpu_usage", false), None);
     }
 
@@ -954,6 +963,19 @@ mod tests {
             "<r><volumeLabel>Volume 1</volumeLabel><shareName>Share 1</shareName><path>/share/CACHEDEV1_DATA/.qpkg/container-station/data</path></r>"
         );
         assert!(a.leaks(&values).is_empty());
+    }
+
+    #[test]
+    fn descriptive_keys_keep_only_setting_values() {
+        let mut a = Anonymizer::new();
+        let out = xml(
+            &mut a,
+            "<r><userType>local</userType><ddns_status>kellernas.myqnapcloud.com</ddns_status><user_count>Frank Meier</user_count></r>",
+        );
+        assert_eq!(
+            out,
+            "<r><userType>local</userType><ddns_status>REDACTED</ddns_status><user_count>REDACTED</user_count></r>"
+        );
     }
 
     #[test]
