@@ -24,6 +24,7 @@ struct Server {
     addr: SocketAddr,
     cert: CertificateDer<'static>,
     requests: Arc<AtomicUsize>,
+    task: tokio::task::JoinHandle<()>,
 }
 
 impl Server {
@@ -37,6 +38,12 @@ impl Server {
 
     fn requests(&self) -> usize {
         self.requests.load(Ordering::SeqCst)
+    }
+
+    /// Stops accepting; the port is closed afterwards.
+    async fn stop(self) {
+        self.task.abort();
+        let _ = self.task.await;
     }
 }
 
@@ -58,7 +65,7 @@ async fn server(answer: Answer) -> Server {
     let addr = listener.local_addr().unwrap();
     let requests = Arc::new(AtomicUsize::new(0));
     let counter = requests.clone();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         loop {
             let Ok((tcp, _)) = listener.accept().await else {
                 return;
@@ -97,15 +104,14 @@ async fn server(answer: Answer) -> Server {
         addr,
         cert,
         requests,
+        task,
     }
 }
 
 #[tokio::test]
 async fn first_contact_returns_fingerprint_without_request() {
     let server = server(Answer::Status(200)).await;
-    let fp = first_contact("127.0.0.1", server.addr.port())
-        .await
-        .unwrap();
+    let fp = first_contact(&server.url()).await.unwrap();
     assert_eq!(fp, server.fingerprint());
     // Give the server task the chance to read a request, if one came.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -215,6 +221,41 @@ async fn closed_port_is_unreachable() {
     assert!(matches!(err, NasError::Unreachable(_)), "{err:?}");
     // The detail goes to the log; it must not carry the query string.
     assert!(!format!("{err:?}").contains("geheim"), "{err:?}");
-    let err = first_contact("127.0.0.1", port).await.unwrap_err();
+    let err = first_contact(&format!("https://127.0.0.1:{port}/"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, NasError::Unreachable(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn concurrent_requests_all_see_the_changed_certificate() {
+    let server = server(Answer::Status(200)).await;
+    let pin = Fingerprint::of_der(b"another certificate");
+    let client = NasClient::new(&server.url(), pin).unwrap();
+    let (a, b, c) = tokio::join!(
+        client.get_text("a", &[]),
+        client.get_text("b", &[]),
+        client.get_text("c", &[]),
+    );
+    for err in [a, b, c] {
+        assert!(
+            matches!(err, Err(NasError::CertificateChanged { .. })),
+            "{err:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn later_unrelated_error_is_not_certificate_changed() {
+    // A pin failure leaves its fingerprint behind in the client; a later
+    // error of another kind must keep its own variant.
+    let server = server(Answer::Status(200)).await;
+    let client = NasClient::new(&server.url(), Fingerprint::of_der(b"other")).unwrap();
+    assert!(matches!(
+        client.get_text("", &[]).await,
+        Err(NasError::CertificateChanged { .. })
+    ));
+    server.stop().await;
+    let err = client.get_text("", &[]).await.unwrap_err();
     assert!(matches!(err, NasError::Unreachable(_)), "{err:?}");
 }
