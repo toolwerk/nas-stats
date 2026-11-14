@@ -111,7 +111,10 @@ impl NasClient {
     }
 
     async fn send(&self, request: RequestBuilder) -> Result<String, NasError> {
-        let response = request.send().await.map_err(|e| self.map_error(&e))?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| self.map_error(&e.without_url()))?;
         match response.status() {
             s if s.is_success() => {}
             StatusCode::UNAUTHORIZED => return Err(NasError::LoginFailed),
@@ -119,6 +122,7 @@ impl NasClient {
             s => return Err(NasError::Http(s.as_u16())),
         }
         response.text().await.map_err(|e| {
+            let e = e.without_url();
             if e.is_timeout() {
                 NasError::Timeout
             } else {
@@ -178,7 +182,8 @@ pub async fn first_contact(host: &str, port: u16) -> Result<Fingerprint, NasErro
     }
 }
 
-/// The error with all its causes, for the log.
+/// The error with all its causes, for the log. Callers strip the URL first
+/// (`without_url`): query strings can carry passwords or session ids.
 fn chain(e: &reqwest::Error) -> String {
     let mut text = e.to_string();
     let mut source = e.source();

@@ -208,8 +208,13 @@ async fn closed_port_is_unreachable() {
         Fingerprint::of_der(b"cert"),
     )
     .unwrap();
-    let err = client.get_text("", &[]).await.unwrap_err();
+    let err = client
+        .get_text("cgi-bin/login.cgi", &[("pwd", "geheim")])
+        .await
+        .unwrap_err();
     assert!(matches!(err, NasError::Unreachable(_)), "{err:?}");
+    // The detail goes to the log; it must not carry the query string.
+    assert!(!format!("{err:?}").contains("geheim"), "{err:?}");
     let err = first_contact("127.0.0.1", port).await.unwrap_err();
     assert!(matches!(err, NasError::Unreachable(_)), "{err:?}");
 }
