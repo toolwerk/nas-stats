@@ -33,9 +33,50 @@ impl Volume {
     }
 }
 
+/// Why a request to a NAS failed. The `String` fields carry a detail for the
+/// log; the message shown to the user comes from the variant.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum NasError {
+    /// No connection: host unknown, port closed, TLS handshake failed.
+    #[error("NAS nicht erreichbar: {0}")]
+    Unreachable(String),
+    /// The NAS did not answer within the time limit.
+    #[error("Zeitüberschreitung bei der Anfrage an das NAS")]
+    Timeout,
+    /// User name or password rejected.
+    #[error("Anmeldung am NAS fehlgeschlagen")]
+    LoginFailed,
+    /// Logged in, but the account may not read this.
+    #[error("Keine Berechtigung für diese Abfrage")]
+    PermissionDenied,
+    /// The NAS presents another certificate than the confirmed one.
+    /// Both values are SHA-256 fingerprints as `AB:CD:…`.
+    #[error("Zertifikat des NAS hat sich geändert (bestätigt {old}, jetzt {new})")]
+    CertificateChanged { old: String, new: String },
+    /// An answer or input could not be read.
+    #[error("Antwort nicht lesbar: {0}")]
+    Parse(String),
+    /// Any other HTTP status outside 2xx.
+    #[error("NAS antwortet mit HTTP-Status {0}")]
+    Http(u16),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_messages_are_german() {
+        assert_eq!(
+            NasError::Http(500).to_string(),
+            "NAS antwortet mit HTTP-Status 500"
+        );
+        let changed = NasError::CertificateChanged {
+            old: "AA".into(),
+            new: "BB".into(),
+        };
+        assert!(changed.to_string().contains("bestätigt AA, jetzt BB"));
+    }
 
     fn volume(used: u64, total: u64) -> Volume {
         Volume {
