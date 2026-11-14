@@ -1,0 +1,13 @@
+[package]
+name = "nas-model"
+description = "Shared data model for NAS Stats: NAS, volume, disk, backup task and samples."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[lints]
+workspace = true

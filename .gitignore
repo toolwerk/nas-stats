@@ -1,0 +1,6 @@
+target/
+.DS_Store
+*.xcodeproj
+apps/NasStats/Generated/
+capture/
+/.worktrees/
