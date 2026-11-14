@@ -26,6 +26,8 @@ struct Call {
 struct FakeTransport {
     answers: Mutex<VecDeque<Result<String, ProviderError>>>,
     calls: Mutex<Vec<Call>>,
+    /// Yield once before answering, so concurrent requests overlap.
+    slow: bool,
 }
 
 impl FakeTransport {
@@ -33,6 +35,14 @@ impl FakeTransport {
         Self {
             answers: Mutex::new(answers.into_iter().map(|a| a.map(str::to_owned)).collect()),
             calls: Mutex::default(),
+            slow: false,
+        }
+    }
+
+    fn slow(answers: Vec<Result<&str, ProviderError>>) -> Self {
+        Self {
+            slow: true,
+            ..Self::new(answers)
         }
     }
 
@@ -65,7 +75,13 @@ impl Transport for &FakeTransport {
         query: &'a [(&'a str, &'a str)],
     ) -> BoxFuture<'a, Result<String, ProviderError>> {
         let result = self.answer("GET", path, query);
-        Box::pin(async move { result })
+        let slow = self.slow;
+        Box::pin(async move {
+            if slow {
+                tokio::task::yield_now().await;
+            }
+            result
+        })
     }
 
     fn post_form_text<'a>(
@@ -74,7 +90,13 @@ impl Transport for &FakeTransport {
         form: &'a [(&'a str, &'a str)],
     ) -> BoxFuture<'a, Result<String, ProviderError>> {
         let result = self.answer("POST", path, form);
-        Box::pin(async move { result })
+        let slow = self.slow;
+        Box::pin(async move {
+            if slow {
+                tokio::task::yield_now().await;
+            }
+            result
+        })
     }
 }
 
@@ -342,4 +364,71 @@ fn debug_shows_no_secrets() {
     let text = format!("{client:?}");
     assert!(!text.contains("geheim"));
     assert!(!text.contains("monitor"));
+}
+
+#[tokio::test]
+async fn concurrent_requests_renew_the_session_once() {
+    let second = LOGIN_OK.replace("REDACTED]]></authSid>", "second]]></authSid>");
+    let fake = FakeTransport::slow(vec![
+        Ok(LOGIN_OK),
+        Ok(EXPIRED),
+        Ok(EXPIRED),
+        Ok(&second),
+        Ok(SYSINFO),
+        Ok(SYSINFO),
+    ]);
+    let client = QnapClient::new(&fake, "monitor", "pw");
+    let (a, b) = tokio::join!(
+        client.get_xml(SYSINFO_PATH, &[]),
+        client.get_xml(SYSINFO_PATH, &[])
+    );
+    assert_eq!(a, Ok(SYSINFO.to_owned()));
+    assert_eq!(b, Ok(SYSINFO.to_owned()));
+    assert_eq!(logins(&fake), 2);
+    let calls = calls(&fake);
+    assert_eq!(param(&calls[5], "sid"), Some("second"));
+}
+
+#[tokio::test]
+async fn http_401_on_a_request_renews_the_session_once() {
+    let fake = FakeTransport::new(vec![
+        Ok(LOGIN_OK),
+        Err(ProviderError::LoginFailed),
+        Ok(LOGIN_OK),
+        Ok(SYSINFO),
+    ]);
+    let client = QnapClient::new(&fake, "monitor", "pw");
+    assert_eq!(
+        client.get_xml(SYSINFO_PATH, &[]).await,
+        Ok(SYSINFO.to_owned())
+    );
+    assert_eq!(logins(&fake), 2);
+}
+
+#[tokio::test]
+async fn logout_during_a_request_opens_no_new_session() {
+    let fake = FakeTransport::slow(vec![Ok(LOGIN_OK), Ok(EXPIRED), Ok(LOGOUT)]);
+    let client = QnapClient::new(&fake, "monitor", "pw");
+    let (request, logout) = tokio::join!(client.get_xml(SYSINFO_PATH, &[]), client.logout());
+    assert_eq!(logout, Ok(()));
+    assert_eq!(request, Err(ProviderError::LoginFailed));
+    assert_eq!(logins(&fake), 1);
+    assert_eq!(calls(&fake).len(), 3);
+}
+
+#[tokio::test]
+async fn no_login_after_logout_until_the_user_acts() {
+    let fake = FakeTransport::new(vec![Ok(LOGIN_OK), Ok(SYSINFO)]);
+    let client = QnapClient::new(&fake, "monitor", "pw");
+    assert_eq!(client.logout().await, Ok(()));
+    assert_eq!(
+        client.get_xml(SYSINFO_PATH, &[]).await,
+        Err(ProviderError::LoginFailed)
+    );
+    assert!(calls(&fake).is_empty());
+    assert_eq!(client.login().await, Ok(()));
+    assert_eq!(
+        client.get_xml(SYSINFO_PATH, &[]).await,
+        Ok(SYSINFO.to_owned())
+    );
 }

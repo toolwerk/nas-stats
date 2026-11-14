@@ -18,6 +18,8 @@ struct State {
     sid: Option<String>,
     /// The rejection that stopped logins until the user acts.
     blocked: Option<ProviderError>,
+    /// Logged out for good (NAS removed): no further login.
+    closed: bool,
 }
 
 /// Client for one QNAP. It logs in on the first request, keeps the session
@@ -46,6 +48,7 @@ impl<T: Transport> QnapClient<T> {
                 password: password.into(),
                 sid: None,
                 blocked: None,
+                closed: false,
             }),
         }
     }
@@ -66,8 +69,7 @@ impl<T: Transport> QnapClient<T> {
             let mut state = self.state.lock().await;
             self.session(&mut state).await?
         };
-        let body = self.send(path, query, &sid).await?;
-        if !session_gone(&body)? {
+        if let Some(body) = self.fetch(path, query, &sid).await? {
             return Ok(body);
         }
         let sid = {
@@ -76,20 +78,21 @@ impl<T: Transport> QnapClient<T> {
                 state.sid = None;
             }
             // Another request may have logged in meanwhile; then its
-            // session is used and no second login goes out.
+            // session is used and no second login goes out. Only after a
+            // network or format error on that login does the next request
+            // try once more (such errors do not block).
             self.session(&mut state).await?
         };
-        let body = self.send(path, query, &sid).await?;
-        if session_gone(&body)? {
-            return Err(ProviderError::PermissionDenied);
-        }
-        Ok(body)
+        self.fetch(path, query, &sid)
+            .await?
+            .ok_or(ProviderError::PermissionDenied)
     }
 
     /// User action „Erneut anmelden“: lifts the block and logs in once.
     pub async fn login(&self) -> Result<(), ProviderError> {
         let mut state = self.state.lock().await;
         state.blocked = None;
+        state.closed = false;
         state.sid = None;
         self.login_locked(&mut state).await.map(|_| ())
     }
@@ -102,13 +105,23 @@ impl<T: Transport> QnapClient<T> {
         state.password = password.into();
         state.sid = None;
         state.blocked = None;
+        state.closed = false;
     }
 
     /// Ends the session at the NAS, for removing the NAS. Without a session
     /// nothing is sent. The session is forgotten even when the request
     /// fails; the answer itself is not checked and nothing is retried.
+    /// Afterwards [`QnapClient::get_xml`] logs in no more and answers
+    /// [`ProviderError::LoginFailed`] without a request, also for requests
+    /// still running, until [`QnapClient::login`] or
+    /// [`QnapClient::set_credentials`].
     pub async fn logout(&self) -> Result<(), ProviderError> {
-        let Some(sid) = self.state.lock().await.sid.take() else {
+        let sid = {
+            let mut state = self.state.lock().await;
+            state.closed = true;
+            state.sid.take()
+        };
+        let Some(sid) = sid else {
             return Ok(());
         };
         self.transport
@@ -121,6 +134,9 @@ impl<T: Transport> QnapClient<T> {
     async fn session(&self, state: &mut State) -> Result<String, ProviderError> {
         if let Some(blocked) = &state.blocked {
             return Err(blocked.clone());
+        }
+        if state.closed {
+            return Err(ProviderError::LoginFailed);
         }
         match &state.sid {
             Some(sid) => Ok(sid.clone()),
@@ -154,21 +170,27 @@ impl<T: Transport> QnapClient<T> {
         Err(error)
     }
 
-    async fn send(
+    /// One request with the session; `None` when the NAS says the session
+    /// is not valid (`authPassed` 0, or HTTP 401 which nas-http reports as
+    /// [`ProviderError::LoginFailed`]).
+    async fn fetch(
         &self,
         path: &str,
         query: &[(&str, &str)],
         sid: &str,
-    ) -> Result<String, ProviderError> {
+    ) -> Result<Option<String>, ProviderError> {
         let path = format!("/cgi-bin/{}", path.trim_start_matches('/'));
         let mut full = query.to_vec();
         full.push(("sid", sid));
-        self.transport.get_text(&path, &full).await
+        let body = match self.transport.get_text(&path, &full).await {
+            Ok(body) => body,
+            Err(ProviderError::LoginFailed) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let doc = parse_qdoc(&body)?;
+        if root_text(&doc, "authPassed").as_deref() == Some("0") {
+            return Ok(None);
+        }
+        Ok(Some(body))
     }
-}
-
-/// Whether a QTS answer says the session is not valid (`authPassed` 0).
-fn session_gone(body: &str) -> Result<bool, ProviderError> {
-    let doc = parse_qdoc(body)?;
-    Ok(root_text(&doc, "authPassed").as_deref() == Some("0"))
 }
