@@ -82,6 +82,21 @@ mod tests {
     }
 
     #[test]
+    fn sample_survives_json() {
+        let sample = Sample {
+            nas_id: "nas-1".into(),
+            metric: Metric::DiskTemp,
+            key: Some("disk-1".into()),
+            at: 1_700_000_000,
+            value: 35.5,
+        };
+        let json = serde_json::to_string(&sample).expect("sample serializes");
+        assert!(json.contains("\"metric\":\"disk.temp\""));
+        let back: Sample = serde_json::from_str(&json).expect("sample deserializes");
+        assert_eq!(back, sample);
+    }
+
+    #[test]
     fn as_str_matches_serde_name() {
         for metric in ALL {
             let json = serde_json::to_string(&metric).expect("metric serializes");

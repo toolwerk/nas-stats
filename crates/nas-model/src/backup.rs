@@ -59,3 +59,22 @@ pub struct BackupRun {
     /// Message of the vendor about the run.
     pub message: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backup_run_survives_json() {
+        let run = BackupRun {
+            task_id: "b1".into(),
+            started_at: 1_699_950_000,
+            finished_at: Some(1_699_953_600),
+            result: BackupResult::Error,
+            message: Some("Demo failure".into()),
+        };
+        let json = serde_json::to_string(&run).expect("run serializes");
+        let back: BackupRun = serde_json::from_str(&json).expect("run deserializes");
+        assert_eq!(back, run);
+    }
+}
