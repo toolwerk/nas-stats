@@ -4,3 +4,4 @@ target/
 apps/NasStats/Generated/
 capture/
 /.worktrees/
+.tbd/
