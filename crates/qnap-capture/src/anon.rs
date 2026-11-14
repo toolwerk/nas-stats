@@ -108,9 +108,9 @@ pub fn classify(key: &str, json: bool) -> Option<Kind> {
         .any(|s| has(s))
     {
         Some(Kind::Personal)
-    } else if k == "volumelabel" || has("pool_name") {
+    } else if k == "volumelabel" || has("pool_name") || has("poolname") {
         Some(Kind::Volume)
-    } else if has("share") {
+    } else if has("share") || has("folder_name") || has("foldername") {
         Some(Kind::Share)
     } else if has("alias") {
         Some(Kind::Alias)
@@ -119,6 +119,27 @@ pub fn classify(key: &str, json: bool) -> Option<Kind> {
     } else {
         None
     }
+}
+
+/// Key for the text of the innermost element. A generic `<name>` or
+/// `<label>` inside a pool, volume or share element takes the meaning
+/// of that element (`<pool><name>Fotos</name></pool>`).
+fn context_key(stack: &[String]) -> Option<String> {
+    let (last, parents) = stack.split_last()?;
+    let generic = ["name", "label", "displayname", "display_name", "alias"]
+        .contains(&last.to_ascii_lowercase().as_str());
+    if generic {
+        for parent in parents.iter().rev().take(2) {
+            let p = parent.to_ascii_lowercase();
+            if p.contains("pool") || p.contains("volume") {
+                return Some("pool_name".to_owned());
+            }
+            if p.contains("share") || p.contains("folder") {
+                return Some("sharename".to_owned());
+            }
+        }
+    }
+    Some(last.clone())
 }
 
 /// Empty values, flags and small numbers say nothing about the device.
@@ -621,12 +642,8 @@ impl Anonymizer {
                 Event::GeneralRef(r) => pieces.push(Piece::Ref(r.into_inner().into_owned())),
                 Event::CData(c) => pieces.push(Piece::CData(c.into_inner().into_owned())),
                 other => {
-                    self.flush(
-                        &mut writer,
-                        stack.last().map(String::as_str),
-                        &mut pieces,
-                        &mut values,
-                    )?;
+                    let key = context_key(&stack);
+                    self.flush(&mut writer, key.as_deref(), &mut pieces, &mut values)?;
                     match other {
                         Event::Start(s) => {
                             stack.push(s.name().as_ref().to_owned());
@@ -988,6 +1005,19 @@ mod tests {
         assert_eq!(
             out,
             "<r><userType>local</userType><ddns_status>REDACTED</ddns_status><user_count>REDACTED</user_count></r>"
+        );
+    }
+
+    #[test]
+    fn generic_names_take_the_meaning_of_their_parent() {
+        let mut a = Anonymizer::new();
+        let out = xml(
+            &mut a,
+            "<r><pool><poolID>1</poolID><name>Fotos</name></pool><poolName>Archiv</poolName><shareList><item><name>Musik</name></item></shareList><func><name>S_MENU_40</name></func></r>",
+        );
+        assert_eq!(
+            out,
+            "<r><pool><poolID>1</poolID><name>Volume 1</name></pool><poolName>Volume 2</poolName><shareList><item><name>Share 1</name></item></shareList><func><name>S_MENU_40</name></func></r>"
         );
     }
 
