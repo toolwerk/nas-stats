@@ -16,8 +16,10 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Why a provider could not read the NAS.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ProviderError {
-    #[error("NAS nicht erreichbar")]
-    Unreachable,
+    /// No connection: host unknown, port closed, TLS handshake failed.
+    /// The text is a detail for the log, without URLs or credentials.
+    #[error("NAS nicht erreichbar: {0}")]
+    Unreachable(String),
     #[error("Zeitüberschreitung bei der Abfrage")]
     Timeout,
     #[error("Anmeldung fehlgeschlagen")]
@@ -92,7 +94,9 @@ mod tests {
         }
 
         fn snapshot(&self) -> BoxFuture<'_, Result<Snapshot, ProviderError>> {
-            Box::pin(std::future::ready(Err(ProviderError::Unreachable)))
+            Box::pin(std::future::ready(Err(ProviderError::Unreachable(
+                "test".into(),
+            ))))
         }
     }
 
@@ -122,7 +126,7 @@ mod tests {
             },
         ];
         let continuing = [
-            ProviderError::Unreachable,
+            ProviderError::Unreachable("x".into()),
             ProviderError::Timeout,
             ProviderError::PermissionDenied,
             ProviderError::Parse("x".into()),
