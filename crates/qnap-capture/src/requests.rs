@@ -35,6 +35,27 @@ const WRITING_PART: &[&str] = &[
     "erase", "clean", "clear", "init", "import", "restore", "repair",
 ];
 
+/// Parts of an action value, split at `_`, `-`, `.` and camel case
+/// (`doSmartTest` → `do`, `smart`, `test`), lower case.
+fn value_parts(value: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    for chunk in value.split(['_', '-', '.']) {
+        let mut part = String::new();
+        let mut prev_lower = false;
+        for c in chunk.chars() {
+            if c.is_ascii_uppercase() && prev_lower && !part.is_empty() {
+                parts.push(std::mem::take(&mut part));
+            }
+            prev_lower = c.is_ascii_lowercase() || c.is_ascii_digit();
+            part.push(c.to_ascii_lowercase());
+        }
+        if !part.is_empty() {
+            parts.push(part);
+        }
+    }
+    parts
+}
+
 /// Checks one request. The error says what is wrong.
 pub fn check_request(name: &str, target: &str) -> Result<(), String> {
     if name.is_empty()
@@ -59,15 +80,16 @@ pub fn check_request(name: &str, target: &str) -> Result<(), String> {
         }
         // `chart_func` and the like name the action as well.
         if ACTION_KEYS.contains(&key.as_str()) || key.ends_with("func") {
+            let parts = value_parts(value);
             let value = value.to_ascii_lowercase();
             if let Some(word) = WRITING.iter().find(|w| value.starts_with(**w)) {
                 return Err(format!(
                     "`{key}={value}` starts with `{word}` and may change the NAS"
                 ));
             }
-            if let Some(word) = value
-                .split(['_', '-', '.'])
-                .find(|part| WRITING_PART.contains(part))
+            if let Some(word) = parts
+                .iter()
+                .find(|part| WRITING_PART.contains(&part.as_str()))
             {
                 return Err(format!(
                     "`{key}={value}` contains `{word}` and may change the NAS"
@@ -187,6 +209,9 @@ mod tests {
             ("func", "update_all"),
             ("do", "reset"),
             ("cmd", "wake"),
+            ("func", "hdDelete"),
+            ("func", "doSmartTest"),
+            ("func", "volumeFormat"),
         ] {
             let target = format!("a.cgi?{key}={value}");
             assert!(check_request("a", &target).is_err(), "{target}");

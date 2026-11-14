@@ -53,9 +53,22 @@ const FLAG_WORDS: &[&str] = &[
 /// never count as such.
 fn is_descriptive(key: &str) -> bool {
     let k = key.to_ascii_lowercase();
-    !["pwd", "password", "token", "sid", "jwt", "cookie", "serial"]
-        .iter()
-        .any(|s| k.contains(s))
+    ![
+        "pwd",
+        "password",
+        "token",
+        "sid",
+        "jwt",
+        "cookie",
+        "serial",
+        "cuid",
+        "ddns",
+        "domain",
+        "workgroup",
+        "email",
+    ]
+    .iter()
+    .any(|s| k.contains(s))
         && [
             "type", "timeout", "enable", "enabled", "expiry", "count", "support", "status",
         ]
