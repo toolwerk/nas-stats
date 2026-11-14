@@ -1,0 +1,50 @@
+{
+  "projekt": {
+    "nummer": 3,
+    "owner": "toolwerk",
+    "projectId": "PVT_kwDOFPrI7c4BrpW9",
+    "status": {
+      "feldId": "PVTSSF_lADOFPrI7c4BrpW9zhp7GyU",
+      "optionen": {
+        "Todo": "f75ad846",
+        "Planning": "0c7b7979",
+        "In Progress": "47fc9ee4",
+        "In Review": "78435d6e",
+        "Done": "98236657"
+      }
+    },
+    "needsFeedbackFrom": null
+  },
+  "typen": [
+    {
+      "name": "Bug",
+      "id": "IT_kwDOFPrI7c43U3F4",
+      "praefix": "bug"
+    },
+    {
+      "name": "Feature",
+      "id": "IT_kwDOFPrI7c43U3F5",
+      "praefix": "feature"
+    },
+    {
+      "name": "Enhancement",
+      "id": "IT_kwDOFPrI7c43d25z",
+      "praefix": "feature"
+    },
+    {
+      "name": "Task",
+      "id": "IT_kwDOFPrI7c43U3F3",
+      "praefix": "task"
+    },
+    {
+      "name": "Documentation",
+      "id": null,
+      "praefix": "docs"
+    },
+    {
+      "name": "Update",
+      "id": "IT_kwDOFPrI7c43d256",
+      "praefix": "update"
+    }
+  ]
+}
