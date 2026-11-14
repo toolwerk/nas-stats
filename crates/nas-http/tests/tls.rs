@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use nas_http::{Fingerprint, NasClient, NasError, first_contact};
+use nas_http::{Fingerprint, NasClient, ProviderError, first_contact};
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -143,7 +143,7 @@ async fn other_certificate_is_certificate_changed() {
     let err = client.get_text("", &[]).await.unwrap_err();
     assert_eq!(
         err,
-        NasError::CertificateChanged {
+        ProviderError::CertificateChanged {
             old: pin.to_string(),
             new: server.fingerprint().to_string(),
         }
@@ -155,7 +155,7 @@ async fn other_certificate_is_certificate_changed() {
 async fn plain_http_is_rejected() {
     let pin = Fingerprint::of_der(b"cert");
     let err = NasClient::new("http://127.0.0.1:8080/", pin).unwrap_err();
-    assert!(matches!(err, NasError::Parse(_)), "{err:?}");
+    assert!(matches!(err, ProviderError::Parse(_)), "{err:?}");
 }
 
 #[tokio::test]
@@ -168,7 +168,7 @@ async fn path_cannot_leave_the_nas() {
         "//example.com/x",
     ] {
         let err = client.get_text(path, &[]).await.unwrap_err();
-        assert!(matches!(err, NasError::Parse(_)), "{path}: {err:?}");
+        assert!(matches!(err, ProviderError::Parse(_)), "{path}: {err:?}");
     }
     assert_eq!(server.requests(), 0);
 }
@@ -176,10 +176,10 @@ async fn path_cannot_leave_the_nas() {
 #[tokio::test]
 async fn status_codes_map_to_errors_with_one_request_each() {
     for (code, expected) in [
-        (401, NasError::LoginFailed),
-        (403, NasError::PermissionDenied),
-        (500, NasError::Http(500)),
-        (302, NasError::Http(302)),
+        (401, ProviderError::LoginFailed),
+        (403, ProviderError::PermissionDenied),
+        (500, ProviderError::Http(500)),
+        (302, ProviderError::Http(302)),
     ] {
         let server = server(Answer::Status(code)).await;
         let client = NasClient::new(&server.url(), server.fingerprint()).unwrap();
@@ -200,7 +200,7 @@ async fn silent_server_is_timeout() {
     )
     .unwrap();
     let err = client.get_text("", &[]).await.unwrap_err();
-    assert_eq!(err, NasError::Timeout);
+    assert_eq!(err, ProviderError::Timeout);
     assert_eq!(server.requests(), 1);
 }
 
@@ -218,13 +218,13 @@ async fn closed_port_is_unreachable() {
         .get_text("cgi-bin/login.cgi", &[("pwd", "geheim")])
         .await
         .unwrap_err();
-    assert!(matches!(err, NasError::Unreachable(_)), "{err:?}");
+    assert!(matches!(err, ProviderError::Unreachable(_)), "{err:?}");
     // The detail goes to the log; it must not carry the query string.
     assert!(!format!("{err:?}").contains("geheim"), "{err:?}");
     let err = first_contact(&format!("https://127.0.0.1:{port}/"))
         .await
         .unwrap_err();
-    assert!(matches!(err, NasError::Unreachable(_)), "{err:?}");
+    assert!(matches!(err, ProviderError::Unreachable(_)), "{err:?}");
 }
 
 #[tokio::test]
@@ -239,7 +239,7 @@ async fn concurrent_requests_all_see_the_changed_certificate() {
     );
     for err in [a, b, c] {
         assert!(
-            matches!(err, Err(NasError::CertificateChanged { .. })),
+            matches!(err, Err(ProviderError::CertificateChanged { .. })),
             "{err:?}"
         );
     }
@@ -253,9 +253,9 @@ async fn later_unrelated_error_is_not_certificate_changed() {
     let client = NasClient::new(&server.url(), Fingerprint::of_der(b"other")).unwrap();
     assert!(matches!(
         client.get_text("", &[]).await,
-        Err(NasError::CertificateChanged { .. })
+        Err(ProviderError::CertificateChanged { .. })
     ));
     server.stop().await;
     let err = client.get_text("", &[]).await.unwrap_err();
-    assert!(matches!(err, NasError::Unreachable(_)), "{err:?}");
+    assert!(matches!(err, ProviderError::Unreachable(_)), "{err:?}");
 }

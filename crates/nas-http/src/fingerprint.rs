@@ -4,7 +4,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use nas_model::NasError;
+use nas_model::ProviderError;
 use sha2::{Digest, Sha256};
 
 /// SHA-256 over the DER bytes of the end-entity certificate.
@@ -36,13 +36,13 @@ impl fmt::Display for Fingerprint {
 }
 
 impl FromStr for Fingerprint {
-    type Err = NasError;
+    type Err = ProviderError;
 
     /// Accepts upper or lower case, with or without colons.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let hex: Vec<u8> = s.trim().bytes().filter(|b| *b != b':').collect();
         if hex.len() != 64 {
-            return Err(NasError::Parse(format!(
+            return Err(ProviderError::Parse(format!(
                 "Fingerabdruck braucht 64 Hex-Zeichen, hat {}",
                 hex.len()
             )));
@@ -53,7 +53,7 @@ impl FromStr for Fingerprint {
             match (nibble(*high), nibble(*low)) {
                 (Some(h), Some(l)) => *byte = h << 4 | l,
                 _ => {
-                    return Err(NasError::Parse(
+                    return Err(ProviderError::Parse(
                         "Fingerabdruck enthält Zeichen außer 0-9, A-F und ':'".into(),
                     ));
                 }
@@ -101,7 +101,7 @@ mod tests {
     fn rejects_wrong_length() {
         assert!(matches!(
             "AB:CD".parse::<Fingerprint>(),
-            Err(NasError::Parse(_))
+            Err(ProviderError::Parse(_))
         ));
     }
 
@@ -110,7 +110,7 @@ mod tests {
         let bad = EMPTY.replacen("E3", "G3", 1);
         assert!(matches!(
             bad.parse::<Fingerprint>(),
-            Err(NasError::Parse(_))
+            Err(ProviderError::Parse(_))
         ));
     }
 }

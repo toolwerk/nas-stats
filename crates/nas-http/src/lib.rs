@@ -7,7 +7,7 @@
 //!    [`Fingerprint`] without sending any request. The app shows it, the
 //!    user confirms it.
 //! 2. [`NasClient`] then accepts exactly that certificate. Another one ends
-//!    in [`NasError::CertificateChanged`] with the old and the new
+//!    in [`ProviderError::CertificateChanged`] with the old and the new
 //!    fingerprint.
 //!
 //! Decisions:
@@ -27,4 +27,4 @@ mod verifier;
 
 pub use client::{CONNECT_TIMEOUT, NasClient, TIMEOUT, first_contact};
 pub use fingerprint::Fingerprint;
-pub use nas_model::NasError;
+pub use nas_model::ProviderError;
