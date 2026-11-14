@@ -2,9 +2,9 @@
 
 ## Zweck
 
-Statistik- und Zustands-App für NAS verschiedener Hersteller (Synology, QNAP, TrueNAS, weitere nach Recherche), mit Widgets. Rust-Core per UniFFI, SwiftUI für iOS und macOS. Windows und Linux später per Tauri.
+Statistik- und Zustands-App für NAS verschiedener Hersteller, mit Widgets. QNAP hat Priorität 1 (eigenes Testgerät), Synology, TrueNAS und Unraid folgen. Rust-Core per UniFFI, SwiftUI für iOS und macOS. Windows und Linux später per Tauri.
 
-Recherche: Vault `04 Ressourcen/App-Ideen/App-Idee NAS Stats.md`. Konzept folgt in `NAS Stats Konzept.md` daneben. Vorbilder: Token Stats (`~/dev/token-stats`) und 3D Stats (`~/dev/3d-stats`), dessen Aufbau dieses Repo übernimmt. API-Wissen zu Synology und QNAP steckt schon in NAS Pulse (`~/dev/streamdeck/nas-streamdeck`, `src/lib/synology.ts`, `src/lib/qnap.ts`), zu TrueNAS und Unraid in Homelab Pulse (`~/dev/streamdeck/homelab-streamdeck`).
+Recherche: Vault `04 Ressourcen/App-Ideen/App-Idee NAS Stats.md`. Konzept: `NAS Stats Konzept.md` daneben. Vorbilder: Token Stats (`~/dev/token-stats`) und 3D Stats (`~/dev/3d-stats`), dessen Aufbau dieses Repo übernimmt. API-Wissen zu Synology und QNAP steckt schon in NAS Pulse (`~/dev/streamdeck/nas-streamdeck`, `src/lib/synology.ts`, `src/lib/qnap.ts`), zu TrueNAS und Unraid in Homelab Pulse (`~/dev/streamdeck/homelab-streamdeck`).
 
 GitHub: `toolwerk/nas-stats` (privat).
 
