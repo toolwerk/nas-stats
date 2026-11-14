@@ -421,6 +421,16 @@ fn capture(args: &Args) -> ExitCode {
                 ""
             }
         );
+        if let Some(row) = session.rows.last()
+            && row.http != "200"
+        {
+            eprintln!(
+                "authLogin.cgi answered HTTP {}: this address does not look like the QTS web \
+                 interface. Check host and port (QTS: Control Panel > System > General \
+                 Settings, HTTPS port).",
+                row.http
+            );
+        }
         write_summary(&label_dir, &session.rows);
         let _ = anonymize(&raw, &anon_dir, &session.secrets);
         return ExitCode::FAILURE;
