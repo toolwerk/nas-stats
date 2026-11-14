@@ -19,7 +19,7 @@ use std::net::Ipv6Addr;
 use quick_xml::Reader;
 use quick_xml::Writer;
 use quick_xml::escape::unescape;
-use quick_xml::events::{BytesCData, BytesRef, BytesStart, BytesText, Event};
+use quick_xml::events::{BytesCData, BytesPI, BytesRef, BytesStart, BytesText, Event};
 use regex::Regex;
 use serde_json::Value;
 
@@ -59,7 +59,11 @@ pub fn classify(key: &str, json: bool) -> Option<Kind> {
         Some(Kind::Host)
     } else if k == "authsid"
         || k == "sid"
-        || ["token", "pwd", "password", "cuid"].iter().any(|s| has(s))
+        || [
+            "token", "pwd", "password", "cuid", "session", "jwt", "cookie",
+        ]
+        .iter()
+        .any(|s| has(s))
     {
         Some(Kind::Secret)
     } else if ["user", "email", "ddns", "domain", "workgroup"]
@@ -239,7 +243,7 @@ impl Anonymizer {
 
     /// Replacement for a value under a classified key, `None` to keep it.
     fn map_value(&mut self, kind: Kind, value: &str) -> Option<String> {
-        if value.trim().is_empty() || (kind != Kind::Secret && is_neutral(value)) {
+        if is_neutral(value) {
             return None;
         }
         let replacement = match kind {
@@ -529,6 +533,23 @@ impl Anonymizer {
                             writer.write_event(Event::End(e)).map_err(io)?;
                         }
                         Event::Eof => break,
+                        // Comments and the like are text as well.
+                        Event::Comment(t) => {
+                            let t = self.scrub_markup(&t.into_inner(), &mut values);
+                            writer
+                                .write_event(Event::Comment(BytesText::from_escaped(t)))
+                                .map_err(io)?;
+                        }
+                        Event::DocType(t) => {
+                            let t = self.scrub_markup(&t.into_inner(), &mut values);
+                            writer
+                                .write_event(Event::DocType(BytesText::from_escaped(t)))
+                                .map_err(io)?;
+                        }
+                        Event::PI(p) => {
+                            let t = self.scrub_markup(&p.into_inner(), &mut values);
+                            writer.write_event(Event::PI(BytesPI::new(t))).map_err(io)?;
+                        }
                         e => writer.write_event(e).map_err(io)?,
                     }
                 }
@@ -536,6 +557,14 @@ impl Anonymizer {
         }
         let out = String::from_utf8(writer.into_inner()).map_err(|e| e.to_string())?;
         Ok((out, values))
+    }
+
+    /// Text pass over a comment, doctype or processing instruction.
+    fn scrub_markup(&mut self, raw: &str, values: &mut String) -> String {
+        let new = self.scrub(raw);
+        values.push_str(&new);
+        values.push('\n');
+        new
     }
 
     /// Writes the buffered text of the current element, replaced if a
@@ -684,6 +713,9 @@ mod tests {
         assert_eq!(classify("pwd", false), Some(Kind::Secret));
         assert_eq!(classify("Password", false), Some(Kind::Secret));
         assert_eq!(classify("qcloud_cuid", false), Some(Kind::Secret));
+        assert_eq!(classify("jwt", true), Some(Kind::Secret));
+        assert_eq!(classify("session_id", true), Some(Kind::Secret));
+        assert_eq!(classify("Cookie", true), Some(Kind::Secret));
         assert_eq!(classify("username", false), Some(Kind::Personal));
         assert_eq!(classify("email", false), Some(Kind::Personal));
         assert_eq!(classify("ddns_host", false), Some(Kind::Personal));
@@ -881,6 +913,23 @@ mod tests {
         assert_eq!(a.leaks("left fe80::1"), vec!["IPv6 address"]);
         assert_eq!(a.leaks("left 24:5e:be:01:02:03"), vec!["MAC address"]);
         assert_eq!(a.leaks("host KellerNAS here"), vec!["known real value"]);
+    }
+
+    #[test]
+    fn comments_are_scrubbed_and_checked() {
+        let mut a = Anonymizer::new();
+        let (out, values) = a.anonymize(
+            "x.xml",
+            "<r><!-- from 10.0.0.9 --><?pi at 10.0.0.9?><x>1</x></r>",
+        );
+        assert_eq!(
+            out,
+            "<r><!-- from 192.0.2.1 --><?pi at 192.0.2.1?><x>1</x></r>"
+        );
+        assert!(values.contains("192.0.2.1"));
+        a.add_known("kellernas", DEMO_HOST);
+        let (_, values) = a.anonymize("y.xml", "<r><!-- kellernas --></r>");
+        assert!(a.leaks(&values).is_empty(), "{values}");
     }
 
     #[test]

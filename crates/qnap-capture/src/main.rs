@@ -201,7 +201,7 @@ impl Session<'_> {
             }
         };
         let mut body = body;
-        for secret in self.secrets.iter().filter(|s| s.len() >= 3) {
+        for secret in self.secrets.iter().flat_map(|s| secret_forms(s)) {
             body = body.replace(secret.as_str(), REDACTED);
         }
         let auth_passed = tag_value(&body, "authPassed").unwrap_or_else(|| "-".into());
@@ -228,6 +228,38 @@ impl Session<'_> {
             .send();
         self.record(file, read(result));
     }
+}
+
+/// A secret as it may show up in an answer: plain, XML-escaped,
+/// JSON-escaped, URL-encoded. Shorter than 3 characters is skipped, it
+/// would hit everywhere.
+fn secret_forms(secret: &str) -> Vec<String> {
+    if secret.chars().count() < 3 {
+        return Vec::new();
+    }
+    let json = serde_json::to_string(secret).unwrap_or_default();
+    let json = json.trim_matches('"').to_owned();
+    let url: String = secret
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+                char::from(b).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect();
+    let mut forms = vec![
+        secret.to_owned(),
+        quick_xml::escape::escape(secret).into_owned(),
+        json,
+        url,
+    ];
+    forms.sort();
+    forms.dedup();
+    // Longest first, so a form is not cut by a shorter one.
+    forms.sort_by_key(|f| std::cmp::Reverse(f.len()));
+    forms
 }
 
 /// Status and body of a response.
@@ -390,7 +422,7 @@ fn capture(args: &Args) -> ExitCode {
             }
         );
         write_summary(&label_dir, &session.rows);
-        let _ = anonymize(&raw, &anon_dir);
+        let _ = anonymize(&raw, &anon_dir, &session.secrets);
         return ExitCode::FAILURE;
     };
 
@@ -432,7 +464,7 @@ fn capture(args: &Args) -> ExitCode {
     );
 
     write_summary(&label_dir, &session.rows);
-    anonymize(&raw, &anon_dir)
+    anonymize(&raw, &anon_dir, &session.secrets)
 }
 
 /// Files of `raw` in a stable order: login and sysinfo first, they name
@@ -458,7 +490,7 @@ fn raw_files(raw: &Path) -> std::io::Result<Vec<String>> {
 /// Anonymises every file of `raw` into `anon`. A file in which
 /// [`Anonymizer::leaks`] still finds something is not written; its name
 /// and the kind of finding are shown, never the value.
-fn anonymize(raw: &Path, anon: &Path) -> ExitCode {
+fn anonymize(raw: &Path, anon: &Path, secrets: &[String]) -> ExitCode {
     let names = match raw_files(raw) {
         Ok(n) => n,
         Err(e) => {
@@ -471,6 +503,11 @@ fn anonymize(raw: &Path, anon: &Path) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut a = Anonymizer::new();
+    // Password and session id of this run, kept in memory only: a file
+    // that still holds one is refused.
+    for form in secrets.iter().flat_map(|s| secret_forms(s)) {
+        a.add_known(&form, REDACTED);
+    }
     if let Ok(meta) = fs::read_to_string(raw.join("meta.txt")) {
         for line in meta.lines() {
             match line.split_once('=') {
@@ -536,7 +573,7 @@ fn main() -> ExitCode {
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
-        Ok(Command::Anonymize { raw, anon }) => anonymize(&raw, &anon),
+        Ok(Command::Anonymize { raw, anon }) => anonymize(&raw, &anon, &[]),
         Ok(Command::Capture(args)) => capture(&args),
         Err(e) => {
             eprintln!("{e}\n{USAGE}");
@@ -638,6 +675,20 @@ mod tests {
     }
 
     #[test]
+    fn secret_forms_cover_encodings() {
+        let forms = secret_forms("a&b\"c d");
+        for f in [
+            "a&b\"c d",
+            "a&amp;b&quot;c d",
+            "a&b\\\"c d",
+            "a%26b%22c%20d",
+        ] {
+            assert!(forms.contains(&f.to_owned()), "{f} in {forms:?}");
+        }
+        assert!(secret_forms("ab").is_empty());
+    }
+
+    #[test]
     fn tag_values() {
         let xml = "<QDocRoot><authPassed><![CDATA[1]]></authPassed><authSid>ab12</authSid><x></x></QDocRoot>";
         assert_eq!(tag_value(xml, "authPassed").as_deref(), Some("1"));
@@ -660,6 +711,21 @@ mod tests {
     }
 
     #[test]
+    fn anonymize_replaces_run_secrets() {
+        let base = std::env::temp_dir().join(format!("qnap-capture-sec-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let raw = base.join("raw");
+        let anon = base.join("anon");
+        fs::create_dir_all(&raw).expect("dir");
+        fs::write(raw.join("a.xml"), "<r><x>echo s3cr&amp;t</x></r>").expect("xml");
+        let code = anonymize(&raw, &anon, &["s3cr&t".to_owned()]);
+        let out = fs::read_to_string(anon.join("a.xml")).unwrap_or_default();
+        let _ = fs::remove_dir_all(&base);
+        assert_eq!(code, ExitCode::SUCCESS);
+        assert_eq!(out, "<r><x>echo REDACTED</x></r>");
+    }
+
+    #[test]
     fn anonymize_refuses_leaking_file() {
         let base = std::env::temp_dir().join(format!("qnap-capture-anon-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
@@ -678,7 +744,7 @@ mod tests {
         .expect("xml");
         // The share name hides in a JSON key, which the rules leave alone.
         fs::write(raw.join("cs.json"), r#"{"Fotos": 1, "shareName": "Fotos"}"#).expect("json");
-        let code = anonymize(&raw, &anon);
+        let code = anonymize(&raw, &anon, &[]);
         let sysinfo = fs::read_to_string(anon.join("sysinfo.xml")).unwrap_or_default();
         let json_written = anon.join("cs.json").exists();
         let _ = fs::remove_dir_all(&base);
