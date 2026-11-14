@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<QDocRoot version="1.0">
+<authPassed><![CDATA[1]]></authPassed><model><modelName><![CDATA[TS-X85]]></modelName><internalModelName><![CDATA[TS-X85]]></internalModelName><platform><![CDATA[TS-NASX86]]></platform><platform_ex><![CDATA[X86_GRANTLEY]]></platform_ex><customModelName><![CDATA[]]></customModelName><displayModelName><![CDATA[TS-1685]]></displayModelName><sas_model><![CDATA[0]]></sas_model><storage_v2>1</storage_v2>
+<encryptfsSupported><![CDATA[1]]></encryptfsSupported><is_zfs><![CDATA[0]]></is_zfs><node><![CDATA[]]></node><dual_node><![CDATA[]]></dual_node></model>
+<firmware><name><![CDATA[QTS]]></name><version><![CDATA[5.2.11]]></version><number><![CDATA[3661]]></number><build><![CDATA[20261023]]></build><patch><![CDATA[0]]></patch><buildTime><![CDATA[2026/10/23]]></buildTime></firmware>
+<rfs_bits><![CDATA[64]]></rfs_bits><specVersion><![CDATA[1.0]]></specVersion><hostname><![CDATA[nas-demo]]></hostname><DemoSiteSuppurt><![CDATA[no]]></DemoSiteSuppurt><customLogo><customFrontLogo><![CDATA[]]></customFrontLogo><customLoginLogo><![CDATA[]]></customLoginLogo></customLogo>
+<action><![CDATA[none]]></action><func><name><![CDATA[MENU_8]]></name><ownContent><externalDevice><HAL><![CDATA[1]]></HAL><SupportEXT4>Y</SupportEXT4>
+<SupportHFSPLUS>Y</SupportHFSPLUS>
+<Disk_Num>0</Disk_Num>
+<device><name><![CDATA[USB UPS]]></name><interface><![CDATA[usb]]></interface><deviceType><![CDATA[ups]]></deviceType><manufacturer><![CDATA[ American Power Conversion 
+]]></manufacturer><model><![CDATA[ Smart-UPS 750
+]]></model></device>
+</externalDevice>
+</ownContent>
+</func>
+</QDocRoot>

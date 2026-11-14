@@ -1,0 +1,46 @@
+# Requests qnap-capture sends after the login, one per line:
+#   <name> <path below /cgi-bin/>?<query>
+# The answer is stored as <name>.xml. The session id is appended by the
+# tool, never write `sid=` here. Only reading requests: `check_request`
+# rejects anything that looks like a command (see src/requests.rs).
+
+# System, health, firmware
+sysinfo management/manaRequest.cgi?subfunc=sysinfo&hd=no&multicpu=1
+syshealth management/manaRequest.cgi?subfunc=sysinfo&sysHealth=1
+firmware sys/sysRequest.cgi?subfunc=firm_update
+
+# Volumes and network
+disk_usage management/chartReq.cgi?chart_func=disk_usage&disk_select=all&include=all
+bandwidth_qsm40 management/chartReq.cgi?chart_func=QSM40bandwidth
+bandwidth management/chartReq.cgi?chart_func=bandwidth
+
+# Disks and external devices
+qsmart disk/qsmart.cgi?func=all_hd_data
+external_disks disk/disk_manage.cgi?func=external_get_all
+external_devices devices/devRequest.cgi?func=getExternalDev
+
+# Storage & Snapshots, from the DevTools capture of QTS 5.2.11 (issue #1).
+# The web UI sends these as POST with `store=`; whether GET answers the
+# same is part of the spike.
+pools disk/disk_manage.cgi?store=poolList
+volumes_lv disk/disk_manage.cgi?store=lvList
+enc_disks disk/disk_manage.cgi?store=encDiskList
+enc_raid disk/disk_manage.cgi?store=encRaidList
+nas_info disk/disk_manage.cgi?store=nasInfo
+volume_info disk/disk_manage.cgi?store=volumeInfo
+cache_info disk/disk_manage.cgi?store=cacheInfo
+cache_vol_feature disk/disk_manage.cgi?store=cacheVolFeature
+raid_speed disk/disk_manage.cgi?store=RAIDSpeedInfo
+pool_subsc disk/disk_manage.cgi?store=poolSubsc
+enclosure disk/disk_manage.cgi?store=halEnclosureDevice
+limitation disk/disk_manage.cgi?store=limitationInfo
+dm_cache disk/disk_manage.cgi?func=dm_cache_mgmt&get=1
+extra_volume_info disk/disk_manage.cgi?func=extra_get&Check_Volume_Info=1
+shared_folders priv/privRequest.cgi?store=sharedFolderInfo
+replica_jobs disk/snap_sync.cgi?store=replicaJobStore
+iscsi_luns disk/iscsi_portal_setting.cgi?store=lunList
+
+# Resource Monitor
+sysmonitor management/manaRequest.cgi?subfunc=sysmonitor&sys_cpu_use_v2=1&sys_gpu_use=1&sys_memory_use=1
+
+# Hybrid Backup Sync 3: no CGI seen in the capture, still open.

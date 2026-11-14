@@ -1,0 +1,20 @@
+[package]
+name = "qnap-capture"
+description = "Records real QNAP CGI answers for the fixtures (spike #1), anonymised."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+reqwest = { workspace = true, features = ["blocking", "json", "cookies"] }
+rustls = { workspace = true }
+sha2 = { workspace = true }
+quick-xml = { workspace = true }
+regex = { workspace = true }
+serde_json = { workspace = true }
+rpassword = { workspace = true }
+
+[lints]
+workspace = true
