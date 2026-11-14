@@ -95,11 +95,9 @@ impl NasClient {
         let url = self
             .base
             .join(path)
-            .map_err(|e| NasError::Parse(format!("Pfad {path}: {e}")))?;
+            .map_err(|e| NasError::Parse(format!("Pfad: {e}")))?;
         if url.origin() != self.base.origin() {
-            return Err(NasError::Parse(format!(
-                "Pfad {path} verlässt die Adresse des NAS"
-            )));
+            return Err(NasError::Parse("Pfad verlässt die Adresse des NAS".into()));
         }
         Ok(url)
     }
@@ -153,14 +151,14 @@ impl NasClient {
 /// `base_url` as `https://host[:port]/…`; anything else is refused.
 fn parse_base(base_url: &str) -> Result<Url, NasError> {
     let base =
-        Url::parse(base_url).map_err(|e| NasError::Parse(format!("Adresse {base_url}: {e}")))?;
+        Url::parse(base_url).map_err(|e| NasError::Parse(format!("Adresse des NAS: {e}")))?;
     if base.scheme() != "https" {
-        return Err(NasError::Parse(format!(
-            "Adresse {base_url}: nur https:// ist erlaubt"
-        )));
+        return Err(NasError::Parse(
+            "Adresse des NAS: nur https:// ist erlaubt".into(),
+        ));
     }
     if base.host_str().is_none() {
-        return Err(NasError::Parse(format!("Adresse {base_url}: Host fehlt")));
+        return Err(NasError::Parse("Adresse des NAS: Host fehlt".into()));
     }
     Ok(base)
 }
