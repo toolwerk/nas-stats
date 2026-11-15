@@ -16,6 +16,11 @@ cd "$(dirname "$0")/.."
 profile="${1:-release}"
 platform="${2:-${PLATFORM_NAME:-macosx}}"
 
+case "$profile" in
+    debug | release) ;;
+    *) echo "unknown profile: $profile" >&2; exit 1 ;;
+esac
+
 # Xcode build phases run with a minimal PATH.
 export PATH="$HOME/.cargo/bin:$PATH"
 
