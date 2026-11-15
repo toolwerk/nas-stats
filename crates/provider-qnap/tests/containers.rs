@@ -183,3 +183,24 @@ async fn a_redirect_means_not_installed() {
     assert_eq!(client.containers().await, Ok(Vec::new()));
     assert_eq!(calls(&fake).len(), 1);
 }
+
+#[tokio::test]
+async fn a_redirect_of_the_list_is_returned() {
+    let fake = FakeTransport::new(vec![
+        Ok(CS_LOGIN),
+        Err(ProviderError::Http(302)),
+        Ok(CS_CONTAINERS),
+    ]);
+    let client = QnapClient::new(&fake, "admin", "secret");
+    assert_eq!(client.containers().await, Err(ProviderError::Http(302)));
+    // The session stays; the next poll only lists.
+    assert_eq!(client.containers().await.expect("containers").len(), 6);
+    assert_eq!(cs_logins(&fake), 1);
+}
+
+#[tokio::test]
+async fn a_login_with_is_admin_and_a_zero_code_is_a_session() {
+    let fake = FakeTransport::new(vec![Ok(r#"{"code":0,"isAdmin":true}"#), Ok(CS_CONTAINERS)]);
+    let client = QnapClient::new(&fake, "admin", "secret");
+    assert_eq!(client.containers().await.expect("containers").len(), 6);
+}

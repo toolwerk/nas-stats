@@ -109,7 +109,10 @@ impl<T: Transport> QnapClient<T> {
                 // answers for such accounts (`code`, `message`): no access.
                 Ok(answer)
                     if answer.get("isAdmin").and_then(Value::as_bool) == Some(false)
-                        || answer.get("code").is_some() =>
+                        || (answer.get("isAdmin").is_none()
+                            && answer
+                                .get("code")
+                                .is_some_and(|c| !c.is_null() && c.as_i64() != Some(0))) =>
                 {
                     *cs = CsState::NoAccess;
                     Ok(Step::Empty)
@@ -151,14 +154,16 @@ impl<T: Transport> QnapClient<T> {
                 *cs = CsState::NoAccess;
                 Ok(Step::Empty)
             }
-            Err(ProviderError::Http(status)) if is_missing(status) => not_installed(cs),
+            // Only not found: a redirect here may lead to a login page.
+            Err(ProviderError::Http(404)) => not_installed(cs),
             Err(e) => Err(e),
         }
     }
 }
 
-/// HTTP status that means there is no Container Station at this path: not
-/// found, or a redirect (QTS sends unknown paths to its start page).
+/// HTTP status of the login that means there is no Container Station at
+/// this path: not found, or a redirect (QTS sends unknown paths to its
+/// start page).
 fn is_missing(status: u16) -> bool {
     status == 404 || (300..400).contains(&status)
 }
