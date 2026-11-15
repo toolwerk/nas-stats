@@ -20,8 +20,8 @@ external_disks disk/disk_manage.cgi?func=external_get_all
 external_devices devices/devRequest.cgi?func=getExternalDev
 
 # Storage & Snapshots, from the DevTools capture of QTS 5.2.11 (issue #1).
-# The web UI sends these as POST with `store=`; whether GET answers the
-# same is part of the spike.
+# The web UI sends these as POST with `store=`. As GET they answer only
+# `unknown cmd format.` on QTS 5.2.11 (recorded 2026-11-15, issue #6).
 pools disk/disk_manage.cgi?store=poolList
 volumes_lv disk/disk_manage.cgi?store=lvList
 enc_disks disk/disk_manage.cgi?store=encDiskList

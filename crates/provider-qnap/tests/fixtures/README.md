@@ -42,6 +42,8 @@ Echte Antworten eines eigenen QNAP, aufgezeichnet mit `qnap-capture` (Issue #1) 
 | `sysinfo_empty.xml` | wie `sysinfo.xml` mit leeren Feldern, **nachgebaut** (#5) | – |
 | `syshealth_good.xml` | wie `syshealth.xml` mit Zustand `good`, **nachgebaut** (#5) | – |
 | `firmware_available.xml` | wie `firmware.xml` mit angebotenem Update, **nachgebaut** (#5) | – |
+| `disk_usage_warning.xml` | wie `disk_usage.xml` mit einem Volume `DataVol1` bei 87,1 % belegt, **nachgebaut** (#6) | – |
+| `qsmart_warning.xml` | wie `qsmart.xml` mit vier Platten (Platte 3 bei 52 °C mit SMART `Warning`, Platte 4 mit unbekanntem Text) und einem leeren Steckplatz, **nachgebaut** (#6) | – |
 | `bandwidth_items.xml` | wie `bandwidth.xml` mit Schnittstellen als `item` (`id`, `dname` oder `name`) statt `eth<n>`, für den Rückfall auf `QSM40bandwidth`, **nachgebaut** (#7) | – |
 
 ## Antworten
@@ -55,4 +57,5 @@ Echte Antworten eines eigenen QNAP, aufgezeichnet mit `qnap-capture` (Issue #1) 
 - Die Container Station hat eine eigene Anmeldung (`POST /container-station/api/v1/login`, JSON mit `username` und `password` im Klartext) und hält die Session per Cookie. `cs_login.json` meldet `isAdmin` true, `cs_login.user.json` `isAdmin` false. Wie sie antwortet, wenn sie nicht installiert ist, ist nicht aufgezeichnet; `provider-qnap` nimmt HTTP 404 oder eine Antwort, die kein JSON ist, als „nicht installiert“, bei der Anmeldung auch eine Weiterleitung (3xx), und eine Anmelde-Antwort mit Fehlerobjekt ohne `isAdmin` (`code`, wie in `cs_container.user.json`) als abgelehnt.
 - `syshealth.xml` meldet `warning`, `firmware.xml` `newVersion` `none`.
 - Lüfter stehen in `sysinfo.xml`: Systemlüfter als `sysfan_count`, `sysfan<n>` (U/min) und `sysfan_fail<n>`, CPU-Lüfter als `cpufan_count`, `cpufan<n>` und `fan_fail<n>`. `sysfan_alias` ist ein einzelnes Feld ohne Nummer und lässt sich keinem Lüfter zuordnen; die Lüfter heißen deshalb „Lüfter <n>“ und „CPU-Lüfter <n>“. Eine angeschlossene USV nennt nur `external_devices.xml` (Gerätetyp `ups`), ohne Zustand, Ladung oder Restlaufzeit.
-- Die Abfragen für Speicherpools und Volumes (`disk_manage.cgi?store=…`) und `sysmonitor` stehen in `crates/qnap-capture/requests.txt`, sind aber noch nicht aufgezeichnet.
+- `disk_usage.xml` hat je Volume nur einen Zahlencode in `volumeStatus` (`0` und `44`; QTS zeigt `44` bei einem zu gut 94 % vollen Volume als Warning); Größen stehen getrennt in `volumeUseList`, verbunden über `volumeValue`. `qsmart.xml` hat keine Betriebsstunden, leere Steckplätze haben kein `Model`.
+- `disk_manage.cgi?store=…` (Speicherpools, `lvList`, `volumeInfo` u.a.) antwortet auf GET nur mit `unknown cmd format.` (aufgezeichnet 2026-11-15); die Oberfläche sendet POST. Die Abfragen und `sysmonitor` stehen in `crates/qnap-capture/requests.txt`, sind aber noch nicht aufgezeichnet.
