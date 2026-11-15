@@ -114,6 +114,56 @@ final class NasAccounts {
         accounts = Self.sorted(accounts.map { $0.id == id ? account : $0 })
     }
 
+    /// New name for a stored NAS, in the keychain and the list; the core
+    /// does not know names. Throws `InvalidInput` for an empty name.
+    func rename(id: UUID, name: String) throws {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            throw FfiError.InvalidInput(detail: "Der Name darf nicht leer sein.")
+        }
+        var stored = try storedAccount(id)
+        stored.account.name = name
+        try keychain.save(stored)
+        accounts = Self.sorted(accounts.map { $0.id == id ? stored.account : $0 })
+    }
+
+    /// Starts a blocked NAS again with its stored user and password ("Erneut
+    /// versuchen"); see `updateCredentials`.
+    func resume(id: UUID) async throws {
+        let stored = try storedAccount(id)
+        try await updateCredentials(id: id, user: stored.account.user, password: stored.password)
+    }
+
+    /// Trusts a new certificate (#76): stores the fingerprint and registers
+    /// the NAS again with the core, which replaces the old entry and lifts
+    /// its block. When the core refuses, the old entry is put back.
+    func confirmFingerprint(id: UUID, fingerprint: String) async throws {
+        let old = try storedAccount(id)
+        var stored = old
+        stored.account.fingerprint = fingerprint
+        let config = try Self.config(of: stored.account)
+        try keychain.save(stored)
+        do {
+            try core.addNas(config: config, user: stored.account.user, password: stored.password)
+        } catch {
+            try? keychain.save(old)
+            registrationErrors[id] = connectionErrorText(error)
+            throw error
+        }
+        registrationErrors[id] = nil
+        accounts = Self.sorted(accounts.map { $0.id == id ? stored.account : $0 })
+    }
+
+    /// The keychain entry of a NAS in the list, with its password.
+    private func storedAccount(_ id: UUID) throws -> StoredAccount {
+        guard accounts.contains(where: { $0.id == id }),
+              let stored = try keychain.loadAll().first(where: { $0.account.id == id })
+        else {
+            throw FfiError.UnknownNas(id: id.uuidString)
+        }
+        return stored
+    }
+
     /// Registers a stored NAS with the core. A failure stays in
     /// `registrationErrors`: the NAS stays in the list.
     private func register(_ stored: StoredAccount) {
