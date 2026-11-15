@@ -181,7 +181,10 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         // window: a test query that ends after the window was closed must not
         // close a newer one.
         let own = WindowReference()
-        let view = AddNasView(onClose: { own.window?.close() })
+        let view = AddNasView(
+            onClose: { own.window?.close() },
+            isOpen: { own.window?.isVisible == true }
+        )
             .environment(store)
         let window = makeWindow(title: "NAS hinzufügen", root: view)
         own.window = window
