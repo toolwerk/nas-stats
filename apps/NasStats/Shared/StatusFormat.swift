@@ -166,7 +166,8 @@ enum StatusFormat {
            calendar.isDate(date, inSameDayAs: next) {
             return "morgen, \(time)"
         }
-        formatter.setLocalizedDateFormatFromTemplate("dMMMHHmm")
+        let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
+        formatter.setLocalizedDateFormatFromTemplate(sameYear ? "dMMMHHmm" : "dMMMyHHmm")
         return formatter.string(from: date)
     }
 

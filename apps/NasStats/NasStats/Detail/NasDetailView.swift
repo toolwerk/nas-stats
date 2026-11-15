@@ -36,19 +36,23 @@ struct NasDetailView: View {
     }
 
     private func content(_ entry: NasEntry) -> some View {
-        List {
-            Section {
-                header(entry)
-            }
-            if let snapshot = entry.snapshot {
-                sections(snapshot, content: NasDetailContent(snapshot: snapshot))
+        // Ages and days ("vor 9 h", "morgen", the date of an old snapshot)
+        // follow the clock even while no new query arrives.
+        TimelineView(.everyMinute) { context in
+            List {
+                Section {
+                    header(entry, now: context.date)
+                }
+                if let snapshot = entry.snapshot {
+                    sections(snapshot, content: NasDetailContent(snapshot: snapshot), now: context.date)
+                }
             }
         }
     }
 
     // MARK: - Head
 
-    private func header(_ entry: NasEntry) -> some View {
+    private func header(_ entry: NasEntry, now: Date) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 StatusDot(level: entry.statusLevel, size: 10)
@@ -75,7 +79,7 @@ struct NasDetailView: View {
                 }
                 Text(verbatim: StatusFormat.observed(
                     Date(timeIntervalSince1970: TimeInterval(snapshot.observedAt)),
-                    locale: locale, timeZone: timeZone))
+                    now: now, locale: locale, timeZone: timeZone))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             } else {
@@ -104,7 +108,7 @@ struct NasDetailView: View {
     // MARK: - Sections
 
     @ViewBuilder
-    private func sections(_ snapshot: Snapshot, content: NasDetailContent) -> some View {
+    private func sections(_ snapshot: Snapshot, content: NasDetailContent, now: Date) -> some View {
         if !content.volumes.isEmpty || !content.pools.isEmpty {
             Section("Speicher") {
                 ForEach(content.volumes, id: \.id) { volume in
@@ -126,7 +130,7 @@ struct NasDetailView: View {
         case let .tasks(tasks):
             Section("Backups") {
                 ForEach(tasks, id: \.id) { task in
-                    backupRow(task)
+                    backupRow(task, now: now)
                 }
             }
         case .interfaceOpen:
@@ -215,13 +219,13 @@ struct NasDetailView: View {
         return row(disk.name, detail: detail, value: Text("\(temperature)  \(smart)"))
     }
 
-    private func backupRow(_ task: BackupTask) -> some View {
+    private func backupRow(_ task: BackupTask, now: Date) -> some View {
         let next = StatusFormat.nextRun(
             task.nextRun.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-            locale: locale, timeZone: timeZone)
+            now: now, locale: locale, timeZone: timeZone)
         let value: Text = switch task.lastResult {
         case .ok, nil:
-            Text(verbatim: StatusFormat.backupAge(task.lastRun.map { Date(timeIntervalSince1970: TimeInterval($0)) }))
+            Text(verbatim: StatusFormat.backupAge(task.lastRun.map { Date(timeIntervalSince1970: TimeInterval($0)) }, now: now))
         case .error:
             Text("Fehler").foregroundStyle(StatusLevel.critical.color)
         case .running:

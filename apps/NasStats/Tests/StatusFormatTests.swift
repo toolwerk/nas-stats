@@ -134,5 +134,8 @@ struct StatusFormatTests {
         #expect(
             StatusFormat.observed(date, now: date.addingTimeInterval(86400), locale: de, timeZone: utc)
                 == "Stand 14. Nov., 14:05")
+        #expect(
+            StatusFormat.observed(date, now: date.addingTimeInterval(366 * 86400), locale: de, timeZone: utc)
+                == "Stand 14. Nov. 2026, 14:05")
     }
 }
