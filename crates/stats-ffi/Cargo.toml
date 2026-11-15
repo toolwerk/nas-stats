@@ -10,6 +10,7 @@ authors.workspace = true
 crate-type = ["lib", "staticlib"]
 
 [dependencies]
+nas-demo = { workspace = true }
 nas-model = { workspace = true }
 nas-http = { workspace = true }
 provider-qnap = { path = "../provider-qnap" }

@@ -4,7 +4,7 @@ import SwiftUI
 /// fingerprint to confirm, then one test query. The NAS is saved only after
 /// the test query succeeds; a failed one is never repeated by itself.
 struct AddNasView: View {
-    @Environment(NasAccounts.self) private var accounts
+    @Environment(NasStore.self) private var store
     #if os(macOS)
     @Environment(\.dismissWindow) private var dismissWindow
     #else
@@ -252,7 +252,7 @@ struct AddNasView: View {
             var account = draft
             do {
                 guard let config = account.config else { return }
-                let snapshot = try await accounts.core.testConnection(
+                let snapshot = try await store.core.testConnection(
                     config: config, user: account.user, password: password
                 )
                 let hostname = snapshot.nas.hostname.flatMap { $0.isEmpty ? nil : $0 }
@@ -261,7 +261,11 @@ struct AddNasView: View {
                     : typedName
                 account.model = snapshot.nas.model
                 guard attempt == started else { return }
-                try accounts.add(StoredAccount(account: account, password: password))
+                // The test query counts as the first query of the NAS.
+                try await store.add(
+                    StoredAccount(account: account, password: password), snapshot: snapshot
+                )
+                guard attempt == started else { return }
                 close()
             } catch {
                 switch error as? FfiError {
@@ -291,5 +295,5 @@ struct AddNasView: View {
 
 #Preview {
     AddNasView()
-        .environment(NasAccounts())
+        .environment(NasStore.live())
 }

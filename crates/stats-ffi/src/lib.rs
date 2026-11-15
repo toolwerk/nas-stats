@@ -3,7 +3,7 @@
 //! Keeps its own records (`records.rs`) so `nas-model` stays free of FFI
 //! attributes. [`NasCore`] holds the registered NAS, queries them and keeps
 //! their last state and error. Free calls: [`core_version`],
-//! [`fetch_fingerprint`] and [`demo_snapshot`].
+//! [`fetch_fingerprint`], [`demo_snapshot`] and [`demo_snapshots`].
 //!
 //! Every network call runs on one tokio runtime of the core ([`runtime`]);
 //! the apps only await the result. History, forecast, events, the planner
@@ -81,6 +81,18 @@ pub fn demo_snapshot() -> Snapshot {
     Snapshot::demo(demo::snapshot())
 }
 
+/// The three NAS of the demo data set (#22) at `now` (Unix seconds UTC):
+/// Keller, Büro and Homelab, in this order, each with `demo` set. The same
+/// `now` yields the same snapshots.
+#[uniffi::export]
+pub fn demo_snapshots(now: i64) -> Vec<Snapshot> {
+    nas_demo::demo(now)
+        .snapshots
+        .into_iter()
+        .map(Snapshot::demo)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +137,18 @@ mod tests {
         let model = demo::snapshot();
         let json = format!("{model:?}");
         assert!(!json.contains("None"), "demo leaves a field empty: {json}");
+    }
+
+    #[test]
+    fn demo_snapshots_are_the_three_demo_nas() {
+        // 14 November 2026, 14:05 UTC.
+        let now = 1_794_665_100;
+        let snapshots = demo_snapshots(now);
+        let ids: Vec<&str> = snapshots.iter().map(|s| s.nas.id.as_str()).collect();
+        assert_eq!(ids, ["demo-keller", "demo-buero", "demo-homelab"]);
+        assert!(snapshots.iter().all(|s| s.demo));
+        assert!(snapshots.iter().all(|s| s.observed_at == now));
+        assert_eq!(snapshots, demo_snapshots(now));
     }
 
     #[tokio::test]
