@@ -24,6 +24,8 @@ struct NasStatsApp: App {
                 .environment(accounts)
         }
         .windowResizability(.contentSize)
+        // Only from the menu, not at launch.
+        .defaultLaunchBehavior(.suppressed)
         #endif
     }
 }
