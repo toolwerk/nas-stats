@@ -17,9 +17,10 @@ mod records;
 pub use crate::core::{MIN_INTERVAL_SECS, NasCore};
 pub use crate::error::FfiError;
 pub use crate::records::{
-    Alert, AlertLevel, BackupKind, BackupResult, BackupTask, Container, Disk, Fan, Health, Nas,
-    NasConfig, NasProblem, NasState, NetInterface, ProblemKind, ProviderKind, ScrubState,
-    ScrubStatus, Snapshot, SystemStatus, Ups, UpsState, Volume, VolumeKind,
+    Alert, AlertLevel, BackupKind, BackupResult, BackupTask, Container, Disk, Fan, Finding,
+    FindingKind, Health, Nas, NasConfig, NasProblem, NasState, NetInterface, ProblemKind,
+    ProviderKind, ScrubState, ScrubStatus, Snapshot, SystemStatus, Ups, UpsState, Volume,
+    VolumeKind,
 };
 
 uniffi::setup_scaffolding!();
@@ -149,6 +150,21 @@ mod tests {
         assert!(snapshots.iter().all(|s| s.demo));
         assert!(snapshots.iter().all(|s| s.observed_at == now));
         assert_eq!(snapshots, demo_snapshots(now));
+    }
+
+    #[test]
+    fn demo_snapshots_carry_the_findings() {
+        let snapshots = demo_snapshots(1_794_665_100);
+        let texts: Vec<&str> = snapshots[0]
+            .findings
+            .iter()
+            .map(|f| f.text.as_str())
+            .collect();
+        assert_eq!(texts, ["Platte 3 bei 52 °C", "DataVol1 bei 87 %"]);
+        assert_eq!(snapshots[0].findings[0].kind, FindingKind::DiskTemperature);
+        assert_eq!(snapshots[0].findings[1].level, Health::Warning);
+        assert!(snapshots[1].findings.is_empty());
+        assert!(snapshots[2].findings.is_empty());
     }
 
     #[tokio::test]
