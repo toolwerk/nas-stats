@@ -44,7 +44,10 @@ final class NasStore {
     @ObservationIgnored private var stored: [StoredNas] = []
     /// NAS the core knows; the others lack a password or were refused.
     @ObservationIgnored private var registered: Set<String> = []
+    /// Why a NAS waits for the user: missing password, refused registration.
     @ObservationIgnored private var localErrors: [String: String] = [:]
+    /// Error thrown by the last query of a NAS.
+    @ObservationIgnored private var queryErrors: [String: String] = [:]
     @ObservationIgnored private var started = false
     /// Lives as long as the store; ends once the store is gone.
     @ObservationIgnored private var pollTask: Task<Void, Never>?
@@ -114,22 +117,21 @@ final class NasStore {
     // MARK: - Changing the list
 
     /// Saves a new NAS, or replaces one with the same id, and queries it.
-    /// Throws when the core refuses it or the password cannot be saved;
-    /// list, passwords and core stay as before then.
+    /// Throws when the password cannot be saved (nothing changes then) or
+    /// the core refuses the NAS (the old password is put back; a replaced
+    /// NAS keeps its old entry in the core).
     func add(_ nas: StoredNas, credentials new: Credentials) async throws {
-        let previous = registered.contains(nas.id)
-            ? stored.first(where: { $0.id == nas.id })
-            : nil
-        try core.addNas(config: nas.config, user: new.user, password: new.password)
+        // The password first: a failed save must not touch the core, whose
+        // entry would lose its block and retry a refused login.
+        let old = try? credentials.load(nasId: nas.id)
+        try credentials.save(new, nasId: nas.id)
         do {
-            try credentials.save(new, nasId: nas.id)
+            try core.addNas(config: nas.config, user: new.user, password: new.password)
         } catch {
-            // A new NAS leaves the core again, a replaced one gets its old
-            // config and credentials back.
-            if let previous, let old = try? credentials.load(nasId: nas.id) {
-                try? core.addNas(config: previous.config, user: old.user, password: old.password)
+            if let old {
+                try? credentials.save(old, nasId: nas.id)
             } else {
-                try? await core.removeNas(nasId: nas.id)
+                try? credentials.delete(nasId: nas.id)
             }
             throw error
         }
@@ -141,6 +143,7 @@ final class NasStore {
         list.save(stored)
         registered.insert(nas.id)
         localErrors[nas.id] = nil
+        queryErrors[nas.id] = nil
         rebuild()
         if !demoMode {
             await query([nas.id])
@@ -157,6 +160,7 @@ final class NasStore {
         list.save(stored)
         registered.remove(id)
         localErrors[id] = nil
+        queryErrors[id] = nil
         rebuild()
     }
 
@@ -181,6 +185,7 @@ final class NasStore {
             registered.insert(id)
         }
         localErrors[id] = nil
+        queryErrors[id] = nil
         rebuild()
         if !demoMode {
             await query([id])
@@ -226,7 +231,7 @@ final class NasStore {
         }
         // A NAS removed while the query ran stays out.
         for (id, error) in results where registered.contains(id) {
-            localErrors[id] = error
+            queryErrors[id] = error
         }
         rebuild()
     }
@@ -261,7 +266,8 @@ final class NasStore {
                     problem: state?.problem,
                     lastAttemptAt: state?.lastAttemptAt,
                     blocked: state?.blocked ?? false,
-                    localError: localErrors[nas.id]
+                    localError: localErrors[nas.id],
+                    queryError: queryErrors[nas.id]
                 )
             }
         }

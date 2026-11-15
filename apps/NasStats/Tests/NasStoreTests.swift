@@ -16,6 +16,8 @@ final class FakeCore: NasCoreProtocol {
     private let log = Mutex(Calls())
     /// `addNas` throws `InvalidInput` while set.
     let refuseAdd = Mutex(false)
+    /// `refresh` throws `Internal` while set.
+    let failRefresh = Mutex(false)
 
     init(states: [NasState] = []) {
         presets = Mutex(Dictionary(uniqueKeysWithValues: states.map { ($0.nasId, $0) }))
@@ -34,6 +36,9 @@ final class FakeCore: NasCoreProtocol {
 
     func refresh(nasId: String) async throws -> NasState {
         log.withLock { $0.refreshed.append(nasId) }
+        if failRefresh.withLock({ $0 }) {
+            throw FfiError.Internal(detail: "weg")
+        }
         guard registered.withLock({ $0[nasId] }) != nil else {
             throw FfiError.UnknownNas(id: nasId)
         }
@@ -244,9 +249,39 @@ struct NasStoreTests {
             try await store.add(Self.nas("new", name: "Neu"), credentials: login)
         }
         #expect(NasList(defaults: defaults).load().isEmpty)
-        #expect(core.calls.removed == ["new"])
+        // The core is not touched before the password is saved.
+        #expect(core.calls.added.isEmpty)
         #expect(core.states().isEmpty)
         #expect(store.entries.isEmpty)
+    }
+
+    @Test func refusedReplacementKeepsTheOldPasswordAndEntry() async throws {
+        let core = FakeCore()
+        let nas = Self.nas("a", name: "Keller")
+        let store = try await started([nas], core: core)
+        core.refuseAdd.withLock { $0 = true }
+        var changed = nas
+        changed.baseUrl = "https://anders.demo.invalid"
+        await #expect(throws: FfiError.InvalidInput(detail: "kaputt")) {
+            try await store.add(changed, credentials: Credentials(user: "neu", password: "neu"))
+        }
+        #expect(try credentials.load(nasId: "a") == login)
+        #expect(NasList(defaults: defaults).load() == [nas])
+        #expect(core.states().map(\.nasId) == ["a"])
+    }
+
+    @Test func thrownQueryIsAWarningNotCritical() async throws {
+        let core = FakeCore()
+        core.failRefresh.withLock { $0 = true }
+        let store = try await started([Self.nas("a", name: "Keller")], core: core)
+        let entry = try #require(store.entries.first)
+        #expect(entry.queryError == "Interner Fehler: weg")
+        #expect(entry.localError == nil)
+        #expect(entry.health == .warning)
+
+        core.failRefresh.withLock { $0 = false }
+        await store.refreshAll()
+        #expect(store.entries.first?.queryError == nil)
     }
 
     @Test func updateCredentialsRegistersANasWithoutPassword() async throws {

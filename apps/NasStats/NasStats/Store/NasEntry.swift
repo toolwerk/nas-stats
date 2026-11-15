@@ -33,9 +33,11 @@ struct NasEntry: Identifiable, Sendable {
     var lastAttemptAt: Int64?
     /// The core does not query this NAS until the user acts.
     var blocked: Bool = false
-    /// Error on the app side: missing password, refused registration or a
-    /// thrown query.
+    /// Why the NAS waits for the user on the app side: missing password or
+    /// a registration the core refused.
     var localError: String?
+    /// Error thrown by the last query (not a `problem` of the NAS).
+    var queryError: String?
 
     var id: String { stored.id }
 
@@ -59,7 +61,7 @@ struct NasEntry: Identifiable, Sendable {
         case .ok: .ok
         case nil: .unknown
         }
-        return problem == nil ? base : min(base, .warning)
+        return problem == nil && queryError == nil ? base : min(base, .warning)
     }
 
     /// Worst first, then by name, then by id.
