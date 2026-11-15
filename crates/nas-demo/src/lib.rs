@@ -40,7 +40,8 @@ pub struct DemoSet {
 
 /// Builds the demo data for the time `now` (Unix seconds UTC).
 ///
-/// Any `now` works; the same `now` always yields the same data.
+/// Any realistic `now` works (it must stay at least 90 days and one day away
+/// from the limits of `i64`); the same `now` always yields the same data.
 pub fn demo(now: i64) -> DemoSet {
     let snapshots = snapshots::snapshots(now);
     let samples = history::samples(now, &snapshots);
@@ -151,6 +152,9 @@ mod tests {
         let backups: Vec<_> = keller.backups.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(backups, ["Offsite B2", "Snapshots DataVol1"]);
         assert_eq!(keller.backups[0].last_run, Some(NOW - 9 * 3600));
+        assert_eq!(keller.backups[0].kind, nas_model::BackupKind::Hbs3);
+        assert_eq!(keller.backups[1].kind, nas_model::BackupKind::Snapshot);
+        assert_eq!(keller.backups[1].last_run, Some(NOW - 5 * 60));
 
         let buero = snapshot(&set, "demo-buero");
         assert_eq!(buero.nas.provider, ProviderKind::Synology);
@@ -163,6 +167,14 @@ mod tests {
         assert!(buero.ups.is_none());
         assert_eq!(buero.backups[0].name, "Cloud C2");
         assert_eq!(buero.backups[0].last_run, Some(NOW - 3 * 3600));
+        assert_eq!(buero.backups[0].kind, nas_model::BackupKind::HyperBackup);
+        let temps = |s: &Snapshot| -> Vec<f64> {
+            s.disks
+                .iter()
+                .map(|d| d.temperature_c.expect("temperature"))
+                .collect()
+        };
+        assert_eq!(temps(buero), [36.0, 37.0, 39.0, 38.0]);
 
         let homelab = snapshot(&set, "demo-homelab");
         assert_eq!(homelab.nas.provider, ProviderKind::TrueNas);
@@ -177,6 +189,14 @@ mod tests {
             23.0
         );
         assert_eq!(homelab.backups[0].last_run, Some(NOW - 3600));
+        assert_eq!(homelab.backups[0].kind, nas_model::BackupKind::Replication);
+        // 4 HDD at 40 to 44 °C, then 2 SSD.
+        assert_eq!(temps(homelab), [40.0, 42.0, 44.0, 41.0, 33.0, 34.0]);
+        assert!(homelab.disks[4..].iter().all(|d| {
+            d.model
+                .as_deref()
+                .is_some_and(|m| m.contains("SSD") || m.contains("EVO"))
+        }));
     }
 
     #[test]
