@@ -107,6 +107,8 @@ final class StatusItemController: NSObject, NSWindowDelegate {
                     title: "\(entry.displayName) – \(entry.health.title)", action: nil, keyEquivalent: ""
                 )
                 item.image = NSImage(systemSymbolName: entry.health.symbol, accessibilityDescription: nil)
+                // Information only; a click would do nothing.
+                item.isEnabled = false
                 menu.addItem(item)
             }
         }
@@ -175,10 +177,15 @@ final class StatusItemController: NSObject, NSWindowDelegate {
             bringToFront(addNasWindow)
             return
         }
-        // A new view each time, so the form starts empty.
-        let view = AddNasView(onClose: { [weak self] in self?.addNasWindow?.close() })
+        // A new view each time, so the form starts empty. It closes its own
+        // window: a test query that ends after the window was closed must not
+        // close a newer one.
+        let own = WindowReference()
+        let view = AddNasView(onClose: { own.window?.close() })
             .environment(store)
-        addNasWindow = makeWindow(title: "NAS hinzufügen", root: view)
+        let window = makeWindow(title: "NAS hinzufügen", root: view)
+        own.window = window
+        addNasWindow = window
     }
 
     @objc private func openSettings() {
@@ -222,5 +229,11 @@ final class StatusItemController: NSObject, NSWindowDelegate {
             settingsWindow = nil
         }
     }
+}
+
+/// Weak link from a view to the window it shows in.
+@MainActor
+private final class WindowReference {
+    weak var window: NSWindow?
 }
 #endif

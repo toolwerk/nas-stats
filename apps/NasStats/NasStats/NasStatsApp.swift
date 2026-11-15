@@ -30,6 +30,11 @@ struct NasStatsApp: App {
         Settings {
             EmptyView()
         }
+        .commands {
+            // ⌘, would open this empty scene instead of the settings window
+            // of `StatusItemController`.
+            CommandGroup(replacing: .appSettings) {}
+        }
         #endif
     }
 }
