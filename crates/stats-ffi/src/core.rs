@@ -177,6 +177,12 @@ impl NasCore {
             status.last_attempt_at = Some(now);
         }
         let result = entry.backend.snapshot().await;
+        // Removed while the query ran: the app no longer knows this NAS.
+        if !lock(&self.entries).contains_key(nas_id) {
+            return Err(FfiError::UnknownNas {
+                id: nas_id.to_owned(),
+            });
+        }
         let mut status = lock(&entry.status);
         match result {
             Ok(snapshot) => {
@@ -205,9 +211,10 @@ impl NasCore {
         Self::default()
     }
 
-    /// Registers a NAS; sends nothing. An entry with the same id is
-    /// replaced: its snapshot stays, the error, the time of the last query
-    /// and a block are cleared.
+    /// Registers a NAS; sends nothing for a new id. An entry with the same
+    /// id is replaced: its snapshot stays, the error, the time of the last
+    /// query and a block are cleared, and its old session is logged out in
+    /// the background.
     pub fn add_nas(
         &self,
         config: NasConfig,
@@ -219,7 +226,7 @@ impl NasCore {
         let snapshot = entries
             .get(&config.id)
             .and_then(|old| lock(&old.status).snapshot.clone());
-        entries.insert(
+        let replaced = entries.insert(
             config.id,
             Arc::new(Entry {
                 backend,
@@ -230,6 +237,15 @@ impl NasCore {
                 }),
             }),
         );
+        drop(entries);
+        // The session of a replaced entry ends in the background, after a
+        // query still running on it; its error is ignored.
+        if let Some(old) = replaced {
+            runtime().spawn(async move {
+                let _poll = old.poll.lock().await;
+                let _ = old.backend.logout().await;
+            });
+        }
         Ok(())
     }
 
@@ -240,6 +256,9 @@ impl NasCore {
             .remove(&nas_id)
             .ok_or(FfiError::UnknownNas { id: nas_id })?;
         on_core(async move {
+            // A running query finishes first, so it does not end in a
+            // login error caused by the logout.
+            let _poll = entry.poll.lock().await;
             let _ = entry.backend.logout().await;
             Ok(())
         })
@@ -700,6 +719,53 @@ mod tests {
             h.core.clone().remove_nas("nas-1".into()).await,
             Err(FfiError::UnknownNas { id: "nas-1".into() })
         );
+    }
+
+    #[tokio::test]
+    async fn removing_during_a_query_waits_and_reports_unknown() {
+        let backend = Arc::new(FakeBackend {
+            answers: Mutex::new(vec![Ok(model_snapshot(10.0))].into()),
+            slow: true,
+            ..FakeBackend::default()
+        });
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        let core = h.core.clone();
+        let running = tokio::spawn(core.refresh("nas-1".into()));
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        h.core
+            .clone()
+            .remove_nas("nas-1".into())
+            .await
+            .expect("remove");
+        assert_eq!(
+            running.await.expect("join"),
+            Err(FfiError::UnknownNas { id: "nas-1".into() })
+        );
+        assert_eq!(backend.queries(), 1);
+        assert_eq!(backend.logouts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn replacing_logs_out_the_old_session() {
+        let backend = FakeBackend::answering(Vec::new());
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        assert_eq!(backend.logouts.load(Ordering::SeqCst), 0);
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p2".into())
+            .expect("replace");
+        for _ in 0..100 {
+            if backend.logouts.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(backend.logouts.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
