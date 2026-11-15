@@ -49,7 +49,8 @@ fn disks(nas_id: &str, specs: &[DiskSpec]) -> Vec<Disk> {
                 health: Some(Health::Ok),
                 smart_text: Some("Gut".into()),
                 power_on_hours: Some(spec.power_on_hours),
-                spinning: Some(true),
+                // An SSD has no spin state.
+                spinning: (!spec.model.contains("EVO")).then_some(true),
             }
         })
         .collect()

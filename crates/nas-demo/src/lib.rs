@@ -133,6 +133,12 @@ mod tests {
     fn values_match_the_mockup() {
         let set = demo(NOW);
 
+        let temps = |s: &Snapshot| -> Vec<f64> {
+            s.disks
+                .iter()
+                .map(|d| d.temperature_c.expect("temperature"))
+                .collect()
+        };
         let keller = snapshot(&set, "demo-keller");
         assert_eq!(keller.nas.provider, ProviderKind::Qnap);
         assert_eq!(keller.nas.model.as_deref(), Some("TS-464"));
@@ -144,7 +150,7 @@ mod tests {
             rounded(volume(&set, "demo-keller", "DataVol1").used_percent(), 1),
             87.1
         );
-        assert_eq!(keller.disks.len(), 4);
+        assert_eq!(temps(keller), [38.0, 41.0, 52.0, 39.0]);
         assert_eq!(keller.disks[2].name, "Platte 3");
         assert_eq!(keller.disks[2].temperature_c, Some(52.0));
         assert_eq!(keller.containers.iter().filter(|c| c.running).count(), 6);
@@ -165,15 +171,10 @@ mod tests {
             52.0
         );
         assert!(buero.ups.is_none());
+        assert_eq!(buero.backups.len(), 1);
         assert_eq!(buero.backups[0].name, "Cloud C2");
         assert_eq!(buero.backups[0].last_run, Some(NOW - 3 * 3600));
         assert_eq!(buero.backups[0].kind, nas_model::BackupKind::HyperBackup);
-        let temps = |s: &Snapshot| -> Vec<f64> {
-            s.disks
-                .iter()
-                .map(|d| d.temperature_c.expect("temperature"))
-                .collect()
-        };
         assert_eq!(temps(buero), [36.0, 37.0, 39.0, 38.0]);
 
         let homelab = snapshot(&set, "demo-homelab");
@@ -188,6 +189,8 @@ mod tests {
             rounded(volume(&set, "demo-homelab", "apps").used_percent(), 0),
             23.0
         );
+        assert_eq!(homelab.backups.len(), 1);
+        assert_eq!(homelab.backups[0].name, "Replikation tank");
         assert_eq!(homelab.backups[0].last_run, Some(NOW - 3600));
         assert_eq!(homelab.backups[0].kind, nas_model::BackupKind::Replication);
         // 4 HDD at 40 to 44 °C, then 2 SSD.
@@ -196,7 +199,9 @@ mod tests {
             d.model
                 .as_deref()
                 .is_some_and(|m| m.contains("SSD") || m.contains("EVO"))
+                && d.spinning.is_none()
         }));
+        assert!(homelab.disks[..4].iter().all(|d| d.spinning == Some(true)));
     }
 
     #[test]
