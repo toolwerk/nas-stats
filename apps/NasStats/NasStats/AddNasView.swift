@@ -23,10 +23,12 @@ struct AddNasView: View {
     /// Credentials the NAS refused; no new login with them (it may block
     /// the address).
     @State private var refusedCredentials: Credentials?
-    /// Set when the dialog closes; a running test query then saves nothing.
-    @State private var closed = false
+    /// Changes when the dialog closes; a test query started before then
+    /// saves nothing.
+    @State private var attempt = UUID()
 
     private struct Credentials: Equatable {
+        let baseUrl: String
         let user: String
         let password: String
     }
@@ -137,12 +139,21 @@ struct AddNasView: View {
                     Text(errorText)
                         .font(.footnote)
                         .foregroundStyle(.red)
+                } else if credentialsRefused {
+                    Text("Das NAS hat diese Zugangsdaten abgelehnt. Ändern Sie Benutzer oder Passwort, um es erneut zu versuchen.")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
                 }
             }
         }
         .formStyle(.grouped)
-        .onAppear { closed = false }
-        .onDisappear { closed = true }
+        .onDisappear {
+            // A window may keep its state when closed; start clean.
+            attempt = UUID()
+            password = ""
+            certificate = nil
+            errorText = nil
+        }
         .onChange(of: address) {
             certificate = nil
             errorText = nil
@@ -189,9 +200,14 @@ struct AddNasView: View {
         return certificate.fingerprint
     }
 
+    private var credentialsRefused: Bool {
+        guard let refusedCredentials, let baseUrl = normalizedAddress else { return false }
+        return refusedCredentials
+            == Credentials(baseUrl: baseUrl, user: trimmedUser, password: password)
+    }
+
     private var canConnect: Bool {
-        canFetch && currentFingerprint != nil
-            && refusedCredentials != Credentials(user: trimmedUser, password: password)
+        canFetch && currentFingerprint != nil && !credentialsRefused
     }
 
     // MARK: - Actions
@@ -229,6 +245,7 @@ struct AddNasView: View {
         )
         let password = password
         let typedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let started = attempt
         Task {
             defer { busy = false }
             var account = draft
@@ -242,13 +259,18 @@ struct AddNasView: View {
                     ? hostname ?? NasAddress.host(of: baseUrl) ?? baseUrl
                     : typedName
                 account.model = snapshot.nas.model
-                guard !closed else { return }
+                guard attempt == started else { return }
                 try accounts.add(StoredAccount(account: account, password: password))
                 close()
             } catch {
                 switch error as? FfiError {
                 case .LoginFailed?, .SecondFactorRequired?:
-                    refusedCredentials = Credentials(user: account.user, password: password)
+                    refusedCredentials = Credentials(
+                        baseUrl: baseUrl, user: account.user, password: password
+                    )
+                case .CertificateChanged?:
+                    // Offers "Zertifikat abrufen" again.
+                    certificate = nil
                 default:
                     break
                 }
