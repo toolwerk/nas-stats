@@ -10,7 +10,15 @@ authors.workspace = true
 crate-type = ["lib", "staticlib"]
 
 [dependencies]
+nas-model = { workspace = true }
+nas-http = { workspace = true }
+provider-qnap = { path = "../provider-qnap" }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 uniffi = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]
 workspace = true

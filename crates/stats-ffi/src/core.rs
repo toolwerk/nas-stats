@@ -1,0 +1,818 @@
+//! [`NasCore`]: the NAS the app registered, their last state and the rules
+//! for querying them.
+//!
+//! The app keeps the list of NAS and the credentials (keychain) and hands
+//! every NAS to the core at each start with [`NasCore::add_nas`]; the core
+//! keeps everything in memory only.
+//!
+//! Rules:
+//!
+//! - A NAS is queried at most once per [`MIN_INTERVAL_SECS`], however often
+//!   the app asks; in between [`NasCore::refresh`] returns the last state
+//!   without a request. A clock set back counts as the interval passed.
+//! - After a rejected login, a required second factor or a changed
+//!   certificate the core no longer queries the NAS until the app changes
+//!   the credentials or adds the NAS again.
+//! - The last snapshot stays after every error.
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use nas_http::{Fingerprint, NasClient};
+use nas_model::{self as model, BoxFuture, Provider, ProviderError};
+use provider_qnap::{QnapClient, QnapProvider};
+
+use crate::error::FfiError;
+use crate::records::{NasConfig, NasProblem, NasState, ProviderKind, Snapshot};
+use crate::{on_core, runtime};
+
+/// Shortest time between two queries of the same NAS, in seconds.
+pub const MIN_INTERVAL_SECS: i64 = 300;
+
+/// What the core needs from a connected NAS. The only place that knows the
+/// vendors is [`connect`].
+pub(crate) trait Backend: Send + Sync {
+    fn snapshot(&self) -> BoxFuture<'_, Result<model::Snapshot, ProviderError>>;
+    fn set_credentials(&self, user: String, password: String) -> BoxFuture<'_, ()>;
+    fn logout(&self) -> BoxFuture<'_, Result<(), ProviderError>>;
+}
+
+impl Backend for QnapProvider<NasClient> {
+    fn snapshot(&self) -> BoxFuture<'_, Result<model::Snapshot, ProviderError>> {
+        Provider::snapshot(self)
+    }
+
+    fn set_credentials(&self, user: String, password: String) -> BoxFuture<'_, ()> {
+        Box::pin(self.client().set_credentials(user, password))
+    }
+
+    fn logout(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(self.client().logout())
+    }
+}
+
+/// Builds the backend for a NAS; sends nothing.
+pub(crate) type Connector =
+    Box<dyn Fn(&NasConfig, String, String) -> Result<Arc<dyn Backend>, FfiError> + Send + Sync>;
+
+/// Now in Unix seconds UTC.
+pub(crate) type Clock = Box<dyn Fn() -> i64 + Send + Sync>;
+
+/// The real factory: QNAP over HTTPS with the pinned certificate.
+pub(crate) fn connect(
+    config: &NasConfig,
+    user: String,
+    password: String,
+) -> Result<Arc<dyn Backend>, FfiError> {
+    match config.provider {
+        ProviderKind::Qnap => {}
+        provider => return Err(FfiError::Unsupported { provider }),
+    }
+    let pin: Fingerprint =
+        config
+            .fingerprint
+            .parse()
+            .map_err(|e: ProviderError| FfiError::InvalidInput {
+                detail: e.to_string(),
+            })?;
+    // The HTTP client belongs to the core runtime, also when the app calls
+    // from its own thread.
+    let _runtime = runtime().enter();
+    let http = NasClient::new(&config.base_url, pin).map_err(|e| FfiError::InvalidInput {
+        detail: e.to_string(),
+    })?;
+    Ok(Arc::new(QnapProvider::new(
+        config.id.clone(),
+        config.base_url.clone(),
+        QnapClient::new(http, user, password),
+    )))
+}
+
+fn system_clock() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[derive(Debug, Default)]
+struct Status {
+    snapshot: Option<Snapshot>,
+    problem: Option<NasProblem>,
+    last_attempt_at: Option<i64>,
+    blocked: bool,
+}
+
+impl Status {
+    fn record(&self, nas_id: &str) -> NasState {
+        NasState {
+            nas_id: nas_id.to_owned(),
+            snapshot: self.snapshot.clone(),
+            problem: self.problem.clone(),
+            last_attempt_at: self.last_attempt_at,
+            blocked: self.blocked,
+        }
+    }
+
+    /// Back to "never queried", the snapshot stays.
+    fn reset(&mut self) {
+        self.problem = None;
+        self.last_attempt_at = None;
+        self.blocked = false;
+    }
+}
+
+struct Entry {
+    backend: Arc<dyn Backend>,
+    /// Held for a whole query, so a parallel call waits for its result.
+    poll: tokio::sync::Mutex<()>,
+    /// Never held across an `await`.
+    status: Mutex<Status>,
+}
+
+/// The NAS registered by the app and their last state.
+#[derive(uniffi::Object)]
+pub struct NasCore {
+    entries: Mutex<BTreeMap<String, Arc<Entry>>>,
+    connect: Connector,
+    clock: Clock,
+}
+
+impl NasCore {
+    /// Core with its own factory and clock, for tests.
+    pub(crate) fn with_parts(connect: Connector, clock: Clock) -> Self {
+        Self {
+            entries: Mutex::new(BTreeMap::new()),
+            connect,
+            clock,
+        }
+    }
+
+    fn entry(&self, nas_id: &str) -> Result<Arc<Entry>, FfiError> {
+        lock(&self.entries)
+            .get(nas_id)
+            .cloned()
+            .ok_or_else(|| FfiError::UnknownNas {
+                id: nas_id.to_owned(),
+            })
+    }
+
+    async fn refresh_entry(&self, nas_id: &str) -> Result<NasState, FfiError> {
+        let entry = self.entry(nas_id)?;
+        let _poll = entry.poll.lock().await;
+        let now = (self.clock)();
+        {
+            let mut status = lock(&entry.status);
+            let recent = status
+                .last_attempt_at
+                .is_some_and(|last| now >= last && now - last < MIN_INTERVAL_SECS);
+            if status.blocked || recent {
+                return Ok(status.record(nas_id));
+            }
+            status.last_attempt_at = Some(now);
+        }
+        let result = entry.backend.snapshot().await;
+        let mut status = lock(&entry.status);
+        match result {
+            Ok(snapshot) => {
+                status.snapshot = Some(Snapshot::real(snapshot));
+                status.problem = None;
+            }
+            Err(e) => {
+                status.blocked = e.stops_polling();
+                status.problem = Some(NasProblem::from(&e));
+            }
+        }
+        Ok(status.record(nas_id))
+    }
+}
+
+impl Default for NasCore {
+    fn default() -> Self {
+        Self::with_parts(Box::new(connect), Box::new(system_clock))
+    }
+}
+
+#[uniffi::export]
+impl NasCore {
+    #[uniffi::constructor]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registers a NAS; sends nothing. An entry with the same id is
+    /// replaced: its snapshot stays, the error, the time of the last query
+    /// and a block are cleared.
+    pub fn add_nas(
+        &self,
+        config: NasConfig,
+        user: String,
+        password: String,
+    ) -> Result<(), FfiError> {
+        let backend = (self.connect)(&config, user, password)?;
+        let mut entries = lock(&self.entries);
+        let snapshot = entries
+            .get(&config.id)
+            .and_then(|old| lock(&old.status).snapshot.clone());
+        entries.insert(
+            config.id,
+            Arc::new(Entry {
+                backend,
+                poll: tokio::sync::Mutex::new(()),
+                status: Mutex::new(Status {
+                    snapshot,
+                    ..Status::default()
+                }),
+            }),
+        );
+        Ok(())
+    }
+
+    /// Removes a NAS and ends its session; an error of the logout is
+    /// ignored.
+    pub async fn remove_nas(self: Arc<Self>, nas_id: String) -> Result<(), FfiError> {
+        let entry = lock(&self.entries)
+            .remove(&nas_id)
+            .ok_or(FfiError::UnknownNas { id: nas_id })?;
+        on_core(async move {
+            let _ = entry.backend.logout().await;
+            Ok(())
+        })
+        .await
+    }
+
+    /// New credentials for a NAS: lifts a block, clears the error and the
+    /// time of the last query, so the next [`NasCore::refresh`] queries.
+    /// Waits for a query still running. Sends nothing.
+    pub async fn update_credentials(
+        self: Arc<Self>,
+        nas_id: String,
+        user: String,
+        password: String,
+    ) -> Result<(), FfiError> {
+        let entry = self.entry(&nas_id)?;
+        on_core(async move {
+            let _poll = entry.poll.lock().await;
+            entry.backend.set_credentials(user, password).await;
+            lock(&entry.status).reset();
+            Ok(())
+        })
+        .await
+    }
+
+    /// Queries the NAS, unless it is blocked or was queried less than
+    /// [`MIN_INTERVAL_SECS`] ago; then returns the last state without a
+    /// request. A failed query does not throw: its error is in
+    /// [`NasState::problem`], the last snapshot stays.
+    pub async fn refresh(self: Arc<Self>, nas_id: String) -> Result<NasState, FfiError> {
+        on_core(async move { self.refresh_entry(&nas_id).await }).await
+    }
+
+    /// State of every registered NAS, sorted by id; sends nothing.
+    pub fn states(&self) -> Vec<NasState> {
+        lock(&self.entries)
+            .iter()
+            .map(|(id, entry)| lock(&entry.status).record(id))
+            .collect()
+    }
+
+    /// Queries a NAS once without registering it, e.g. before saving it,
+    /// and logs out again (an error of the logout is ignored). Ignores the
+    /// interval; an error is thrown.
+    pub async fn test_connection(
+        self: Arc<Self>,
+        config: NasConfig,
+        user: String,
+        password: String,
+    ) -> Result<Snapshot, FfiError> {
+        on_core(async move {
+            let backend = (self.connect)(&config, user, password)?;
+            let result = backend.snapshot().await;
+            let _ = backend.logout().await;
+            Ok(Snapshot::real(result?))
+        })
+        .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use super::*;
+
+    const T0: i64 = 1_800_000_000;
+
+    fn model_snapshot(cpu: f64) -> model::Snapshot {
+        model::Snapshot {
+            nas: model::Nas {
+                id: "nas-1".into(),
+                provider: model::ProviderKind::Qnap,
+                name: None,
+                base_url: "https://nas.example".into(),
+                model: Some("TS-000".into()),
+                firmware: None,
+                hostname: None,
+            },
+            observed_at: T0,
+            system: model::SystemStatus {
+                cpu_percent: Some(cpu),
+                ..model::SystemStatus::default()
+            },
+            ups: None,
+            volumes: Vec::new(),
+            disks: Vec::new(),
+            fans: Vec::new(),
+            backups: Vec::new(),
+            containers: Vec::new(),
+            alerts: Vec::new(),
+            interfaces: Vec::new(),
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeBackend {
+        answers: Mutex<VecDeque<Result<model::Snapshot, ProviderError>>>,
+        queries: AtomicUsize,
+        logouts: AtomicUsize,
+        credentials: Mutex<Vec<(String, String)>>,
+        /// Delay of every query, so parallel calls overlap.
+        slow: bool,
+        logout_fails: bool,
+    }
+
+    impl FakeBackend {
+        fn answering(answers: Vec<Result<model::Snapshot, ProviderError>>) -> Arc<Self> {
+            Arc::new(Self {
+                answers: Mutex::new(answers.into()),
+                ..Self::default()
+            })
+        }
+
+        fn queries(&self) -> usize {
+            self.queries.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Backend for FakeBackend {
+        fn snapshot(&self) -> BoxFuture<'_, Result<model::Snapshot, ProviderError>> {
+            self.queries.fetch_add(1, Ordering::SeqCst);
+            let answer = lock(&self.answers)
+                .pop_front()
+                .unwrap_or_else(|| Err(ProviderError::Parse("no answer left".into())));
+            let slow = self.slow;
+            Box::pin(async move {
+                if slow {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                answer
+            })
+        }
+
+        fn set_credentials(&self, user: String, password: String) -> BoxFuture<'_, ()> {
+            lock(&self.credentials).push((user, password));
+            Box::pin(std::future::ready(()))
+        }
+
+        fn logout(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+            self.logouts.fetch_add(1, Ordering::SeqCst);
+            let result = if self.logout_fails {
+                Err(ProviderError::Timeout)
+            } else {
+                Ok(())
+            };
+            Box::pin(std::future::ready(result))
+        }
+    }
+
+    struct Harness {
+        core: Arc<NasCore>,
+        clock: Arc<AtomicI64>,
+        connected: Arc<Mutex<Vec<(NasConfig, String, String)>>>,
+    }
+
+    impl Harness {
+        fn set_time(&self, at: i64) {
+            self.clock.store(at, Ordering::SeqCst);
+        }
+    }
+
+    fn harness(backend: Arc<FakeBackend>) -> Harness {
+        let clock = Arc::new(AtomicI64::new(T0));
+        let connected = Arc::new(Mutex::new(Vec::new()));
+        let core = {
+            let clock = clock.clone();
+            let connected = connected.clone();
+            NasCore::with_parts(
+                Box::new(move |config: &NasConfig, user, password| {
+                    lock(&connected).push((config.clone(), user, password));
+                    Ok(backend.clone() as Arc<dyn Backend>)
+                }),
+                Box::new(move || clock.load(Ordering::SeqCst)),
+            )
+        };
+        Harness {
+            core: Arc::new(core),
+            clock,
+            connected,
+        }
+    }
+
+    fn config(id: &str) -> NasConfig {
+        NasConfig {
+            id: id.into(),
+            provider: ProviderKind::Qnap,
+            base_url: "https://nas.example".into(),
+            fingerprint: "AB".repeat(32),
+        }
+    }
+
+    fn cpu(state: &NasState) -> Option<f64> {
+        state.snapshot.as_ref().and_then(|s| s.system.cpu_percent)
+    }
+
+    #[tokio::test]
+    async fn add_sends_nothing_and_refresh_queries() {
+        let backend = FakeBackend::answering(vec![Ok(model_snapshot(10.0))]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "monitor".into(), "secret".into())
+            .expect("add");
+        assert_eq!(backend.queries(), 0);
+        let connected = lock(&h.connected).clone();
+        assert_eq!(
+            connected,
+            vec![(config("nas-1"), "monitor".into(), "secret".into())]
+        );
+        assert_eq!(
+            h.core.states(),
+            vec![NasState {
+                nas_id: "nas-1".into(),
+                snapshot: None,
+                problem: None,
+                last_attempt_at: None,
+                blocked: false,
+            }]
+        );
+
+        let state = h.core.clone().refresh("nas-1".into()).await.expect("state");
+        assert_eq!(backend.queries(), 1);
+        assert_eq!(cpu(&state), Some(10.0));
+        assert_eq!(state.problem, None);
+        assert_eq!(state.last_attempt_at, Some(T0));
+        assert!(!state.blocked);
+        assert!(!state.snapshot.as_ref().expect("snapshot").demo);
+        assert_eq!(h.core.states(), vec![state]);
+    }
+
+    #[tokio::test]
+    async fn refresh_within_five_minutes_sends_nothing() {
+        let backend =
+            FakeBackend::answering(vec![Ok(model_snapshot(10.0)), Ok(model_snapshot(20.0))]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        h.core.clone().refresh("nas-1".into()).await.expect("first");
+
+        h.set_time(T0 + MIN_INTERVAL_SECS - 1);
+        let state = h
+            .core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("cached");
+        assert_eq!(backend.queries(), 1);
+        assert_eq!(cpu(&state), Some(10.0));
+        assert_eq!(state.last_attempt_at, Some(T0));
+
+        h.set_time(T0 + MIN_INTERVAL_SECS);
+        let state = h.core.clone().refresh("nas-1".into()).await.expect("due");
+        assert_eq!(backend.queries(), 2);
+        assert_eq!(cpu(&state), Some(20.0));
+        assert_eq!(state.last_attempt_at, Some(T0 + MIN_INTERVAL_SECS));
+    }
+
+    #[tokio::test]
+    async fn a_clock_set_back_counts_as_due() {
+        let backend =
+            FakeBackend::answering(vec![Ok(model_snapshot(10.0)), Ok(model_snapshot(20.0))]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        h.core.clone().refresh("nas-1".into()).await.expect("first");
+        h.set_time(T0 - 60);
+        let state = h.core.clone().refresh("nas-1".into()).await.expect("due");
+        assert_eq!(backend.queries(), 2);
+        assert_eq!(cpu(&state), Some(20.0));
+    }
+
+    #[tokio::test]
+    async fn an_error_keeps_the_last_snapshot_and_polling_goes_on() {
+        let backend = FakeBackend::answering(vec![
+            Ok(model_snapshot(10.0)),
+            Err(ProviderError::Timeout),
+            Ok(model_snapshot(30.0)),
+        ]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        h.core.clone().refresh("nas-1".into()).await.expect("first");
+
+        h.set_time(T0 + MIN_INTERVAL_SECS);
+        let state = h
+            .core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("failed");
+        assert_eq!(cpu(&state), Some(10.0));
+        let problem = state.problem.expect("problem");
+        assert_eq!(problem.kind, crate::records::ProblemKind::Timeout);
+        assert!(!problem.stops_polling);
+        assert!(!state.blocked);
+
+        h.set_time(T0 + 2 * MIN_INTERVAL_SECS);
+        let state = h.core.clone().refresh("nas-1".into()).await.expect("again");
+        assert_eq!(backend.queries(), 3);
+        assert_eq!(cpu(&state), Some(30.0));
+        assert_eq!(state.problem, None);
+    }
+
+    #[tokio::test]
+    async fn a_rejected_login_blocks_until_new_credentials() {
+        let backend = FakeBackend::answering(vec![
+            Ok(model_snapshot(10.0)),
+            Err(ProviderError::LoginFailed),
+            Ok(model_snapshot(40.0)),
+        ]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        h.core.clone().refresh("nas-1".into()).await.expect("first");
+        h.set_time(T0 + MIN_INTERVAL_SECS);
+        let state = h
+            .core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("refused");
+        assert!(state.blocked);
+        assert_eq!(cpu(&state), Some(10.0));
+        assert!(state.problem.as_ref().expect("problem").stops_polling);
+
+        // Blocked: no query, however much time passes.
+        h.set_time(T0 + 100 * MIN_INTERVAL_SECS);
+        let state = h
+            .core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("blocked");
+        assert_eq!(backend.queries(), 2);
+        assert!(state.blocked);
+
+        h.core
+            .clone()
+            .update_credentials("nas-1".into(), "monitor".into(), "new".into())
+            .await
+            .expect("update");
+        assert_eq!(
+            lock(&backend.credentials).clone(),
+            vec![("monitor".to_owned(), "new".to_owned())]
+        );
+        let state = &h.core.states()[0];
+        assert!(!state.blocked);
+        assert_eq!(state.problem, None);
+        assert_eq!(state.last_attempt_at, None);
+        assert_eq!(cpu(state), Some(10.0));
+
+        let state = h.core.clone().refresh("nas-1".into()).await.expect("again");
+        assert_eq!(backend.queries(), 3);
+        assert_eq!(cpu(&state), Some(40.0));
+    }
+
+    #[tokio::test]
+    async fn second_factor_and_certificate_change_block_too() {
+        for error in [
+            ProviderError::SecondFactorRequired,
+            ProviderError::CertificateChanged {
+                old: "AA".into(),
+                new: "BB".into(),
+            },
+        ] {
+            let backend = FakeBackend::answering(vec![Err(error)]);
+            let h = harness(backend.clone());
+            h.core
+                .add_nas(config("nas-1"), "u".into(), "p".into())
+                .expect("add");
+            let state = h.core.clone().refresh("nas-1".into()).await.expect("state");
+            assert!(state.blocked);
+            assert_eq!(state.snapshot, None);
+            h.set_time(T0 + MIN_INTERVAL_SECS);
+            h.core.clone().refresh("nas-1".into()).await.expect("state");
+            assert_eq!(backend.queries(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn adding_again_keeps_the_snapshot_and_lifts_the_block() {
+        let backend = FakeBackend::answering(vec![
+            Ok(model_snapshot(10.0)),
+            Err(ProviderError::LoginFailed),
+            Ok(model_snapshot(50.0)),
+        ]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        h.core.clone().refresh("nas-1".into()).await.expect("first");
+        h.set_time(T0 + MIN_INTERVAL_SECS);
+        h.core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("refused");
+
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p2".into())
+            .expect("add again");
+        let states = h.core.states();
+        assert_eq!(states.len(), 1);
+        assert!(!states[0].blocked);
+        assert_eq!(states[0].problem, None);
+        assert_eq!(states[0].last_attempt_at, None);
+        assert_eq!(cpu(&states[0]), Some(10.0));
+
+        let state = h.core.clone().refresh("nas-1".into()).await.expect("again");
+        assert_eq!(backend.queries(), 3);
+        assert_eq!(cpu(&state), Some(50.0));
+    }
+
+    #[tokio::test]
+    async fn parallel_refreshes_share_one_query() {
+        let backend = Arc::new(FakeBackend {
+            answers: Mutex::new(vec![Ok(model_snapshot(10.0))].into()),
+            slow: true,
+            ..FakeBackend::default()
+        });
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        let (a, b) = tokio::join!(
+            h.core.clone().refresh("nas-1".into()),
+            h.core.clone().refresh("nas-1".into())
+        );
+        assert_eq!(backend.queries(), 1);
+        assert_eq!(cpu(&a.expect("a")), Some(10.0));
+        assert_eq!(cpu(&b.expect("b")), Some(10.0));
+    }
+
+    #[tokio::test]
+    async fn remove_logs_out_and_forgets_the_nas() {
+        let backend = Arc::new(FakeBackend {
+            logout_fails: true,
+            ..FakeBackend::default()
+        });
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        h.core
+            .clone()
+            .remove_nas("nas-1".into())
+            .await
+            .expect("logout error is ignored");
+        assert_eq!(backend.logouts.load(Ordering::SeqCst), 1);
+        assert!(h.core.states().is_empty());
+        assert_eq!(
+            h.core.clone().remove_nas("nas-1".into()).await,
+            Err(FfiError::UnknownNas { id: "nas-1".into() })
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_nas_is_an_error() {
+        let h = harness(FakeBackend::answering(Vec::new()));
+        assert_eq!(
+            h.core.clone().refresh("nope".into()).await,
+            Err(FfiError::UnknownNas { id: "nope".into() })
+        );
+        assert_eq!(
+            h.core
+                .clone()
+                .update_credentials("nope".into(), "u".into(), "p".into())
+                .await,
+            Err(FfiError::UnknownNas { id: "nope".into() })
+        );
+    }
+
+    #[tokio::test]
+    async fn states_are_sorted_by_id() {
+        let h = harness(FakeBackend::answering(Vec::new()));
+        assert!(h.core.states().is_empty());
+        for id in ["nas-b", "nas-a", "nas-c"] {
+            h.core
+                .add_nas(config(id), "u".into(), "p".into())
+                .expect("add");
+        }
+        let ids: Vec<_> = h.core.states().into_iter().map(|s| s.nas_id).collect();
+        assert_eq!(ids, ["nas-a", "nas-b", "nas-c"]);
+    }
+
+    #[tokio::test]
+    async fn test_connection_queries_once_and_logs_out() {
+        let backend = FakeBackend::answering(vec![
+            Ok(model_snapshot(10.0)),
+            Ok(model_snapshot(20.0)),
+            Err(ProviderError::LoginFailed),
+        ]);
+        let h = harness(backend.clone());
+        let snapshot = h
+            .core
+            .clone()
+            .test_connection(config("new"), "u".into(), "p".into())
+            .await
+            .expect("snapshot");
+        assert_eq!(snapshot.system.cpu_percent, Some(10.0));
+        assert!(!snapshot.demo);
+        // No interval and no entry.
+        h.core
+            .clone()
+            .test_connection(config("new"), "u".into(), "p".into())
+            .await
+            .expect("again");
+        assert!(h.core.states().is_empty());
+        assert_eq!(
+            h.core
+                .clone()
+                .test_connection(config("new"), "u".into(), "bad".into())
+                .await,
+            Err(FfiError::LoginFailed)
+        );
+        assert_eq!(backend.queries(), 3);
+        assert_eq!(backend.logouts.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn factory_refuses_other_vendors_http_and_bad_fingerprints() {
+        let synology = NasConfig {
+            provider: ProviderKind::Synology,
+            ..config("nas-1")
+        };
+        assert!(matches!(
+            connect(&synology, "u".into(), "p".into()),
+            Err(FfiError::Unsupported {
+                provider: ProviderKind::Synology
+            })
+        ));
+
+        let http = NasConfig {
+            base_url: "http://nas.example".into(),
+            ..config("nas-1")
+        };
+        assert!(matches!(
+            connect(&http, "u".into(), "p".into()),
+            Err(FfiError::InvalidInput { .. })
+        ));
+
+        let bad_pin = NasConfig {
+            fingerprint: "nope".into(),
+            ..config("nas-1")
+        };
+        assert!(matches!(
+            connect(&bad_pin, "u".into(), "p".into()),
+            Err(FfiError::InvalidInput { .. })
+        ));
+
+        assert!(connect(&config("nas-1"), "u".into(), "p".into()).is_ok());
+    }
+
+    #[test]
+    fn the_real_core_adds_a_qnap_without_network() {
+        let core = NasCore::new();
+        core.add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        assert_eq!(core.states().len(), 1);
+        let http = NasConfig {
+            base_url: "http://nas.example".into(),
+            ..config("nas-2")
+        };
+        assert!(matches!(
+            core.add_nas(http, "u".into(), "p".into()),
+            Err(FfiError::InvalidInput { .. })
+        ));
+        assert_eq!(core.states().len(), 1);
+    }
+}
