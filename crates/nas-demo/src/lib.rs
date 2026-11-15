@@ -402,6 +402,26 @@ mod tests {
     }
 
     #[test]
+    fn findings_as_in_the_mockup() {
+        use nas_model::{FindingKind, Health, Thresholds};
+
+        let set = demo(NOW);
+        let keller = snapshot(&set, "demo-keller").findings(&Thresholds::default());
+        let texts: Vec<&str> = keller.iter().map(|f| f.text.as_str()).collect();
+        assert_eq!(texts, ["Platte 3 bei 52 °C", "DataVol1 bei 87 %"]);
+        assert!(keller.iter().all(|f| f.level == Health::Warning));
+        assert_eq!(keller[0].kind, FindingKind::DiskTemperature);
+        assert_eq!(keller[0].subject.as_deref(), Some("demo-keller-disk3"));
+        assert_eq!(keller[1].kind, FindingKind::VolumeFill);
+        assert_eq!(keller[1].subject.as_deref(), Some("demo-keller-datavol1"));
+
+        for id in ["demo-buero", "demo-homelab"] {
+            let findings = snapshot(&set, id).findings(&Thresholds::default());
+            assert!(findings.is_empty(), "{id}: {findings:?}");
+        }
+    }
+
+    #[test]
     fn other_now_moves_the_times_only() {
         let a = demo(NOW);
         let b = demo(NOW + 3600);
