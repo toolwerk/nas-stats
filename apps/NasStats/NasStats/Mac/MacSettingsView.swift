@@ -6,8 +6,8 @@ import SwiftUI
 struct MacSettingsView: View {
     @Environment(NasStore.self) private var store
     @AppStorage(MenuBarDisplay.defaultsKey) private var display: MenuBarDisplay = .symbol
-    /// Mirrors the system; read again when a window of the app becomes key,
-    /// since the right-click menu may have changed it meanwhile.
+    /// Mirrors the system; read again when a window of the app becomes key
+    /// or a menu closes, since the right-click menu may have changed it.
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
 
     var body: some View {
@@ -36,6 +36,9 @@ struct MacSettingsView: View {
         .fixedSize(horizontal: false, vertical: true)
         .onAppear { launchAtLogin = LaunchAtLogin.isEnabled }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            launchAtLogin = LaunchAtLogin.isEnabled
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSMenu.didEndTrackingNotification)) { _ in
             launchAtLogin = LaunchAtLogin.isEnabled
         }
     }
