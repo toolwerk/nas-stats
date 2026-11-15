@@ -85,10 +85,11 @@ struct NasEntry: Identifiable, Sendable {
     }
 
     /// State for the status dot: "Nicht erreichbar" when the NAS did not
-    /// answer and nothing blocks it, else from `health`.
+    /// answer, nothing blocks it and its last state was not critical (a
+    /// critical NAS stays red), else from `health`.
     var statusLevel: StatusLevel {
         if let kind = problem?.kind, kind == .unreachable || kind == .timeout,
-           !blocked, problem?.stopsPolling != true, localError == nil {
+           health != .critical {
             return .offline
         }
         return switch health {

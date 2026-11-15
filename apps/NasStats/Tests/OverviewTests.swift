@@ -82,6 +82,15 @@ struct OverviewTests {
         #expect(timeout.problemLine == "NAS antwortet nicht")
     }
 
+    @Test func aCriticalNasStaysCriticalWhenItStopsAnswering() {
+        let battery = Finding(kind: .upsOnBattery, level: .critical, subject: nil, text: "USV auf Batterie")
+        var e = entry("a", findings: [battery])
+        e.problem = problem(.unreachable)
+        #expect(e.health == .critical)
+        #expect(e.statusLevel == .critical)
+        #expect(OverviewSummary.sentence([e], demo: false) == "1 NAS: 1 kritisch")
+    }
+
     @Test func problemLinePrefersTheLocalError() {
         var e = entry("a")
         #expect(e.problemLine == nil)
