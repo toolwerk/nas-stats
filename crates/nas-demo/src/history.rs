@@ -26,6 +26,8 @@ const BACKUP_DURATION: i64 = 30 * 60;
 /// every platform yields the same values).
 const WEEK: [f64; 7] = [0.0, 0.78, 0.97, 0.43, -0.43, -0.97, -0.78];
 
+/// Id of DataVol1 of Keller.
+const DATAVOL1_ID: &str = "demo-keller-datavol1";
 /// Days until full for DataVol1, as in the mockup.
 pub(crate) const DATAVOL1_DAYS_TO_FULL: f64 = 143.0;
 const VOLUME1_DAYS_TO_FULL: f64 = 657.0;
@@ -63,8 +65,8 @@ pub(crate) fn samples(now: i64, snapshots: &[Snapshot]) -> Vec<Sample> {
                 continue;
             };
             let key = Some(volume.id.as_str());
-            let growth = growth_per_day(&volume.name, used, total);
-            let cleanup = volume.name == "DataVol1";
+            let growth = growth_per_day(&volume.id, used, total).unwrap_or(0.0);
+            let cleanup = volume.id == DATAVOL1_ID;
             push(
                 Metric::VolumeUsed,
                 key,
@@ -118,15 +120,18 @@ pub(crate) fn samples(now: i64, snapshots: &[Snapshot]) -> Vec<Sample> {
     out
 }
 
-/// Growth of a volume in bytes per day.
-fn growth_per_day(name: &str, used: u64, total: u64) -> f64 {
+/// Growth of a volume in bytes per day, by volume id.
+///
+/// `None` for an id without a set growth; a test makes sure every demo
+/// volume with bytes has one, so a renamed volume cannot go flat unnoticed.
+pub(crate) fn growth_per_day(volume_id: &str, used: u64, total: u64) -> Option<f64> {
     let free = total.saturating_sub(used) as f64;
-    match name {
-        "DataVol1" => free / DATAVOL1_DAYS_TO_FULL,
-        "Volume 1" => free / VOLUME1_DAYS_TO_FULL,
-        "tank" => free / TANK_DAYS_TO_FULL,
-        "apps" => APPS_GROWTH_PER_DAY,
-        _ => 0.0,
+    match volume_id {
+        DATAVOL1_ID => Some(free / DATAVOL1_DAYS_TO_FULL),
+        "demo-buero-volume1" => Some(free / VOLUME1_DAYS_TO_FULL),
+        "demo-homelab-tank" => Some(free / TANK_DAYS_TO_FULL),
+        "demo-homelab-apps" => Some(APPS_GROWTH_PER_DAY),
+        _ => None,
     }
 }
 
