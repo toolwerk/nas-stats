@@ -48,8 +48,11 @@ struct NasSettingsView: View {
     private func form(_ account: NasAccount) -> some View {
         Form {
             Section {
+                // Locked while an action runs: it stores the account with
+                // the name it started with.
                 TextField("Name", text: $name)
                     .onSubmit(saveName)
+                    .disabled(busy)
                 LabeledContent("Adresse") {
                     Text(verbatim: account.baseUrl)
                         .textSelection(.enabled)
