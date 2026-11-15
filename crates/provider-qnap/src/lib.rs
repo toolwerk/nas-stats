@@ -28,12 +28,15 @@
 //! it, without admin rights or after a rejected login the list is empty, and
 //! that login is not repeated until the user acts (a missing Container
 //! Station is looked for again after [`CONTAINER_RECHECK`]). Volumes and
-//! disks follow in later issues.
+//! disks follow in later issues. [`QnapProvider`] turns the system values
+//! into a [`nas_model::Snapshot`] for the core; the other lists follow with
+//! #52.
 
 mod auth;
 mod client;
 mod containers;
 mod network;
+mod provider;
 mod system;
 mod transport;
 mod xml;
@@ -41,5 +44,6 @@ mod xml;
 pub use auth::SECOND_FACTOR_HINT;
 pub use client::QnapClient;
 pub use containers::CONTAINER_RECHECK;
+pub use provider::QnapProvider;
 pub use system::{FIRMWARE_INTERVAL, QnapSystem};
 pub use transport::Transport;
