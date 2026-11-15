@@ -27,7 +27,8 @@ struct FillBar: View {
     private var valueText: String {
         switch detail {
         case .percent:
-            return StatusFormat.percent(percent, fractionDigits: 0, locale: locale)
+            // Round down so the text never reaches a threshold the colour has not.
+            return StatusFormat.percent(percent.map { $0.rounded(.down) }, fractionDigits: 0, locale: locale)
         case .full:
             let p = StatusFormat.percent(percent, fractionDigits: 1, locale: locale)
             guard let capacity = StatusFormat.capacity(used: usedBytes, total: totalBytes, locale: locale)
