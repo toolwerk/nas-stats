@@ -162,9 +162,27 @@ impl NasCore {
             })
     }
 
+    /// `Some(state)` when `entry` is no longer the registered entry of
+    /// `nas_id`: the state of the entry now registered, or `UnknownNas`.
+    /// A removed or replaced entry is never queried and its result never
+    /// reaches the app.
+    fn superseded(&self, nas_id: &str, entry: &Arc<Entry>) -> Option<Result<NasState, FfiError>> {
+        let entries = lock(&self.entries);
+        match entries.get(nas_id) {
+            Some(current) if Arc::ptr_eq(current, entry) => None,
+            Some(current) => Some(Ok(lock(&current.status).record(nas_id))),
+            None => Some(Err(FfiError::UnknownNas {
+                id: nas_id.to_owned(),
+            })),
+        }
+    }
+
     async fn refresh_entry(&self, nas_id: &str) -> Result<NasState, FfiError> {
         let entry = self.entry(nas_id)?;
         let _poll = entry.poll.lock().await;
+        if let Some(answer) = self.superseded(nas_id, &entry) {
+            return answer;
+        }
         let now = (self.clock)();
         {
             let mut status = lock(&entry.status);
@@ -177,11 +195,9 @@ impl NasCore {
             status.last_attempt_at = Some(now);
         }
         let result = entry.backend.snapshot().await;
-        // Removed while the query ran: the app no longer knows this NAS.
-        if !lock(&self.entries).contains_key(nas_id) {
-            return Err(FfiError::UnknownNas {
-                id: nas_id.to_owned(),
-            });
+        // Removed or replaced while the query ran: the result is dropped.
+        if let Some(answer) = self.superseded(nas_id, &entry) {
+            return answer;
         }
         let mut status = lock(&entry.status);
         match result {
@@ -365,6 +381,14 @@ mod tests {
         /// Delay of every query, so parallel calls overlap.
         slow: bool,
         logout_fails: bool,
+        /// When set, a query signals `started` and waits for `release`.
+        gate: Option<Arc<Gate>>,
+    }
+
+    #[derive(Default)]
+    struct Gate {
+        started: tokio::sync::Notify,
+        release: tokio::sync::Notify,
     }
 
     impl FakeBackend {
@@ -387,7 +411,12 @@ mod tests {
                 .pop_front()
                 .unwrap_or_else(|| Err(ProviderError::Parse("no answer left".into())));
             let slow = self.slow;
+            let gate = self.gate.clone();
             Box::pin(async move {
+                if let Some(gate) = gate {
+                    gate.started.notify_one();
+                    gate.release.notified().await;
+                }
                 if slow {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
@@ -721,44 +750,65 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn removing_during_a_query_waits_and_reports_unknown() {
+    fn gated(
+        answers: Vec<Result<model::Snapshot, ProviderError>>,
+    ) -> (Arc<FakeBackend>, Arc<Gate>) {
+        let gate = Arc::new(Gate::default());
         let backend = Arc::new(FakeBackend {
-            answers: Mutex::new(vec![Ok(model_snapshot(10.0))].into()),
-            slow: true,
+            answers: Mutex::new(answers.into()),
+            gate: Some(gate.clone()),
             ..FakeBackend::default()
         });
+        (backend, gate)
+    }
+
+    #[tokio::test]
+    async fn removing_during_a_query_waits_and_reports_unknown() {
+        let (backend, gate) = gated(vec![Ok(model_snapshot(10.0))]);
         let h = harness(backend.clone());
         h.core
             .add_nas(config("nas-1"), "u".into(), "p".into())
             .expect("add");
-        let core = h.core.clone();
-        let running = tokio::spawn(core.refresh("nas-1".into()));
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        h.core
-            .clone()
-            .remove_nas("nas-1".into())
-            .await
-            .expect("remove");
+        let running = tokio::spawn(h.core.clone().refresh("nas-1".into()));
+        gate.started.notified().await;
+        let removing = tokio::spawn(h.core.clone().remove_nas("nas-1".into()));
+        // The NAS is gone at once, the logout waits for the query.
+        while !h.core.states().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(backend.logouts.load(Ordering::SeqCst), 0);
+        gate.release.notify_one();
         assert_eq!(
             running.await.expect("join"),
             Err(FfiError::UnknownNas { id: "nas-1".into() })
         );
+        removing.await.expect("join").expect("remove");
         assert_eq!(backend.queries(), 1);
         assert_eq!(backend.logouts.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
-    async fn replacing_logs_out_the_old_session() {
-        let backend = FakeBackend::answering(Vec::new());
+    async fn replacing_during_a_query_drops_its_result_and_logs_out_after_it() {
+        let (backend, gate) = gated(vec![Err(ProviderError::LoginFailed)]);
         let h = harness(backend.clone());
         h.core
-            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .add_nas(config("nas-1"), "u".into(), "wrong".into())
             .expect("add");
-        assert_eq!(backend.logouts.load(Ordering::SeqCst), 0);
+        let running = tokio::spawn(h.core.clone().refresh("nas-1".into()));
+        gate.started.notified().await;
         h.core
-            .add_nas(config("nas-1"), "u".into(), "p2".into())
+            .add_nas(config("nas-1"), "u".into(), "right".into())
             .expect("replace");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert_eq!(backend.logouts.load(Ordering::SeqCst), 0);
+        gate.release.notify_one();
+
+        // The login error of the old entry does not reach the new one.
+        let state = running.await.expect("join").expect("state");
+        assert!(!state.blocked);
+        assert_eq!(state.problem, None);
+        assert_eq!(h.core.states(), vec![state]);
         for _ in 0..100 {
             if backend.logouts.load(Ordering::SeqCst) == 1 {
                 break;
