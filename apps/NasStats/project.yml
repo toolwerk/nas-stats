@@ -183,6 +183,7 @@ targets:
     platform: macOS
     sources:
       - path: Tests
+      - path: Shared
       - path: Generated/stats_ffi.swift
         optional: true
     dependencies:
