@@ -187,3 +187,19 @@ pub(crate) fn parse_disks(body: &str, nas_id: &str) -> Vec<Disk> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unknown_volume_code_gives_no_health_but_keeps_the_text() {
+        let body = "<QDocRoot><volumeList><volume><volumeValue>1</volumeValue><volumeStatus>7</volumeStatus></volume></volumeList></QDocRoot>";
+        let volumes = parse_volumes(body);
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].health, None);
+        assert_eq!(volumes[0].status_text.as_deref(), Some("7"));
+        assert_eq!(volumes[0].name, "Volume 1");
+        assert_eq!(volumes[0].total_bytes, None);
+    }
+}
