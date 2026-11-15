@@ -159,7 +159,8 @@ final class StatusItemController: NSObject, NSWindowDelegate {
 
     // MARK: - Actions
 
-    /// Queries only NAS whose last query is at least 5 minutes ago.
+    /// Queries only NAS whose last query is at least the interval of the
+    /// settings ago (5 minutes or more, #21).
     @objc private func refresh() {
         Task { await store.refreshAll() }
     }

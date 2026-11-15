@@ -157,7 +157,8 @@ final class NasStore {
 
     /// Stores a NAS after the test query of the add dialog. That query
     /// counts as its first: its snapshot shows until the core has its own,
-    /// and the next query follows with the poll round after 5 minutes.
+    /// and the next query follows with the poll round after the interval of
+    /// the settings.
     /// Throws when the keychain or the core refuses it; nothing changes then.
     func add(_ stored: StoredAccount, snapshot: Snapshot? = nil) async throws {
         try accounts.add(stored)
