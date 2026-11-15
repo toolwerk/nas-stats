@@ -42,7 +42,7 @@ struct SettingsView: View {
             } header: {
                 Text("Abfrage")
             } footer: {
-                Text("NAS Stats fragt jedes NAS höchstens in diesem Abstand ab, auch mit „Aktualisieren“, und nie öfter als alle 5 Minuten.")
+                Text("NAS Stats fragt jedes NAS frühestens nach diesem Abstand erneut ab, nie öfter als alle 5 Minuten.")
             }
             thresholdSection
             #if os(macOS)
