@@ -21,12 +21,21 @@
 //!   client logs in again.
 //!
 //! [`QnapClient::system`] reads the system values (model, firmware, CPU,
-//! memory, temperatures, fans, health, firmware update). [`QnapProvider`]
-//! turns them into a [`nas_model::Snapshot`] for the core. Volumes, disks and
-//! the network follow in later issues (#52).
+//! memory, temperatures, fans, health, firmware update),
+//! [`QnapClient::network`] the throughput per interface in bytes per second
+//! and [`QnapClient::containers`] the containers of the Container Station.
+//! The Container Station has its own login with the same account; without
+//! it, without admin rights or after a rejected login the list is empty, and
+//! that login is not repeated until the user acts (a missing Container
+//! Station is looked for again after [`CONTAINER_RECHECK`]). Volumes and
+//! disks follow in later issues. [`QnapProvider`] turns the system values
+//! into a [`nas_model::Snapshot`] for the core; the other lists follow with
+//! #52.
 
 mod auth;
 mod client;
+mod containers;
+mod network;
 mod provider;
 mod system;
 mod transport;
@@ -34,6 +43,7 @@ mod xml;
 
 pub use auth::SECOND_FACTOR_HINT;
 pub use client::QnapClient;
+pub use containers::CONTAINER_RECHECK;
 pub use provider::QnapProvider;
 pub use system::{FIRMWARE_INTERVAL, QnapSystem};
 pub use transport::Transport;

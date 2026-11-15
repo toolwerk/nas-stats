@@ -42,6 +42,7 @@ Echte Antworten eines eigenen QNAP, aufgezeichnet mit `qnap-capture` (Issue #1) 
 | `sysinfo_empty.xml` | wie `sysinfo.xml` mit leeren Feldern, **nachgebaut** (#5) | – |
 | `syshealth_good.xml` | wie `syshealth.xml` mit Zustand `good`, **nachgebaut** (#5) | – |
 | `firmware_available.xml` | wie `firmware.xml` mit angebotenem Update, **nachgebaut** (#5) | – |
+| `bandwidth_items.xml` | wie `bandwidth.xml` mit Schnittstellen als `item` (`id`, `dname` oder `name`) statt `eth<n>`, für den Rückfall auf `QSM40bandwidth`, **nachgebaut** (#7) | – |
 
 ## Antworten
 
@@ -50,6 +51,8 @@ Echte Antworten eines eigenen QNAP, aufgezeichnet mit `qnap-capture` (Issue #1) 
 - `login_wrong_password.xml` und `login_2sv.xml` sind nicht aufgezeichnet (ein Fehlversuch zählt bei QTS für die Sperre), sondern in der Form der anderen Antworten nachgebaut, nach NAS Pulse und der früheren Login-Doku (`errorValue`, `need_2sv`).
 - Eine ungültige Session antwortet mit HTTP 200 und `authPassed` 0, nicht mit 401.
 - `QSM40bandwidth` liefert auf QTS 5.2.11 nur `authPassed` 1 ohne Werte; die Bandbreite kommt aus `bandwidth`.
+- In `bandwidth.xml` sind `rx` und `tx` Bytes je Messintervall, nicht je Sekunde; das Intervall steht in `bandwidth_interval` (5 s). Schnittstellen stehen als `eth<n>` in `bandwidth_info`, gelistet in `eth_index_list` und `wlan_index_list`; `link_running` 0 heißt kein Kabel. Die Form mit `item`-Kindern (`bandwidth_items.xml`) ist nicht aufgezeichnet, sondern nach dem Muster älterer Firmware nachgebaut.
+- Die Container Station hat eine eigene Anmeldung (`POST /container-station/api/v1/login`, JSON mit `username` und `password` im Klartext) und hält die Session per Cookie. `cs_login.json` meldet `isAdmin` true, `cs_login.user.json` `isAdmin` false. Wie sie antwortet, wenn sie nicht installiert ist, ist nicht aufgezeichnet; `provider-qnap` nimmt HTTP 404 oder eine Antwort, die kein JSON ist, als „nicht installiert“, bei der Anmeldung auch eine Weiterleitung (3xx), und eine Anmelde-Antwort mit Fehlerobjekt ohne `isAdmin` (`code`, wie in `cs_container.user.json`) als abgelehnt.
 - `syshealth.xml` meldet `warning`, `firmware.xml` `newVersion` `none`.
 - Lüfter stehen in `sysinfo.xml`: Systemlüfter als `sysfan_count`, `sysfan<n>` (U/min) und `sysfan_fail<n>`, CPU-Lüfter als `cpufan_count`, `cpufan<n>` und `fan_fail<n>`. `sysfan_alias` ist ein einzelnes Feld ohne Nummer und lässt sich keinem Lüfter zuordnen; die Lüfter heißen deshalb „Lüfter <n>“ und „CPU-Lüfter <n>“. Eine angeschlossene USV nennt nur `external_devices.xml` (Gerätetyp `ups`), ohne Zustand, Ladung oder Restlaufzeit.
 - Die Abfragen für Speicherpools und Volumes (`disk_manage.cgi?store=…`) und `sysmonitor` stehen in `crates/qnap-capture/requests.txt`, sind aber noch nicht aufgezeichnet.

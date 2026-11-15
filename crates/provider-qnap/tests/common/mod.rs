@@ -94,6 +94,22 @@ impl Transport for &FakeTransport {
             result
         })
     }
+
+    /// Recorded as `POST` with the body as param `json`.
+    fn post_json_text<'a>(
+        &'a self,
+        path: &'a str,
+        body: &'a str,
+    ) -> BoxFuture<'a, Result<String, ProviderError>> {
+        let result = self.answer("POST", path, &[("json", body)]);
+        let slow = self.slow;
+        Box::pin(async move {
+            if slow {
+                tokio::task::yield_now().await;
+            }
+            result
+        })
+    }
 }
 
 pub fn calls(fake: &FakeTransport) -> Vec<Call> {

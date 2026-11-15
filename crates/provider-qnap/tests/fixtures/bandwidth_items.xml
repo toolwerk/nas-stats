@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<QDocRoot version="1.0">
+<authPassed><![CDATA[1]]></authPassed><hostname><![CDATA[nas-demo]]></hostname>
+<bandwidth_interval><![CDATA[5]]></bandwidth_interval><bandwidth_info><item><id><![CDATA[eth0]]></id><dname><![CDATA[Adapter 1]]></dname><rx><![CDATA[5000]]></rx><tx><![CDATA[2500]]></tx></item>
+<item><id><![CDATA[eth1]]></id><name><![CDATA[eth1]]></name><rx><![CDATA[0]]></rx><tx><![CDATA[0]]></tx></item>
+</bandwidth_info>
+</QDocRoot>

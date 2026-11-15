@@ -1,7 +1,7 @@
 //! Reading the `QDocRoot` XML that every QTS CGI answers with.
 
 use nas_model::ProviderError;
-use roxmltree::Document;
+use roxmltree::{Document, Node};
 
 /// Parses a CGI answer. Anything that is not XML with a `QDocRoot` root is
 /// a [`ProviderError::Parse`], usually a wrong base URL or port.
@@ -23,12 +23,28 @@ pub(crate) fn root_text(doc: &Document<'_>, name: &str) -> Option<String> {
 /// the first element child of that name. Trimmed, CDATA included; missing
 /// or empty is `None`.
 pub(crate) fn path_text(doc: &Document<'_>, path: &[&str]) -> Option<String> {
+    let (last, parents) = path.split_last()?;
     let mut node = doc.root_element();
-    for name in path {
-        node = node
-            .children()
-            .find(|n| n.is_element() && n.tag_name().name() == *name)?;
+    for name in parents {
+        node = child(node, name)?;
     }
+    child_text(node, last)
+}
+
+/// The first element child `name` of `node`.
+pub(crate) fn child<'a, 'input>(node: Node<'a, 'input>, name: &str) -> Option<Node<'a, 'input>> {
+    node.children()
+        .find(|n| n.is_element() && n.tag_name().name() == name)
+}
+
+/// Text of the first element child `name` of `node`, trimmed, CDATA
+/// included; missing or empty is `None`.
+pub(crate) fn child_text(node: Node<'_, '_>, name: &str) -> Option<String> {
+    text(child(node, name)?)
+}
+
+/// Text of `node`, trimmed, CDATA included; empty is `None`.
+pub(crate) fn text(node: Node<'_, '_>) -> Option<String> {
     let text: String = node
         .children()
         .filter(|n| n.is_text())
