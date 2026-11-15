@@ -39,6 +39,9 @@ Echte Antworten eines eigenen QNAP, aufgezeichnet mit `qnap-capture` (Issue #1) 
 | `cs_container.user.json` | wie `cs_container.json`, HTTP 401 | normaler Benutzer |
 | `login_wrong_password.xml` | `POST authLogin.cgi` mit falschem Passwort, **nachgebaut** (#4) | – |
 | `login_2sv.xml` | `POST authLogin.cgi` bei aktiver 2-Stufen-Verifizierung, **nachgebaut** (#4) | – |
+| `sysinfo_empty.xml` | wie `sysinfo.xml` mit leeren Feldern, **nachgebaut** (#5) | – |
+| `syshealth_good.xml` | wie `syshealth.xml` mit Zustand `good`, **nachgebaut** (#5) | – |
+| `firmware_available.xml` | wie `firmware.xml` mit angebotenem Update, **nachgebaut** (#5) | – |
 
 ## Antworten
 
@@ -48,4 +51,5 @@ Echte Antworten eines eigenen QNAP, aufgezeichnet mit `qnap-capture` (Issue #1) 
 - Eine ungültige Session antwortet mit HTTP 200 und `authPassed` 0, nicht mit 401.
 - `QSM40bandwidth` liefert auf QTS 5.2.11 nur `authPassed` 1 ohne Werte; die Bandbreite kommt aus `bandwidth`.
 - `syshealth.xml` meldet `warning`, `firmware.xml` `newVersion` `none`.
+- Lüfter stehen in `sysinfo.xml`: Systemlüfter als `sysfan_count`, `sysfan<n>` (U/min) und `sysfan_fail<n>`, CPU-Lüfter als `cpufan_count`, `cpufan<n>` und `fan_fail<n>`. Eine angeschlossene USV nennt nur `external_devices.xml` (Gerätetyp `ups`), ohne Zustand, Ladung oder Restlaufzeit.
 - Die Abfragen für Speicherpools und Volumes (`disk_manage.cgi?store=…`) und `sysmonitor` stehen in `crates/qnap-capture/requests.txt`, sind aber noch nicht aufgezeichnet.

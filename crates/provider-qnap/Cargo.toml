@@ -1,6 +1,6 @@
 [package]
 name = "provider-qnap"
-description = "QNAP QTS provider for NAS Stats: login over authLogin.cgi with a session and a hard stop after a rejected login."
+description = "QNAP QTS provider for NAS Stats: login over authLogin.cgi with a session and a hard stop after a rejected login, system values."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

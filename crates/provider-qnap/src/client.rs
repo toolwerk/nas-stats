@@ -6,6 +6,7 @@ use nas_model::ProviderError;
 use tokio::sync::Mutex;
 
 use crate::auth::{LoginAnswer, encode_password, parse_login};
+use crate::system::FirmwareCache;
 use crate::transport::Transport;
 use crate::xml::{parse_qdoc, root_text};
 
@@ -29,6 +30,8 @@ struct State {
 pub struct QnapClient<T: Transport> {
     transport: T,
     state: Mutex<State>,
+    /// Last answer of the firmware update request (see `system.rs`).
+    pub(crate) firmware_cache: FirmwareCache,
 }
 
 impl<T: Transport> fmt::Debug for QnapClient<T> {
@@ -50,6 +53,7 @@ impl<T: Transport> QnapClient<T> {
                 blocked: None,
                 closed: false,
             }),
+            firmware_cache: FirmwareCache::default(),
         }
     }
 
