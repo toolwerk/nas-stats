@@ -25,6 +25,10 @@ if [[ "$(uname)" == "Darwin" ]]; then
         echo "xcodegen not found: brew install xcodegen" >&2
         exit 1
     fi
+    if ! command -v rustup >/dev/null 2>&1; then
+        echo "rustup not found: the apps need the iOS targets, install Rust from https://rustup.rs" >&2
+        exit 1
+    fi
     rustup target add aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
     scripts/build-ffi.sh debug all
     (cd apps/NasStats && xcodegen generate)
