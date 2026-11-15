@@ -55,7 +55,7 @@ struct FillRing: View {
         if offline { return StatusFormat.notAvailable }
         guard let percent else { return StatusFormat.notAvailable }
         // Round down: rounding up would show "90 %" in yellow.
-        let whole = Int(percent.rounded(.down))
+        let whole = Int(StatusFormat.floored(percent, fractionDigits: 0) ?? 0)
         return showsPercentSign ? "\(whole) %" : "\(whole)"
     }
 }

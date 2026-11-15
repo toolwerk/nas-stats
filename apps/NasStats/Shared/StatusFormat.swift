@@ -13,6 +13,14 @@ enum StatusFormat {
         return "\(number) %"
     }
 
+    /// Rounds down to `fractionDigits`, so a shown percentage never reaches a
+    /// threshold that the colour (from the raw value) has not.
+    static func floored(_ value: Double?, fractionDigits: Int) -> Double? {
+        guard let value else { return nil }
+        let factor = pow(10, Double(fractionDigits))
+        return (value * factor).rounded(.down) / factor
+    }
+
     /// "19,0 von 21,8 TB" in steps of 1024, like the NAS web interfaces.
     /// Nil if used or total is missing.
     static func capacity(used: UInt64?, total: UInt64?, locale: Locale = .current) -> String? {

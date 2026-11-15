@@ -22,6 +22,19 @@ struct StatusFormatTests {
         #expect(StatusFormat.percent(104, fractionDigits: 0, locale: de) == "104 %")
     }
 
+    @Test func flooredNeverReachesThreshold() {
+        let t = FillThresholds.standard
+        #expect(StatusFormat.floored(89.96, fractionDigits: 1) == 89.9)
+        #expect(StatusFormat.floored(79.96, fractionDigits: 1) == 79.9)
+        #expect(StatusFormat.floored(89.6, fractionDigits: 0) == 89)
+        #expect(StatusFormat.floored(nil, fractionDigits: 0) == nil)
+        for raw in [79.96, 89.96, 79.6, 89.6] {
+            let shown = StatusFormat.floored(raw, fractionDigits: 1)
+            #expect(t.level(for: shown) == t.level(for: raw))
+        }
+        #expect(StatusFormat.percent(StatusFormat.floored(89.96, fractionDigits: 1), locale: de) == "89,9 %")
+    }
+
     @Test func capacity() {
         #expect(
             StatusFormat.capacity(used: 20_904_000_000_000, total: 24_000_000_000_000, locale: de)
