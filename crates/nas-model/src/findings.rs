@@ -210,8 +210,10 @@ impl Snapshot {
             }
             // Snapshot tasks and the parity check run on their own schedule
             // (weekly, monthly); their age says nothing about a backup.
-            if backup.last_result == Some(BackupResult::Running)
-                || matches!(backup.kind, BackupKind::Snapshot | BackupKind::Parity)
+            if matches!(
+                backup.last_result,
+                Some(BackupResult::Running | BackupResult::Never)
+            ) || matches!(backup.kind, BackupKind::Snapshot | BackupKind::Parity)
             {
                 continue;
             }
@@ -531,6 +533,7 @@ mod tests {
         s.backups = vec![
             backup(Some(NOW - 5 * DAY), Some(BackupResult::Running)),
             backup(None, Some(BackupResult::Never)),
+            backup(Some(NOW - 5 * DAY), Some(BackupResult::Never)),
             backup(None, None),
         ];
         assert!(texts(&s).is_empty());
