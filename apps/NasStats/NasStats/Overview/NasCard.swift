@@ -11,7 +11,7 @@ struct NasCard: View {
     private var lines: [(text: String, level: StatusLevel)] {
         var lines: [(String, StatusLevel)] = []
         if let problem = entry.problemLine {
-            lines.append((problem, entry.statusLevel == .offline ? .offline : entry.statusLevel))
+            lines.append((problem, entry.statusLevel))
         }
         for finding in entry.snapshot?.findings ?? [] {
             lines.append((finding.text, finding.level == .critical ? .critical : .warning))
