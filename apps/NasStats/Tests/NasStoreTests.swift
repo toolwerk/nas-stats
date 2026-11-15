@@ -9,6 +9,8 @@ final class FakeCore: NasCoreProtocol {
         var removed: [String] = []
         var refreshed: [String] = []
         var updated: [String] = []
+        /// User of every `updateCredentials` call.
+        var updatedUsers: [String] = []
     }
 
     private let presets: Mutex<[String: NasState]>
@@ -66,7 +68,10 @@ final class FakeCore: NasCoreProtocol {
     }
 
     func updateCredentials(nasId: String, user: String, password: String) async throws {
-        log.withLock { $0.updated.append(nasId) }
+        log.withLock {
+            $0.updated.append(nasId)
+            $0.updatedUsers.append(user)
+        }
         if refuseUpdate.withLock({ $0 }) {
             throw FfiError.UnknownNas(id: nasId)
         }
@@ -322,8 +327,10 @@ struct NasStoreTests {
     @Test func newUserIsStoredAndUsed() async throws {
         let a = Self.account("Keller")
         let keychain = MemoryAccountStore([a])
-        let store = await started(keychain, core: FakeCore())
+        let core = FakeCore()
+        let store = await started(keychain, core: core)
         try await store.updateCredentials(id: a.account.id, user: "leser", password: "neu")
+        #expect(core.calls.updatedUsers == ["leser"])
         let stored = try #require(try keychain.loadAll().first)
         #expect(stored.account.user == "leser")
         #expect(stored.password == "neu")
