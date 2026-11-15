@@ -25,6 +25,7 @@ SwiftUI (iOS, macOS, Widgets) ──UniFFI── Rust-Core
 ```
 
 - `crates/nas-model`: gemeinsames Datenmodell für NAS, Volume, Platte, Backup-Aufgabe und Messwert
+- `crates/nas-demo`: deterministischer Demo-Datensatz für Screenshots, Store-Bilder und den Demo-Modus: die drei NAS des Mockups (Keller, Büro, Homelab) mit aktuellem Stand, 90 Tagen Verlauf und Backup-Läufen. Alle Zeiten hängen am übergebenen Zeitpunkt, jede Kennung beginnt mit `demo-`, jede Adresse endet auf `.demo.invalid`
 - `crates/nas-http`: HTTPS-Schicht für alle Anbieter. Beim ersten Kontakt liest sie nur den SHA-256-Fingerabdruck des Zertifikats, danach akzeptiert sie genau dieses Zertifikat (auch selbstsigniert oder abgelaufen). Nur HTTPS, 20 Sekunden Zeitlimit je Anfrage, keine Wiederholungen
 - `crates/qnap-capture`: Werkzeug, das echte Antworten des eigenen QNAP nur lesend aufzeichnet und für die Fixtures anonymisiert (`cargo run -p qnap-capture -- --help`, Rohdaten unter `capture/`, nie einchecken)
 - `crates/provider-qnap`: QNAP QTS über die CGI-Endpunkte. Anmeldung über `authLogin.cgi` mit Session im Speicher, genau eine Neuanmeldung nach Ablauf, nach einer abgelehnten Anmeldung (falsches Passwort, 2-Stufen-Verifizierung) keine weitere bis zur Nutzeraktion; Abmelden beim Entfernen des NAS

@@ -8,6 +8,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `nas-demo` crate: deterministic demo data as in the mockup (Keller with QNAP TS-464, Büro with Synology DS923+, Homelab with TrueNAS CE 25.10), with 90 days of daily history from a fixed seed and daily backup runs. All times follow the given `now`; ids start with `demo-`, base URLs end in `.demo.invalid`. The DataVol1 history yields "full in 143 days" from a regression over the last 30 days (#22).
 - `nas-http` crate: HTTPS layer for all providers with certificate pinning after the first contact (SHA-256 fingerprint), `CertificateChanged` with old and new fingerprint, 20 s time limit, no retries, no redirects, HTTPS only.
 - `ProviderError::Unreachable` carries a detail for the log (#3).
 - Project skeleton: Rust workspace with the `nas-model` crate, CI, setup script.
