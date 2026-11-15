@@ -6,7 +6,8 @@ import SwiftUI
 struct AddNasView: View {
     @Environment(NasStore.self) private var store
     #if os(macOS)
-    @Environment(\.dismissWindow) private var dismissWindow
+    /// Closes the window; set by `StatusItemController`.
+    var onClose: () -> Void = {}
     #else
     @Environment(\.dismiss) private var dismiss
     #endif
@@ -286,7 +287,7 @@ struct AddNasView: View {
 
     private func close() {
         #if os(macOS)
-        dismissWindow(id: "add-nas")
+        onClose()
         #else
         dismiss()
         #endif

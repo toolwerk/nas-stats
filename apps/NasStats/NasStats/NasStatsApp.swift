@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct NasStatsApp: App {
+    #if os(iOS)
     /// State of every NAS; its accounts come from the keychain and are
     /// registered with the core.
     @State private var store: NasStore
@@ -9,10 +10,13 @@ struct NasStatsApp: App {
     init() {
         let store = NasStore.live()
         _store = State(initialValue: store)
-        // Started here and not with `.task`: the menu of the menu bar only
-        // comes into being when it is opened.
         Task { await store.start() }
     }
+    #else
+    /// Store and menu bar symbol live in the delegate, for as long as the
+    /// app runs (#27).
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    #endif
 
     var body: some Scene {
         #if os(iOS)
@@ -21,21 +25,11 @@ struct NasStatsApp: App {
                 .environment(store)
         }
         #else
-        // Menu bar only; LSUIElement keeps the app out of the Dock.
-        MenuBarExtra("NAS Stats", systemImage: "externaldrive") {
-            MenuBarView()
-                .environment(store)
+        // Menu bar only; LSUIElement keeps the app out of the Dock. The
+        // status item and its windows come from `StatusItemController`.
+        Settings {
+            EmptyView()
         }
-        .menuBarExtraStyle(.menu)
-
-        Window("NAS hinzufügen", id: "add-nas") {
-            AddNasView()
-                .environment(store)
-        }
-        .windowResizability(.contentSize)
-        // Only from the menu, not at launch.
-        .defaultLaunchBehavior(.suppressed)
-        .restorationBehavior(.disabled)
         #endif
     }
 }
