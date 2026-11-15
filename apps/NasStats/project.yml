@@ -183,8 +183,9 @@ targets:
     platform: macOS
     sources:
       - path: Tests
-      # The store is tested without a host app, so its files are compiled
-      # into the test bundle.
+      # Accounts and store without UI, compiled into the test bundle; the
+      # tests do not touch the keychain.
+      - path: NasStats/Accounts
       - path: NasStats/Store
       - path: Shared
       - path: Generated/stats_ffi.swift

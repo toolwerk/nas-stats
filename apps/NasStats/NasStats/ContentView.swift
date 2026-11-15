@@ -1,49 +1,83 @@
 import SwiftUI
 
-/// Start screen of the iOS app: the NAS with their state, worst first.
-/// Provisional; the real screens follow with #17 and #21.
+/// Start screen of the iOS app: the stored NAS as a plain list until the
+/// overview arrives (#15).
 struct ContentView: View {
-    @Environment(NasStore.self) private var store
+    @Environment(NasAccounts.self) private var accounts
+    @State private var addingNas = false
 
     var body: some View {
-        if store.entries.isEmpty {
-            VStack(spacing: 12) {
-                Image(systemName: "externaldrive")
-                    .font(.system(size: 56))
-                    .foregroundStyle(.tint)
-                Text("NAS Stats")
-                    .font(.largeTitle.bold())
-                Text("Noch kein NAS verbunden")
-                    .foregroundStyle(.secondary)
-                footer
+        NavigationStack {
+            Group {
+                if accounts.accounts.isEmpty {
+                    empty
+                } else {
+                    list
+                }
             }
-            .padding()
-        } else {
-            NavigationStack {
-                List {
-                    Section {
-                        ForEach(store.entries) { entry in
-                            HStack {
-                                Circle()
-                                    .fill(entry.health.color)
-                                    .frame(width: 10, height: 10)
-                                Text(verbatim: entry.displayName)
-                                Spacer()
-                                Text(entry.health.title)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    } footer: {
-                        footer
+            .navigationTitle("NAS Stats")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("NAS hinzufügen", systemImage: "plus") {
+                        addingNas = true
                     }
                 }
-                .navigationTitle("NAS Stats")
+            }
+            .sheet(isPresented: $addingNas) {
+                AddNasView()
+                    .environment(accounts)
             }
         }
     }
 
-    private var footer: some View {
-        Text(verbatim: store.demoMode ? "Demo · Core \(coreVersion())" : "Core \(coreVersion())")
+    private var empty: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "externaldrive")
+                .font(.system(size: 56))
+                .foregroundStyle(.tint)
+            if let loadError = accounts.loadError {
+                Text(loadError)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            } else {
+                Text("Noch kein NAS verbunden")
+                    .foregroundStyle(.secondary)
+            }
+            Button("NAS hinzufügen") {
+                addingNas = true
+            }
+            .buttonStyle(.borderedProminent)
+            coreVersionText
+        }
+        .padding()
+    }
+
+    private var list: some View {
+        List {
+            Section {
+                ForEach(accounts.accounts) { account in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(account.name)
+                            .font(.headline)
+                        Text(verbatim: "\(account.model ?? String(localized: "Modell unbekannt")) · \(account.baseUrl)")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } footer: {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let loadError = accounts.loadError {
+                        Text(loadError)
+                            .foregroundStyle(.red)
+                    }
+                    coreVersionText
+                }
+            }
+        }
+    }
+
+    private var coreVersionText: some View {
+        Text(verbatim: "Core \(coreVersion())")
             .font(.footnote.monospacedDigit())
             .foregroundStyle(.secondary)
     }
@@ -51,5 +85,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .environment(NasStore.live())
+        .environment(NasAccounts())
 }
