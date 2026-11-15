@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Start screen of the iOS app: the NAS with their state, worst first.
-/// Provisional; the real screens follow with #17 and #21.
+/// Provisional; the real overview follows with #17, the settings are in
+/// their own tab (#21).
 struct ContentView: View {
     @Environment(NasStore.self) private var store
     @State private var addingNas = false

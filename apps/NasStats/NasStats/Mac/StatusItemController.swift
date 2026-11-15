@@ -196,7 +196,8 @@ final class StatusItemController: NSObject, NSWindowDelegate {
             bringToFront(settingsWindow)
             return
         }
-        let view = MacSettingsView().environment(store)
+        let view = SettingsView(onAddNas: { [weak self] in self?.openAddNas() })
+            .environment(store)
         settingsWindow = makeWindow(title: "Einstellungen", root: view)
     }
 
