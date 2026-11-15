@@ -1,8 +1,15 @@
-//! [`nas_model::Provider`] for a QNAP: one snapshot from the system values.
+//! [`nas_model::Provider`] for a QNAP: one snapshot from all parts.
 //!
-//! For now the snapshot holds the NAS, the system values, fans, UPS and
-//! alerts. Volumes, disks, backups, containers and network interfaces stay
-//! empty; they follow with #52.
+//! The parts are asked one after the other, never in parallel: system
+//! values, storage, network, containers. The snapshot holds the NAS, system
+//! values, fans, UPS, alerts, volumes, disks, network interfaces and
+//! containers. Backups stay empty until #41, storage pools stay empty
+//! because QTS does not answer them to a GET (#6).
+//!
+//! Failing system values fail the snapshot. For storage, network and
+//! containers an HTTP error status leaves only that part empty (and is
+//! logged); every other error (unreachable, timeout, rejected login, changed
+//! certificate) fails the snapshot, so the app keeps its last state.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -47,10 +54,15 @@ impl<T: Transport> Provider for QnapProvider<T> {
         ProviderKind::Qnap
     }
 
-    /// Reads the system values; their error is returned unchanged.
+    /// Reads system values, storage, network and containers one after the
+    /// other. The error of the system values is returned unchanged; see the
+    /// module doc for the other parts.
     fn snapshot(&self) -> BoxFuture<'_, Result<Snapshot, ProviderError>> {
         Box::pin(async move {
             let system = self.client.system().await?;
+            let storage = part("storage", self.client.storage(&self.nas_id).await)?;
+            let interfaces = part("network", self.client.network().await)?;
+            let containers = part("containers", self.client.containers().await)?;
             Ok(Snapshot {
                 nas: Nas {
                     id: self.nas_id.clone(),
@@ -65,16 +77,27 @@ impl<T: Transport> Provider for QnapProvider<T> {
                 observed_at: now(),
                 system: system.status,
                 ups: system.ups,
-                // Follow with #52.
-                volumes: Vec::new(),
-                disks: Vec::new(),
+                volumes: storage.volumes,
+                disks: storage.disks,
                 fans: system.fans,
                 backups: Vec::new(),
-                containers: Vec::new(),
+                containers,
                 alerts: system.alerts,
-                interfaces: Vec::new(),
+                interfaces,
             })
         })
+    }
+}
+
+/// An HTTP error status of one part leaves that part empty; any other error
+/// goes on to the caller.
+fn part<T: Default>(name: &str, result: Result<T, ProviderError>) -> Result<T, ProviderError> {
+    match result {
+        Err(ProviderError::Http(status)) => {
+            log::warn!("QNAP {name} answered HTTP {status}, leaving it empty");
+            Ok(T::default())
+        }
+        other => other,
     }
 }
 

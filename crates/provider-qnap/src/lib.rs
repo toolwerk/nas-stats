@@ -30,9 +30,11 @@
 //! that login is not repeated until the user acts (a missing Container
 //! Station is looked for again after [`CONTAINER_RECHECK`]). Storage pools
 //! are not read: QTS answers `disk_manage.cgi?store=…` to a GET only with
-//! `unknown cmd format.`. [`QnapProvider`] turns the system values
-//! into a [`nas_model::Snapshot`] for the core; the other lists follow with
-//! #52.
+//! `unknown cmd format.`. [`QnapProvider`] puts system values, storage,
+//! network and containers, asked one after the other, into a
+//! [`nas_model::Snapshot`] for the core. An HTTP error status of storage,
+//! network or containers leaves only that part empty; other errors fail the
+//! snapshot.
 
 mod auth;
 mod client;
