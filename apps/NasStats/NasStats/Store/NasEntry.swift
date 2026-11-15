@@ -11,6 +11,16 @@ enum StoreHealth: Int, Comparable, Sendable, CaseIterable {
         lhs.rawValue < rhs.rawValue
     }
 
+    /// Level of a finding or of the health the NAS reports.
+    init(_ health: Health?) {
+        switch health {
+        case .critical: self = .critical
+        case .warning: self = .warning
+        case .ok: self = .ok
+        case nil: self = .unknown
+        }
+    }
+
     var title: String {
         switch self {
         case .critical: "kritisch"
@@ -33,6 +43,9 @@ struct NasEntry: Identifiable, Sendable {
     var baseUrl: String
     /// Model from the test query when the NAS was added.
     var model: String?
+    /// Vendor of the stored NAS, of the snapshot in demo mode; `nil` for a
+    /// vendor this version does not know.
+    var provider: ProviderKind?
     /// Last successful snapshot; it stays after an error.
     var snapshot: Snapshot?
     /// Error of the last query.
@@ -57,20 +70,78 @@ struct NasEntry: Identifiable, Sendable {
         name ?? snapshot?.nas.name ?? NasAddress.host(of: baseUrl) ?? baseUrl
     }
 
-    /// Worst health of the snapshot; an error lifts it to at least warning,
+    /// Worst level of the findings of the core (thresholds included), else
+    /// the health the NAS reports; an error lifts it to at least warning,
     /// a NAS waiting for the user (block, refused registration) is
     /// critical. A NAS silent for hours never shows green.
     var health: StoreHealth {
         if blocked || problem?.stopsPolling == true || localError != nil {
             return .critical
         }
-        let base: StoreHealth = switch snapshot?.worstHealth {
+        let reported = StoreHealth(snapshot?.worstHealth)
+        let base = (snapshot?.findings ?? []).map { StoreHealth($0.level) }.min()
+            .map { min($0, reported) } ?? reported
+        return problem == nil && queryError == nil ? base : min(base, .warning)
+    }
+
+    /// State for the status dot: "Nicht erreichbar" when the NAS did not
+    /// answer and nothing blocks it, else from `health`.
+    var statusLevel: StatusLevel {
+        if let kind = problem?.kind, kind == .unreachable || kind == .timeout,
+           !blocked, problem?.stopsPolling != true, localError == nil {
+            return .offline
+        }
+        return switch health {
         case .critical: .critical
         case .warning: .warning
         case .ok: .ok
-        case nil: .unknown
+        case .unknown: .unknown
         }
-        return problem == nil && queryError == nil ? base : min(base, .warning)
+    }
+
+    /// Short vendor name for the badge of the card.
+    var vendorLabel: String? {
+        switch provider {
+        case .qnap: "QNAP"
+        case .synology: "Synology"
+        case .trueNas: "TrueNAS"
+        case .unraid: "Unraid"
+        case nil: nil
+        }
+    }
+
+    /// Why the NAS has no current state, as one line; `nil` without error.
+    var problemLine: String? {
+        localError ?? problem?.message ?? queryError
+    }
+
+    /// Volumes whose fill level counts, as in the core
+    /// (`Snapshot::capacity_volumes`): those of the first kind present in
+    /// the order volume, pool, array, share.
+    var capacityVolumes: [Volume] {
+        let volumes = snapshot?.volumes ?? []
+        for kind in [VolumeKind.volume, .pool, .array, .share] {
+            let ofKind = volumes.filter { $0.kind == kind }
+            if !ofKind.isEmpty {
+                return ofKind
+            }
+        }
+        return []
+    }
+
+    /// Temperature of the hottest disk in °C.
+    var hottestDiskC: Double? {
+        snapshot?.disks.compactMap(\.temperatureC).max()
+    }
+
+    /// Start of the latest backup run; snapshot tasks and the parity check
+    /// are no backup.
+    var lastBackupAt: Date? {
+        snapshot?.backups
+            .filter { $0.kind != .snapshot && $0.kind != .parity }
+            .compactMap(\.lastRun)
+            .max()
+            .map { Date(timeIntervalSince1970: TimeInterval($0)) }
     }
 
     /// Worst first, then by name, then by id.

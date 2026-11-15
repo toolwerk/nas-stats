@@ -14,6 +14,8 @@ struct MenuBarSummaryTests {
         snapshot.nas.id = id
         snapshot.demo = false
         snapshot.worstHealth = health
+        // The demo snapshot has findings, which would outrank `health`.
+        snapshot.findings = []
         let template = snapshot.volumes[0]
         snapshot.volumes = fills.map { fill in
             var volume = template
