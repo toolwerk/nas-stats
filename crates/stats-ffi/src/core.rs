@@ -453,15 +453,30 @@ mod tests {
     }
 
     fn harness(backend: Arc<FakeBackend>) -> Harness {
+        harness_with(vec![backend])
+    }
+
+    /// Each connect hands out the next backend; the last one is reused.
+    fn harness_with(backends: Vec<Arc<FakeBackend>>) -> Harness {
         let clock = Arc::new(AtomicI64::new(T0));
         let connected = Arc::new(Mutex::new(Vec::new()));
+        let backends = Mutex::new(VecDeque::from(backends));
         let core = {
             let clock = clock.clone();
             let connected = connected.clone();
             NasCore::with_parts(
                 Box::new(move |config: &NasConfig, user, password| {
                     lock(&connected).push((config.clone(), user, password));
-                    Ok(backend.clone() as Arc<dyn Backend>)
+                    let mut queue = lock(&backends);
+                    let backend = if queue.len() > 1 {
+                        queue.pop_front()
+                    } else {
+                        queue.front().cloned()
+                    };
+                    let backend = backend.ok_or(FfiError::Internal {
+                        detail: "no backend".into(),
+                    })?;
+                    Ok(backend as Arc<dyn Backend>)
                 }),
                 Box::new(move || clock.load(Ordering::SeqCst)),
             )
@@ -791,7 +806,8 @@ mod tests {
     #[tokio::test]
     async fn replacing_during_a_query_drops_its_result_and_logs_out_after_it() {
         let (backend, gate) = gated(vec![Err(ProviderError::LoginFailed)]);
-        let h = harness(backend.clone());
+        let fresh = FakeBackend::answering(Vec::new());
+        let h = harness_with(vec![backend.clone(), fresh.clone()]);
         h.core
             .add_nas(config("nas-1"), "u".into(), "wrong".into())
             .expect("add");
@@ -816,6 +832,9 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         assert_eq!(backend.logouts.load(Ordering::SeqCst), 1);
+        // Only the old session ends; the new entry stays untouched.
+        assert_eq!(fresh.logouts.load(Ordering::SeqCst), 0);
+        assert_eq!(fresh.queries(), 0);
     }
 
     #[tokio::test]
