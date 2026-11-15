@@ -102,6 +102,7 @@ impl<T: Transport> QnapClient<T> {
         state.blocked = None;
         state.closed = false;
         state.sid = None;
+        self.forget_firmware();
         self.login_locked(&mut state).await.map(|_| ())
     }
 
@@ -114,6 +115,15 @@ impl<T: Transport> QnapClient<T> {
         state.sid = None;
         state.blocked = None;
         state.closed = false;
+        self.forget_firmware();
+    }
+
+    /// Drops the cached firmware answer: another account may read it.
+    fn forget_firmware(&self) {
+        *self
+            .firmware_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     /// Ends the session at the NAS, for removing the NAS. Without a session

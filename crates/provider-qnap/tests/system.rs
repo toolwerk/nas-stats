@@ -8,6 +8,7 @@ use nas_model::{Alert, AlertLevel, Fan, Health, ProviderError};
 use provider_qnap::QnapClient;
 
 const LOGIN_OK: &str = include_str!("fixtures/login.xml");
+const EXPIRED: &str = include_str!("fixtures/session_expired.xml");
 const SYSINFO: &str = include_str!("fixtures/sysinfo.xml");
 const SYSINFO_EMPTY: &str = include_str!("fixtures/sysinfo_empty.xml");
 const HEALTH_WARNING: &str = include_str!("fixtures/syshealth.xml");
@@ -153,6 +154,60 @@ async fn a_refused_part_only_leaves_its_value_empty() {
     assert!(system.alerts.is_empty());
     assert_eq!(system.status.update_available, None);
     assert_eq!(system.status.update_version, None);
+}
+
+#[tokio::test]
+async fn a_part_refused_with_auth_passed_0_logs_in_once_and_goes_on() {
+    // QTS refuses with HTTP 200 and `authPassed` 0 (issue #1): one new
+    // login, one repeat, then the part stays empty and the next one uses
+    // the new session.
+    let fake = FakeTransport::new(vec![
+        Ok(LOGIN_OK),
+        Ok(SYSINFO),
+        Ok(EXPIRED),
+        Ok(LOGIN_OK),
+        Ok(EXPIRED),
+        Ok(FIRMWARE_AVAILABLE),
+    ]);
+    let client = QnapClient::new(&fake, "admin", "secret");
+    let system = client.system().await.expect("system");
+    assert!(system.alerts.is_empty());
+    assert_eq!(system.status.update_available, Some(true));
+    assert_eq!(calls(&fake).len(), 6);
+}
+
+#[tokio::test]
+async fn an_unreadable_part_only_leaves_its_value_empty() {
+    let fake = FakeTransport::new(vec![
+        Ok(LOGIN_OK),
+        Ok(SYSINFO),
+        Ok("<html><body>Not found</body></html>"),
+        Ok(FIRMWARE_NONE),
+    ]);
+    let client = QnapClient::new(&fake, "admin", "secret");
+    let system = client.system().await.expect("system");
+    assert!(system.alerts.is_empty());
+    assert_eq!(system.status.update_available, Some(false));
+}
+
+#[tokio::test]
+async fn new_credentials_fetch_the_firmware_again() {
+    let fake = FakeTransport::new(vec![
+        Ok(LOGIN_OK),
+        Ok(SYSINFO),
+        Ok(HEALTH_GOOD),
+        Err(ProviderError::PermissionDenied),
+        Ok(LOGIN_OK),
+        Ok(SYSINFO),
+        Ok(HEALTH_GOOD),
+        Ok(FIRMWARE_AVAILABLE),
+    ]);
+    let client = QnapClient::new(&fake, "monitor", "secret");
+    client.system().await.expect("first");
+    client.set_credentials("admin", "secret").await;
+    let second = client.system().await.expect("second");
+    assert_eq!(second.status.update_available, Some(true));
+    assert_eq!(calls(&fake).len(), 8);
 }
 
 #[tokio::test]
