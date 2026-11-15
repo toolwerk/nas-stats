@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Prepares a fresh checkout: git identity, toolchain check, build and tests.
+# Prepares a fresh checkout: git identity, toolchain check, build and tests,
+# on macOS also the Xcode project.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -17,3 +18,18 @@ fi
 
 cargo build --workspace
 cargo test --workspace
+
+# Apple apps: Rust library, Swift bindings, Xcode project from project.yml.
+if [[ "$(uname)" == "Darwin" ]]; then
+    if ! command -v xcodegen >/dev/null 2>&1; then
+        echo "xcodegen not found: brew install xcodegen" >&2
+        exit 1
+    fi
+    if ! command -v rustup >/dev/null 2>&1; then
+        echo "rustup not found: the apps need the iOS targets, install Rust from https://rustup.rs" >&2
+        exit 1
+    fi
+    rustup target add aarch64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim
+    scripts/build-ffi.sh debug all
+    (cd apps/NasStats && xcodegen generate)
+fi

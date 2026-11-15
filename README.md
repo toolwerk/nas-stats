@@ -29,7 +29,10 @@ SwiftUI (iOS, macOS, Widgets) ──UniFFI── Rust-Core
 - `crates/qnap-capture`: Werkzeug, das echte Antworten des eigenen QNAP nur lesend aufzeichnet und für die Fixtures anonymisiert (`cargo run -p qnap-capture -- --help`, Rohdaten unter `capture/`, nie einchecken)
 - `crates/provider-qnap`: QNAP QTS über die CGI-Endpunkte. Anmeldung über `authLogin.cgi` mit Session im Speicher, genau eine Neuanmeldung nach Ablauf, nach einer abgelehnten Anmeldung (falsches Passwort, 2-Stufen-Verifizierung) keine weitere bis zur Nutzeraktion; Abmelden beim Entfernen des NAS
 - `crates/provider-<name>`: je Anbieter ein Crate, das API-Antworten in das Datenmodell übersetzt (weitere folgen)
-- `crates/stats-core`, `crates/stats-ffi`, `apps/NasStats`: Statistik, Swift-Hülle und App (folgen)
+- `crates/stats-ffi`: Swift-Hülle des Cores über UniFFI, bisher nur die Versionsnummer des Cores; `crates/uniffi-bindgen` erzeugt daraus die Swift-Bindings
+- `scripts/build-ffi.sh`: baut `stats-ffi` als `StatsFFI.xcframework` samt Swift-Bindings nach `apps/NasStats/Generated/` (nicht eingecheckt)
+- `apps/NasStats`: Xcode-Projekt aus `project.yml` (xcodegen). Targets `NasStats` (iOS), `NasStatsMac` (Menüleisten-App ohne Dock-Symbol), Widget-Erweiterungen `NasStatsWidgets` (iOS) und `NasStatsWidgetsMac`, gemeinsamer Code in `Shared`. App Group `group.net.staude.nasstats` (iOS) bzw. `7N2W4T6UPV.net.staude.nasstats` (macOS), Keychain-Gruppe `7N2W4T6UPV.net.staude.nasstats`
+- `crates/stats-core`: Statistik (folgt)
 
 Windows und Linux folgen später über Tauri aus demselben Rust-Core.
 
@@ -38,7 +41,7 @@ Ein klickbares Mockup der Übersicht, des NAS-Details, des Verlaufs mit Prognose
 ## Voraussetzungen
 
 - Rust (stable)
-- Für die Apps später Xcode 27 und xcodegen (`brew install xcodegen`)
+- Für die Apps Xcode 27 und xcodegen (`brew install xcodegen`)
 
 ## Setup
 
@@ -46,7 +49,9 @@ Ein klickbares Mockup der Übersicht, des NAS-Details, des Verlaufs mit Prognose
 ./setup.sh
 ```
 
-Das Skript setzt die Git-Identität, baut und testet den Rust-Core.
+Das Skript setzt die Git-Identität, baut und testet den Rust-Core. Unter macOS installiert es dazu die Rust-Targets für Mac und iOS, baut `StatsFFI.xcframework` und erzeugt mit xcodegen `apps/NasStats/NasStats.xcodeproj` (nicht eingecheckt). Danach das Projekt in Xcode öffnen und das Schema `NasStats` (iOS) oder `NasStatsMac` starten.
+
+Nach Änderungen an `project.yml` erneut `xcodegen generate` in `apps/NasStats` ausführen. Den Rust-Core baut Xcode bei jedem Build über das Target `StatsFFI` mit.
 
 ## Bauen und testen
 

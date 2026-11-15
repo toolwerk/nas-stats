@@ -4,6 +4,8 @@ members = [
     "crates/nas-http",
     "crates/qnap-capture",
     "crates/provider-qnap",
+    "crates/stats-ffi",
+    "crates/uniffi-bindgen",
 ]
 resolver = "3"
 
@@ -33,6 +35,7 @@ regex = "1.13"
 rpassword = "7"
 base64 = "0.22"
 roxmltree = "0.21"
+uniffi = "0.32.2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
