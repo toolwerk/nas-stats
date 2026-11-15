@@ -39,27 +39,29 @@ struct OverviewView: View {
 
     private var cards: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-                TimelineView(.everyMinute) { context in
-                    head(now: context.date)
-                }
-                if let loadError = store.loadError {
-                    Text(loadError)
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                }
-                ForEach(store.entries) { entry in
-                    NavigationLink(value: entry.id) {
-                        NasCard(entry: entry)
+            // Head stamp and backup ages move on every minute.
+            TimelineView(.everyMinute) { context in
+                let now = context.date
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    head(now: now)
+                    if let loadError = store.loadError {
+                        Text(loadError)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
                     }
-                    .buttonStyle(.plain)
+                    ForEach(store.entries) { entry in
+                        NavigationLink(value: entry.id) {
+                            NasCard(entry: entry, now: now)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    coreVersionText
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 4)
                 }
-                coreVersionText
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 4)
+                .padding(.horizontal)
+                .padding(.bottom)
             }
-            .padding(.horizontal)
-            .padding(.bottom)
         }
         .background(Color.overviewBackground)
         .refreshable {
