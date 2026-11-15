@@ -313,10 +313,34 @@ struct NasStoreTests {
         let core = FakeCore()
         let keychain = MemoryAccountStore([a])
         let store = await started(keychain, core: core)
-        try await store.updatePassword(id: a.account.id, password: "neu")
+        try await store.updateCredentials(id: a.account.id, user: "monitor", password: "neu")
         #expect(core.calls.updated == [a.account.id.uuidString])
         #expect(core.calls.refreshed.count == 2)
         #expect(keychain.password(of: a.account.id) == "neu")
+    }
+
+    @Test func newUserIsStoredAndUsed() async throws {
+        let a = Self.account("Keller")
+        let keychain = MemoryAccountStore([a])
+        let store = await started(keychain, core: FakeCore())
+        try await store.updateCredentials(id: a.account.id, user: "leser", password: "neu")
+        let stored = try #require(try keychain.loadAll().first)
+        #expect(stored.account.user == "leser")
+        #expect(stored.password == "neu")
+        #expect(store.accounts.accounts.first?.user == "leser")
+    }
+
+    @Test func refusedNewUserKeepsTheOldAccount() async throws {
+        let a = Self.account("Keller")
+        let core = FakeCore()
+        core.refuseUpdate.withLock { $0 = true }
+        let keychain = MemoryAccountStore([a])
+        let store = await started(keychain, core: core)
+        await #expect(throws: FfiError.UnknownNas(id: a.account.id.uuidString)) {
+            try await store.updateCredentials(id: a.account.id, user: "leser", password: "neu")
+        }
+        #expect(try keychain.loadAll().first?.account.user == "monitor")
+        #expect(store.accounts.accounts.first?.user == "monitor")
     }
 
     @Test func newPasswordRegistersARefusedNas() async throws {
@@ -327,7 +351,7 @@ struct NasStoreTests {
         let store = await started(keychain, core: core)
         core.refuseAdd.withLock { $0 = false }
 
-        try await store.updatePassword(id: a.account.id, password: "neu")
+        try await store.updateCredentials(id: a.account.id, user: "monitor", password: "neu")
         #expect(core.calls.added.count == 2)
         #expect(core.calls.refreshed == [a.account.id.uuidString])
         #expect(store.entries.first?.localError == nil)
@@ -341,7 +365,7 @@ struct NasStoreTests {
         let keychain = MemoryAccountStore([a])
         let store = await started(keychain, core: core)
         await #expect(throws: FfiError.UnknownNas(id: a.account.id.uuidString)) {
-            try await store.updatePassword(id: a.account.id, password: "neu")
+            try await store.updateCredentials(id: a.account.id, user: "monitor", password: "neu")
         }
         #expect(keychain.password(of: a.account.id) == "demo")
     }
@@ -353,7 +377,7 @@ struct NasStoreTests {
         let keychain = MemoryAccountStore([a])
         let store = await started(keychain, core: core)
         await #expect(throws: FfiError.InvalidInput(detail: "kaputt")) {
-            try await store.updatePassword(id: a.account.id, password: "neu")
+            try await store.updateCredentials(id: a.account.id, user: "monitor", password: "neu")
         }
         #expect(store.entries.first?.localError == "Ungültige Angabe: kaputt")
         #expect(keychain.password(of: a.account.id) == "demo")
@@ -380,7 +404,7 @@ struct NasStoreTests {
         #expect(store.entries.first?.localError == "Fehler")
 
         // A new password lifts it.
-        try await store.updatePassword(id: a.account.id, password: "neu")
+        try await store.updateCredentials(id: a.account.id, user: "monitor", password: "neu")
         #expect(second.calls.refreshed == [a.account.id.uuidString])
     }
 
