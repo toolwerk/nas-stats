@@ -65,7 +65,13 @@ struct ContentView: View {
                     }
                 }
             } footer: {
-                coreVersionText
+                VStack(alignment: .leading, spacing: 4) {
+                    if let loadError = accounts.loadError {
+                        Text(loadError)
+                            .foregroundStyle(.red)
+                    }
+                    coreVersionText
+                }
             }
         }
     }

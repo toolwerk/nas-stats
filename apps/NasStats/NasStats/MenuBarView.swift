@@ -10,8 +10,11 @@ struct MenuBarView: View {
         Text("NAS Stats")
         if let loadError = accounts.loadError {
             Text(loadError)
-        } else if accounts.accounts.isEmpty {
-            Text("Noch kein NAS verbunden")
+        }
+        if accounts.accounts.isEmpty {
+            if accounts.loadError == nil {
+                Text("Noch kein NAS verbunden")
+            }
         } else {
             ForEach(accounts.accounts) { account in
                 Text(account.name)
