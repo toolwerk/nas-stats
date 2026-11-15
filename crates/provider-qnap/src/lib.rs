@@ -21,16 +21,19 @@
 //!   client logs in again.
 //!
 //! [`QnapClient::system`] reads the system values (model, firmware, CPU,
-//! memory, temperatures, fans, health, firmware update). Volumes, disks and
-//! the network follow in later issues.
+//! memory, temperatures, fans, health, firmware update). [`QnapProvider`]
+//! turns them into a [`nas_model::Snapshot`] for the core. Volumes, disks and
+//! the network follow in later issues (#52).
 
 mod auth;
 mod client;
+mod provider;
 mod system;
 mod transport;
 mod xml;
 
 pub use auth::SECOND_FACTOR_HINT;
 pub use client::QnapClient;
+pub use provider::QnapProvider;
 pub use system::{FIRMWARE_INTERVAL, QnapSystem};
 pub use transport::Transport;
