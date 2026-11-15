@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::backup::BackupResult;
+use crate::backup::{BackupKind, BackupResult};
 use crate::device::{AlertLevel, UpsState};
 use crate::health::Health;
 use crate::snapshot::Snapshot;
@@ -208,7 +208,11 @@ impl Snapshot {
                 });
                 continue;
             }
-            if backup.last_result == Some(BackupResult::Running) {
+            // Snapshot tasks and the parity check run on their own schedule
+            // (weekly, monthly); their age says nothing about a backup.
+            if backup.last_result == Some(BackupResult::Running)
+                || matches!(backup.kind, BackupKind::Snapshot | BackupKind::Parity)
+            {
                 continue;
             }
             if let Some(last_run) = backup.last_run {
@@ -242,7 +246,7 @@ fn not_ok(health: Option<Health>) -> Option<Health> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backup::{BackupKind, BackupTask};
+    use crate::backup::BackupTask;
     use crate::device::{Alert, Fan, Ups};
     use crate::nas::{Nas, ProviderKind, SystemStatus};
     use crate::storage::Disk;
@@ -506,6 +510,19 @@ mod tests {
         assert_eq!(texts(&s), ["Backup „Offsite“ seit 2 Tagen nicht gelaufen"]);
         s.backups = vec![backup(Some(NOW - 5 * DAY), None)];
         assert_eq!(texts(&s), ["Backup „Offsite“ seit 5 Tagen nicht gelaufen"]);
+    }
+
+    #[test]
+    fn snapshot_and_parity_are_never_overdue() {
+        let mut s = empty();
+        let mut parity = backup(Some(NOW - 10 * DAY), Some(BackupResult::Ok));
+        parity.kind = BackupKind::Parity;
+        let mut snapshots = backup(Some(NOW - 7 * DAY), Some(BackupResult::Ok));
+        snapshots.kind = BackupKind::Snapshot;
+        s.backups = vec![parity, snapshots];
+        assert!(texts(&s).is_empty());
+        s.backups[0].last_result = Some(BackupResult::Error);
+        assert_eq!(texts(&s), ["Backup „Offsite“ fehlgeschlagen"]);
     }
 
     #[test]
