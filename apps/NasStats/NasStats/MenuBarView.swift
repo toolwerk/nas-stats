@@ -1,10 +1,26 @@
 #if os(macOS)
 import SwiftUI
 
-/// Menu of the menu bar icon.
+/// Menu of the menu bar icon: the NAS with their state, worst first.
+/// Provisional; the real menu bar follows with #27 and #28.
 struct MenuBarView: View {
+    @Environment(NasStore.self) private var store
+
     var body: some View {
-        Text("NAS Stats")
+        @Bindable var store = store
+        if store.entries.isEmpty {
+            Text("Noch kein NAS verbunden")
+        } else {
+            ForEach(store.entries) { entry in
+                Label {
+                    Text(verbatim: "\(entry.displayName) – \(entry.health.title)")
+                } icon: {
+                    Image(systemName: entry.health.symbol)
+                }
+            }
+        }
+        Divider()
+        Toggle("Demo-Modus", isOn: $store.demoMode)
         Text(verbatim: "Core \(coreVersion())")
         Divider()
         Button("Beenden") {
