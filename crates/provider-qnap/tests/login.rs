@@ -1,10 +1,10 @@
 //! Login, session renewal and the hard stop, against fixture answers.
 
-use std::collections::VecDeque;
-use std::sync::Mutex;
+mod common;
 
-use nas_model::{BoxFuture, ProviderError};
-use provider_qnap::{QnapClient, Transport};
+use common::{FakeTransport, calls, logins, param};
+use nas_model::ProviderError;
+use provider_qnap::QnapClient;
 
 const LOGIN_OK: &str = include_str!("fixtures/login.xml");
 const LOGIN_WRONG: &str = include_str!("fixtures/login_wrong_password.xml");
@@ -12,111 +12,6 @@ const LOGIN_2SV: &str = include_str!("fixtures/login_2sv.xml");
 const EXPIRED: &str = include_str!("fixtures/session_expired.xml");
 const SYSINFO: &str = include_str!("fixtures/sysinfo.xml");
 const LOGOUT: &str = include_str!("fixtures/logout.xml");
-
-/// One request as the fake saw it.
-#[derive(Debug, Clone, PartialEq)]
-struct Call {
-    method: &'static str,
-    path: String,
-    params: Vec<(String, String)>,
-}
-
-/// Answers from a queue, records every request.
-#[derive(Default)]
-struct FakeTransport {
-    answers: Mutex<VecDeque<Result<String, ProviderError>>>,
-    calls: Mutex<Vec<Call>>,
-    /// Yield once before answering, so concurrent requests overlap.
-    slow: bool,
-}
-
-impl FakeTransport {
-    fn new(answers: Vec<Result<&str, ProviderError>>) -> Self {
-        Self {
-            answers: Mutex::new(answers.into_iter().map(|a| a.map(str::to_owned)).collect()),
-            calls: Mutex::default(),
-            slow: false,
-        }
-    }
-
-    fn slow(answers: Vec<Result<&str, ProviderError>>) -> Self {
-        Self {
-            slow: true,
-            ..Self::new(answers)
-        }
-    }
-
-    fn answer(
-        &self,
-        method: &'static str,
-        path: &str,
-        params: &[(&str, &str)],
-    ) -> Result<String, ProviderError> {
-        self.calls.lock().expect("calls").push(Call {
-            method,
-            path: path.to_owned(),
-            params: params
-                .iter()
-                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                .collect(),
-        });
-        self.answers
-            .lock()
-            .expect("answers")
-            .pop_front()
-            .expect("unexpected request")
-    }
-}
-
-impl Transport for &FakeTransport {
-    fn get_text<'a>(
-        &'a self,
-        path: &'a str,
-        query: &'a [(&'a str, &'a str)],
-    ) -> BoxFuture<'a, Result<String, ProviderError>> {
-        let result = self.answer("GET", path, query);
-        let slow = self.slow;
-        Box::pin(async move {
-            if slow {
-                tokio::task::yield_now().await;
-            }
-            result
-        })
-    }
-
-    fn post_form_text<'a>(
-        &'a self,
-        path: &'a str,
-        form: &'a [(&'a str, &'a str)],
-    ) -> BoxFuture<'a, Result<String, ProviderError>> {
-        let result = self.answer("POST", path, form);
-        let slow = self.slow;
-        Box::pin(async move {
-            if slow {
-                tokio::task::yield_now().await;
-            }
-            result
-        })
-    }
-}
-
-fn calls(fake: &FakeTransport) -> Vec<Call> {
-    fake.calls.lock().expect("calls").clone()
-}
-
-fn logins(fake: &FakeTransport) -> usize {
-    calls(fake)
-        .iter()
-        .filter(|c| c.path == "/cgi-bin/authLogin.cgi")
-        .count()
-}
-
-fn param<'a>(call: &'a Call, key: &str) -> Option<&'a str> {
-    call.params
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, v)| v.as_str())
-}
 
 const SYSINFO_PATH: &str = "management/manaRequest.cgi";
 const SYSINFO_QUERY: &[(&str, &str)] = &[("subfunc", "sysinfo"), ("hd", "no"), ("multicpu", "1")];
