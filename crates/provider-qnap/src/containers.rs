@@ -105,7 +105,12 @@ impl<T: Transport> QnapClient<T> {
         let body = serde_json::json!({ "username": user, "password": password }).to_string();
         match self.transport.post_json_text(LOGIN_PATH, &body).await {
             Ok(answer) => match serde_json::from_str::<Value>(&answer) {
-                Ok(answer) if answer.get("isAdmin").and_then(Value::as_bool) == Some(false) => {
+                // Not an admin, or an error object like the one the list
+                // answers for such accounts (`code`, `message`): no access.
+                Ok(answer)
+                    if answer.get("isAdmin").and_then(Value::as_bool) == Some(false)
+                        || answer.get("code").is_some() =>
+                {
                     *cs = CsState::NoAccess;
                     Ok(Step::Empty)
                 }
@@ -121,7 +126,7 @@ impl<T: Transport> QnapClient<T> {
                 *cs = CsState::NoAccess;
                 Ok(Step::Empty)
             }
-            Err(ProviderError::Http(404)) => not_installed(cs),
+            Err(ProviderError::Http(status)) if is_missing(status) => not_installed(cs),
             Err(e) => Err(e),
         }
     }
@@ -146,10 +151,16 @@ impl<T: Transport> QnapClient<T> {
                 *cs = CsState::NoAccess;
                 Ok(Step::Empty)
             }
-            Err(ProviderError::Http(404)) => not_installed(cs),
+            Err(ProviderError::Http(status)) if is_missing(status) => not_installed(cs),
             Err(e) => Err(e),
         }
     }
+}
+
+/// HTTP status that means there is no Container Station at this path: not
+/// found, or a redirect (QTS sends unknown paths to its start page).
+fn is_missing(status: u16) -> bool {
+    status == 404 || (300..400).contains(&status)
 }
 
 fn not_installed<B>(cs: &mut CsState) -> Result<Step<B>, ProviderError> {

@@ -163,3 +163,23 @@ async fn after_logout_nothing_is_sent() {
     assert_eq!(client.containers().await, Err(ProviderError::LoginFailed));
     assert!(calls(&fake).is_empty());
 }
+
+#[tokio::test]
+async fn a_login_answered_with_an_error_object_is_not_repeated() {
+    let fake = FakeTransport::new(vec![Ok(
+        r#"{"code":1001,"message":"invalid user or password"}"#,
+    )]);
+    let client = QnapClient::new(&fake, "admin", "wrong");
+    assert_eq!(client.containers().await, Ok(Vec::new()));
+    assert_eq!(client.containers().await, Ok(Vec::new()));
+    assert_eq!(calls(&fake).len(), 1);
+}
+
+#[tokio::test]
+async fn a_redirect_means_not_installed() {
+    let fake = FakeTransport::new(vec![Err(ProviderError::Http(302))]);
+    let client = QnapClient::new(&fake, "admin", "secret");
+    assert_eq!(client.containers().await, Ok(Vec::new()));
+    assert_eq!(client.containers().await, Ok(Vec::new()));
+    assert_eq!(calls(&fake).len(), 1);
+}
