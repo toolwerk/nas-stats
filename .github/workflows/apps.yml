@@ -51,3 +51,8 @@ jobs:
           xcodebuild build -project NasStats.xcodeproj -scheme NasStats
           -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO
         working-directory: apps/NasStats
+      # Swift test of the bindings (#12): calls the core, decodes every record.
+      - run: >
+          xcodebuild test -project NasStats.xcodeproj -scheme NasStatsMac
+          -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+        working-directory: apps/NasStats
