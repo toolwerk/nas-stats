@@ -20,6 +20,16 @@ struct AddNasView: View {
     @State private var certificate: (address: String, fingerprint: String)?
     @State private var busy = false
     @State private var errorText: String?
+    /// Credentials the NAS refused; no new login with them (it may block
+    /// the address).
+    @State private var refusedCredentials: Credentials?
+    /// Set when the dialog closes; a running test query then saves nothing.
+    @State private var closed = false
+
+    private struct Credentials: Equatable {
+        let user: String
+        let password: String
+    }
 
     private static let vendors = ["Synology", "TrueNAS", "Unraid"]
 
@@ -32,6 +42,7 @@ struct AddNasView: View {
                 Spacer()
                 Button("Abbrechen", action: close)
                     .keyboardShortcut(.cancelAction)
+                    .disabled(busy)
                 Button("Sichern", action: connect)
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canConnect)
@@ -48,6 +59,7 @@ struct AddNasView: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Abbrechen", action: close)
+                            .disabled(busy)
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Sichern", action: connect)
@@ -129,6 +141,8 @@ struct AddNasView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { closed = false }
+        .onDisappear { closed = true }
         .onChange(of: address) {
             certificate = nil
             errorText = nil
@@ -177,6 +191,7 @@ struct AddNasView: View {
 
     private var canConnect: Bool {
         canFetch && currentFingerprint != nil
+            && refusedCredentials != Credentials(user: trimmedUser, password: password)
     }
 
     // MARK: - Actions
@@ -227,9 +242,16 @@ struct AddNasView: View {
                     ? hostname ?? NasAddress.host(of: baseUrl) ?? baseUrl
                     : typedName
                 account.model = snapshot.nas.model
+                guard !closed else { return }
                 try accounts.add(StoredAccount(account: account, password: password))
                 close()
             } catch {
+                switch error as? FfiError {
+                case .LoginFailed?, .SecondFactorRequired?:
+                    refusedCredentials = Credentials(user: account.user, password: password)
+                default:
+                    break
+                }
                 errorText = connectionErrorText(error)
             }
         }
