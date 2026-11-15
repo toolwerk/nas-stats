@@ -21,11 +21,13 @@
 //!   client logs in again.
 //!
 //! [`QnapClient::system`] reads the system values (model, firmware, CPU,
-//! memory, temperatures, fans, health, firmware update). Volumes, disks and
-//! the network follow in later issues.
+//! memory, temperatures, fans, health, firmware update) and
+//! [`QnapClient::network`] the throughput per interface in bytes per second.
+//! Volumes, disks and containers follow in later issues.
 
 mod auth;
 mod client;
+mod network;
 mod system;
 mod transport;
 mod xml;
