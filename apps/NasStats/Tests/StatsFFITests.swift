@@ -123,14 +123,14 @@ struct StatsFFITests {
         #expect(!state.blocked)
     }
 
-    /// `.invalid` never resolves, so the query fails without reaching any
-    /// host and the problem record comes back.
+    /// Port 1 on the loopback refuses the connection at once: no DNS, no
+    /// outside network, and the problem record comes back.
     @Test func failedQueryReturnsTheProblem() async throws {
         let core = NasCore()
         let config = NasConfig(
             id: "nas-1",
             provider: .qnap,
-            baseUrl: "https://nas.demo.invalid",
+            baseUrl: "https://127.0.0.1:1",
             fingerprint: String(repeating: "AB", count: 32)
         )
         try core.addNas(config: config, user: "monitor", password: "demo")
@@ -139,7 +139,7 @@ struct StatsFFITests {
         #expect(state.lastAttemptAt != nil)
         #expect(!state.blocked)
         let problem = try #require(state.problem)
-        #expect(problem.kind == .unreachable || problem.kind == .timeout)
+        #expect(problem.kind == .unreachable)
         #expect(!problem.message.isEmpty)
         #expect(!problem.stopsPolling)
         #expect(problem.oldFingerprint == nil)
