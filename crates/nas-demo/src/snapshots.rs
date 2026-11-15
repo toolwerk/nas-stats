@@ -32,6 +32,8 @@ struct DiskSpec {
     model: &'static str,
     temperature_c: f64,
     power_on_hours: u64,
+    /// An SSD has no spin state.
+    ssd: bool,
 }
 
 fn disks(nas_id: &str, specs: &[DiskSpec]) -> Vec<Disk> {
@@ -49,8 +51,7 @@ fn disks(nas_id: &str, specs: &[DiskSpec]) -> Vec<Disk> {
                 health: Some(Health::Ok),
                 smart_text: Some("Gut".into()),
                 power_on_hours: Some(spec.power_on_hours),
-                // An SSD has no spin state.
-                spinning: (!spec.model.contains("EVO")).then_some(true),
+                spinning: (!spec.ssd).then_some(true),
             }
         })
         .collect()
@@ -134,21 +135,25 @@ fn keller(now: i64) -> Snapshot {
                     model: "WD Red Plus 8 TB",
                     temperature_c: 38.0,
                     power_on_hours: 21_412,
+                    ssd: false,
                 },
                 DiskSpec {
                     model: "WD Red Plus 8 TB",
                     temperature_c: 41.0,
                     power_on_hours: 21_409,
+                    ssd: false,
                 },
                 DiskSpec {
                     model: "WD Red Plus 8 TB",
                     temperature_c: 52.0,
                     power_on_hours: 21_410,
+                    ssd: false,
                 },
                 DiskSpec {
                     model: "Seagate IronWolf 8 TB",
                     temperature_c: 39.0,
                     power_on_hours: 3_120,
+                    ssd: false,
                 },
             ],
         ),
@@ -227,21 +232,25 @@ fn buero(now: i64) -> Snapshot {
                     model: "Synology HAT3300 4 TB",
                     temperature_c: 36.0,
                     power_on_hours: 9_204,
+                    ssd: false,
                 },
                 DiskSpec {
                     model: "Synology HAT3300 4 TB",
                     temperature_c: 37.0,
                     power_on_hours: 9_204,
+                    ssd: false,
                 },
                 DiskSpec {
                     model: "Synology HAT3300 4 TB",
                     temperature_c: 39.0,
                     power_on_hours: 9_203,
+                    ssd: false,
                 },
                 DiskSpec {
                     model: "Synology HAT3300 4 TB",
                     temperature_c: 38.0,
                     power_on_hours: 9_203,
+                    ssd: false,
                 },
             ],
         ),
@@ -325,31 +334,37 @@ fn homelab(now: i64) -> Snapshot {
                     model: "Seagate IronWolf Pro 12 TB",
                     temperature_c: 40.0,
                     power_on_hours: 14_870,
+                    ssd: false,
                 },
                 DiskSpec {
                     model: "Seagate IronWolf Pro 12 TB",
                     temperature_c: 42.0,
                     power_on_hours: 14_869,
+                    ssd: false,
                 },
                 DiskSpec {
                     model: "Seagate IronWolf Pro 12 TB",
                     temperature_c: 44.0,
                     power_on_hours: 14_871,
+                    ssd: false,
                 },
                 DiskSpec {
                     model: "Seagate IronWolf Pro 12 TB",
                     temperature_c: 41.0,
                     power_on_hours: 14_868,
+                    ssd: false,
                 },
                 DiskSpec {
                     model: "Samsung 870 EVO 1 TB",
                     temperature_c: 33.0,
                     power_on_hours: 6_402,
+                    ssd: true,
                 },
                 DiskSpec {
                     model: "Samsung 870 EVO 1 TB",
                     temperature_c: 34.0,
                     power_on_hours: 6_402,
+                    ssd: true,
                 },
             ],
         ),

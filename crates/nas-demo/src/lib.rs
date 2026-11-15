@@ -195,12 +195,7 @@ mod tests {
         assert_eq!(homelab.backups[0].kind, nas_model::BackupKind::Replication);
         // 4 HDD at 40 to 44 °C, then 2 SSD.
         assert_eq!(temps(homelab), [40.0, 42.0, 44.0, 41.0, 33.0, 34.0]);
-        assert!(homelab.disks[4..].iter().all(|d| {
-            d.model
-                .as_deref()
-                .is_some_and(|m| m.contains("SSD") || m.contains("EVO"))
-                && d.spinning.is_none()
-        }));
+        assert!(homelab.disks[4..].iter().all(|d| d.spinning.is_none()));
         assert!(homelab.disks[..4].iter().all(|d| d.spinning == Some(true)));
     }
 
@@ -317,6 +312,22 @@ mod tests {
         assert_eq!(((total - last) / growth).round(), DATAVOL1_DAYS_TO_FULL);
         // The mockup shows +0.09 % per day.
         assert_eq!((growth / total * 10_000.0).round(), 9.0);
+    }
+
+    #[test]
+    fn every_volume_with_bytes_has_a_growth() {
+        let set = demo(NOW);
+        for s in &set.snapshots {
+            for v in &s.volumes {
+                if let (Some(used), Some(total)) = (v.used_bytes, v.total_bytes) {
+                    assert!(
+                        crate::history::growth_per_day(&v.id, used, total).is_some(),
+                        "{}",
+                        v.id
+                    );
+                }
+            }
+        }
     }
 
     #[test]
