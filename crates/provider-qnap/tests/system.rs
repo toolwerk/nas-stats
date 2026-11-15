@@ -276,6 +276,26 @@ async fn a_network_error_of_a_part_is_returned() {
 }
 
 #[tokio::test]
+async fn a_network_error_of_the_update_only_leaves_it_empty() {
+    let fake = FakeTransport::new(vec![
+        Ok(LOGIN_OK),
+        Ok(SYSINFO),
+        Ok(HEALTH_GOOD),
+        Err(ProviderError::Timeout),
+        Ok(SYSINFO),
+        Ok(HEALTH_GOOD),
+        Ok(FIRMWARE_AVAILABLE),
+    ]);
+    let client = QnapClient::new(&fake, "admin", "secret");
+    let first = client.system().await.expect("first");
+    assert_eq!(first.model.as_deref(), Some("TS-1685"));
+    assert_eq!(first.status.update_available, None);
+    // Not cached: the next poll asks again.
+    let second = client.system().await.expect("second");
+    assert_eq!(second.status.update_available, Some(true));
+}
+
+#[tokio::test]
 async fn the_firmware_answer_is_reused_within_the_hour() {
     let fake = FakeTransport::new(vec![
         Ok(LOGIN_OK),

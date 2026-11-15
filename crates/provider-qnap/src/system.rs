@@ -73,7 +73,9 @@ impl<T: Transport> QnapClient<T> {
     ///
     /// An error of the `sysinfo` request is returned. For the health and the
     /// firmware request, `PermissionDenied` or `Parse` leave only their value
-    /// empty; any other error is returned.
+    /// empty. A timeout or network error of the firmware request leaves the
+    /// update empty too and is not cached, so the next poll tries again; any
+    /// other error is returned.
     pub async fn system(&self) -> Result<QnapSystem, ProviderError> {
         let body = self.get_xml(MANA_PATH, SYSINFO_QUERY).await?;
         let mut system = parse_sysinfo(&body)?;
@@ -106,9 +108,17 @@ impl<T: Transport> QnapClient<T> {
             }
             slot.generation
         };
-        let info = match optional(self.get_xml(FIRMWARE_PATH, FIRMWARE_QUERY).await)? {
-            Some(body) => parse_firmware(&body),
-            None => (None, None),
+        let info = match optional(self.get_xml(FIRMWARE_PATH, FIRMWARE_QUERY).await) {
+            Ok(Some(body)) => parse_firmware(&body),
+            Ok(None) => (None, None),
+            // The system values are read already; a passing network problem
+            // only leaves the update empty until the next poll.
+            Err(
+                ProviderError::Timeout | ProviderError::Unreachable(_) | ProviderError::Http(_),
+            ) => {
+                return Ok((None, None));
+            }
+            Err(e) => return Err(e),
         };
         let mut slot = self
             .firmware_cache
