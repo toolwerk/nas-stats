@@ -12,6 +12,7 @@ const USAGE: &str = include_str!("fixtures/disk_usage.xml");
 const SMART: &str = include_str!("fixtures/qsmart.xml");
 const USAGE_WARNING: &str = include_str!("fixtures/disk_usage_warning.xml");
 const SMART_WARNING: &str = include_str!("fixtures/qsmart_warning.xml");
+const DENIED: &str = "<QDocRoot><authPassed>0</authPassed></QDocRoot>";
 
 #[tokio::test]
 async fn reads_the_recorded_volumes_and_disks() {
@@ -84,9 +85,14 @@ async fn reads_a_volume_and_a_disk_in_warning_state() {
 #[tokio::test]
 async fn an_account_without_rights_gets_empty_lists() {
     let fake = FakeTransport::new(vec![
+        // Each request: refused, one new login, refused again.
         Ok(LOGIN_OK),
-        Err(ProviderError::PermissionDenied),
-        Err(ProviderError::PermissionDenied),
+        Ok(DENIED),
+        Ok(LOGIN_OK),
+        Ok(DENIED),
+        Ok(DENIED),
+        Ok(LOGIN_OK),
+        Ok(DENIED),
     ]);
     let client = QnapClient::new(&fake, "user", "secret");
     let storage = client.storage("nas-1").await.expect("storage");
