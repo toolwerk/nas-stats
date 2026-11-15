@@ -23,8 +23,13 @@ pub(crate) fn root_text(doc: &Document<'_>, name: &str) -> Option<String> {
 /// the first element child of that name. Trimmed, CDATA included; missing
 /// or empty is `None`.
 pub(crate) fn path_text(doc: &Document<'_>, path: &[&str]) -> Option<String> {
+    node_text(doc.root_element(), path)
+}
+
+/// Like [`path_text`], starting at `node` instead of the root.
+pub(crate) fn node_text(node: Node<'_, '_>, path: &[&str]) -> Option<String> {
     let (last, parents) = path.split_last()?;
-    let mut node = doc.root_element();
+    let mut node = node;
     for name in parents {
         node = child(node, name)?;
     }

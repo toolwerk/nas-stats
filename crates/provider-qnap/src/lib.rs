@@ -22,13 +22,15 @@
 //!
 //! [`QnapClient::system`] reads the system values (model, firmware, CPU,
 //! memory, temperatures, fans, health, firmware update),
-//! [`QnapClient::network`] the throughput per interface in bytes per second
-//! and [`QnapClient::containers`] the containers of the Container Station.
+//! [`QnapClient::network`] the throughput per interface in bytes per second,
+//! [`QnapClient::containers`] the containers of the Container Station and
+//! [`QnapClient::storage`] the volumes and the disks with their SMART summary.
 //! The Container Station has its own login with the same account; without
 //! it, without admin rights or after a rejected login the list is empty, and
 //! that login is not repeated until the user acts (a missing Container
-//! Station is looked for again after [`CONTAINER_RECHECK`]). Volumes and
-//! disks follow in later issues. [`QnapProvider`] turns the system values
+//! Station is looked for again after [`CONTAINER_RECHECK`]). Storage pools
+//! are not read: QTS answers `disk_manage.cgi?store=…` to a GET only with
+//! `unknown cmd format.`. [`QnapProvider`] turns the system values
 //! into a [`nas_model::Snapshot`] for the core; the other lists follow with
 //! #52.
 
@@ -37,6 +39,7 @@ mod client;
 mod containers;
 mod network;
 mod provider;
+mod storage;
 mod system;
 mod transport;
 mod xml;
@@ -45,5 +48,6 @@ pub use auth::SECOND_FACTOR_HINT;
 pub use client::QnapClient;
 pub use containers::CONTAINER_RECHECK;
 pub use provider::QnapProvider;
+pub use storage::QnapStorage;
 pub use system::{FIRMWARE_INTERVAL, QnapSystem};
 pub use transport::Transport;

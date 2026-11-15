@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<QDocRoot version="1.0">
+<authPassed><![CDATA[1]]></authPassed><Disk_Info><entry><Disk_Alias><![CDATA[Alias 1]]></Disk_Alias><Disk_Status><![CDATA[0]]></Disk_Status><HDNo><![CDATA[0:1]]></HDNo><Health><![CDATA[OK]]></Health><Temperature><oC><![CDATA[38]]></oC><oF><![CDATA[]]></oF></Temperature><Model><![CDATA[DEMO-DISK-1]]></Model><Serial><![CDATA[SERIAL-A]]></Serial></entry>
+<entry><Disk_Alias><![CDATA[Alias 2]]></Disk_Alias><Disk_Status><![CDATA[0]]></Disk_Status><HDNo><![CDATA[0:2]]></HDNo><Health><![CDATA[Good]]></Health><Temperature><oC><![CDATA[39]]></oC><oF><![CDATA[]]></oF></Temperature><Model><![CDATA[DEMO-DISK-1]]></Model><Serial><![CDATA[SERIAL-B]]></Serial></entry>
+<entry><Disk_Alias><![CDATA[Alias 3]]></Disk_Alias><Disk_Status><![CDATA[0]]></Disk_Status><HDNo><![CDATA[0:3]]></HDNo><Health><![CDATA[Warning]]></Health><Temperature><oC><![CDATA[52]]></oC><oF><![CDATA[]]></oF></Temperature><Model><![CDATA[DEMO-DISK-1]]></Model><Serial><![CDATA[SERIAL-C]]></Serial></entry>
+<entry><Disk_Alias><![CDATA[Alias 4]]></Disk_Alias><Disk_Status><![CDATA[0]]></Disk_Status><HDNo><![CDATA[0:4]]></HDNo><Health><![CDATA[Unbekannt]]></Health><Temperature><oC><![CDATA[40]]></oC><oF><![CDATA[]]></oF></Temperature><Model><![CDATA[DEMO-DISK-1]]></Model><Serial><![CDATA[SERIAL-D]]></Serial></entry>
+<entry><Disk_Alias><![CDATA[Alias 5]]></Disk_Alias><Disk_Status><![CDATA[0]]></Disk_Status><HDNo><![CDATA[0:5]]></HDNo><Health><![CDATA[OK]]></Health><Temperature><oC><![CDATA[]]></oC><oF><![CDATA[]]></oF></Temperature><Model><![CDATA[]]></Model><Serial><![CDATA[]]></Serial></entry>
+</Disk_Info>
+</QDocRoot>

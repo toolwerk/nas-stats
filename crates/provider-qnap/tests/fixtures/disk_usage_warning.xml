@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<QDocRoot version="1.0">
+<authPassed><![CDATA[1]]></authPassed>
+<volumeList><volume><volumeStat><![CDATA[raid5]]></volumeStat><volumeStatus><![CDATA[0]]></volumeStatus><volumeValue><![CDATA[1]]></volumeValue><volumeLabel><![CDATA[DataVol1]]></volumeLabel></volume>
+</volumeList>
+<volumeUseList><volumeUse><volumeValue><![CDATA[1]]></volumeValue><total_size><![CDATA[10000000000000]]></total_size><free_size><![CDATA[1290000000000]]></free_size></volumeUse>
+</volumeUseList>
+</QDocRoot>

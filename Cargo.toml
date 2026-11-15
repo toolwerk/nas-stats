@@ -34,6 +34,7 @@ quick-xml = "0.42"
 regex = "1.13"
 rpassword = "7"
 base64 = "0.22"
+log = "0.4"
 roxmltree = "0.21"
 uniffi = "0.32.2"
 

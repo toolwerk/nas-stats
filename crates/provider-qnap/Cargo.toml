@@ -1,6 +1,6 @@
 [package]
 name = "provider-qnap"
-description = "QNAP QTS provider for NAS Stats: login over authLogin.cgi with a session and a hard stop after a rejected login, system values, network throughput and containers."
+description = "QNAP QTS provider for NAS Stats: login over authLogin.cgi with a session and a hard stop after a rejected login, system values, network throughput, containers, volumes and disks with SMART."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,6 +10,7 @@ authors.workspace = true
 nas-model = { workspace = true }
 nas-http = { workspace = true }
 base64 = { workspace = true }
+log = { workspace = true }
 roxmltree = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
