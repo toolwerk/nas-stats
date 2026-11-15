@@ -21,7 +21,7 @@ struct NasStatsApp: App {
     var body: some Scene {
         #if os(iOS)
         WindowGroup {
-            ContentView()
+            OverviewView()
                 .environment(store)
         }
         #else
@@ -40,16 +40,6 @@ struct NasStatsApp: App {
 }
 
 extension StoreHealth {
-    /// Traffic light colour of the provisional lists.
-    var color: Color {
-        switch self {
-        case .critical: .red
-        case .warning: .orange
-        case .ok: .green
-        case .unknown: .gray
-        }
-    }
-
     /// Symbol for the menu, where colours do not show.
     var symbol: String {
         switch self {
