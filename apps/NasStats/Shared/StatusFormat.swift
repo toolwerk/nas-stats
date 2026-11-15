@@ -105,7 +105,8 @@ enum StatusFormat {
         let units = ["B", "KB", "MB", "GB", "TB", "PB"]
         var index = 0
         var scaled = Double(bytes)
-        while scaled >= 1024, index < units.count - 1 {
+        // 1023,96 MB rounds to "1 GB", not "1.024 MB".
+        while (scaled * 10).rounded() / 10 >= 1024, index < units.count - 1 {
             scaled /= 1024
             index += 1
         }
@@ -125,8 +126,9 @@ enum StatusFormat {
         return "↓ \(side(rx)) · ↑ \(side(tx)) MB/s"
     }
 
-    /// Next scheduled run: the time alone ("02:00") within the next 24
-    /// hours, else with the day ("6. Apr., 02:00"); a missing value is "n/a".
+    /// Next scheduled run: the time alone ("02:00") on the same day,
+    /// "morgen, 02:00" on the next, else with the day ("6. Apr., 02:00");
+    /// a missing value is "n/a".
     static func nextRun(
         _ date: Date?,
         now: Date = .now,
@@ -134,22 +136,38 @@ enum StatusFormat {
         timeZone: TimeZone = .current
     ) -> String {
         guard let date else { return notAvailable }
-        let formatter = DateFormatter()
-        formatter.locale = locale
-        formatter.timeZone = timeZone
-        formatter.calendar = Calendar(identifier: .gregorian)
-        let ahead = date.timeIntervalSince(now)
-        formatter.setLocalizedDateFormatFromTemplate(ahead >= 0 && ahead < 86400 ? "HHmm" : "dMMMHHmm")
-        return formatter.string(from: date)
+        return dayAndTime(date, now: now, locale: locale, timeZone: timeZone, tomorrow: true)
     }
 
-    /// Time of a snapshot: "Stand 14:05".
-    static func observed(_ date: Date, locale: Locale = .current, timeZone: TimeZone = .current) -> String {
+    /// Time of a snapshot: "Stand 14:05" today, else "Stand 14. Nov., 14:05",
+    /// so an old snapshot kept after errors does not look current.
+    static func observed(
+        _ date: Date,
+        now: Date = .now,
+        locale: Locale = .current,
+        timeZone: TimeZone = .current
+    ) -> String {
+        "Stand \(dayAndTime(date, now: now, locale: locale, timeZone: timeZone, tomorrow: false))"
+    }
+
+    private static func dayAndTime(
+        _ date: Date, now: Date, locale: Locale, timeZone: TimeZone, tomorrow: Bool
+    ) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
         let formatter = DateFormatter()
         formatter.locale = locale
         formatter.timeZone = timeZone
+        formatter.calendar = calendar
         formatter.setLocalizedDateFormatFromTemplate("HHmm")
-        return "Stand \(formatter.string(from: date))"
+        let time = formatter.string(from: date)
+        if calendar.isDate(date, inSameDayAs: now) { return time }
+        if tomorrow, let next = calendar.date(byAdding: .day, value: 1, to: now),
+           calendar.isDate(date, inSameDayAs: next) {
+            return "morgen, \(time)"
+        }
+        formatter.setLocalizedDateFormatFromTemplate("dMMMHHmm")
+        return formatter.string(from: date)
     }
 
     /// "vor 9 h"; a missing backup is "n/a".

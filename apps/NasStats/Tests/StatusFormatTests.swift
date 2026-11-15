@@ -105,6 +105,7 @@ struct StatusFormatTests {
         #expect(StatusFormat.bytes(8_000_000_000, locale: de) == "7,5 GB")
         #expect(StatusFormat.bytes(8 * 1024 * 1024 * 1024, locale: de) == "8 GB")
         #expect(StatusFormat.bytes(512, locale: de) == "512 B")
+        #expect(StatusFormat.bytes(1_073_700_000, locale: de) == "1 GB")
         #expect(StatusFormat.bytes(nil, locale: de) == "n/a")
     }
 
@@ -120,7 +121,8 @@ struct StatusFormatTests {
         func next(_ seconds: Double) -> String {
             StatusFormat.nextRun(now.addingTimeInterval(seconds), now: now, locale: de, timeZone: utc)
         }
-        #expect(next(11 * 3600 + 55 * 60) == "02:00")
+        #expect(next(11 * 3600 + 55 * 60) == "morgen, 02:00")
+        #expect(next(23 * 3600) == "morgen, 13:05")
         #expect(next(55 * 60) == "15:00")
         #expect(next(3 * 86400) == "17. Nov., 14:05")
         #expect(StatusFormat.nextRun(nil, now: now, locale: de, timeZone: utc) == "n/a")
@@ -128,6 +130,9 @@ struct StatusFormatTests {
 
     @Test func observed() {
         let date = Date(timeIntervalSince1970: 1_794_665_100)
-        #expect(StatusFormat.observed(date, locale: de, timeZone: utc) == "Stand 14:05")
+        #expect(StatusFormat.observed(date, now: date.addingTimeInterval(600), locale: de, timeZone: utc) == "Stand 14:05")
+        #expect(
+            StatusFormat.observed(date, now: date.addingTimeInterval(86400), locale: de, timeZone: utc)
+                == "Stand 14. Nov., 14:05")
     }
 }
