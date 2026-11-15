@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Start screen of the iOS app: the NAS with their state, worst first.
-/// Provisional; the real screens follow with #17 and #21.
+/// Provisional; the real screens follow with #17 and #21. A tap opens the
+/// detail screen of the NAS (#18).
 struct ContentView: View {
     @Environment(NasStore.self) private var store
     @State private var addingNas = false
@@ -22,6 +23,9 @@ struct ContentView: View {
                         addingNas = true
                     }
                 }
+            }
+            .navigationDestination(for: String.self) { id in
+                NasDetailView(id: id)
             }
             .sheet(isPresented: $addingNas) {
                 AddNasView()
@@ -56,20 +60,22 @@ struct ContentView: View {
         List {
             Section {
                 ForEach(store.entries) { entry in
-                    HStack {
-                        Circle()
-                            .fill(entry.health.color)
-                            .frame(width: 10, height: 10)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: entry.displayName)
-                                .font(.headline)
-                            Text(verbatim: "\(entry.displayModel ?? String(localized: "Modell unbekannt")) · \(entry.baseUrl)")
-                                .font(.footnote)
+                    NavigationLink(value: entry.id) {
+                        HStack {
+                            Circle()
+                                .fill(entry.health.color)
+                                .frame(width: 10, height: 10)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(verbatim: entry.displayName)
+                                    .font(.headline)
+                                Text(verbatim: "\(entry.displayModel ?? String(localized: "Modell unbekannt")) · \(entry.baseUrl)")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Text(entry.health.title)
                                 .foregroundStyle(.secondary)
                         }
-                        Spacer()
-                        Text(entry.health.title)
-                            .foregroundStyle(.secondary)
                     }
                 }
             } footer: {
