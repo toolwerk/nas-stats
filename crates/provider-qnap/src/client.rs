@@ -6,6 +6,7 @@ use nas_model::ProviderError;
 use tokio::sync::Mutex;
 
 use crate::auth::{LoginAnswer, encode_password, parse_login};
+use crate::containers::CsState;
 use crate::system::FirmwareCache;
 use crate::transport::Transport;
 use crate::xml::{parse_qdoc, root_text};
@@ -28,10 +29,13 @@ struct State {
 /// gone. After the NAS rejects a login it sends no further login until the
 /// user acts ([`QnapClient::login`] or [`QnapClient::set_credentials`]).
 pub struct QnapClient<T: Transport> {
-    transport: T,
+    pub(crate) transport: T,
     state: Mutex<State>,
     /// Last answer of the firmware update request (see `system.rs`).
     pub(crate) firmware_cache: FirmwareCache,
+    /// Login state of the Container Station (see `containers.rs`). Never
+    /// locked while `state` is held.
+    pub(crate) container_station: Mutex<CsState>,
 }
 
 impl<T: Transport> fmt::Debug for QnapClient<T> {
@@ -54,6 +58,7 @@ impl<T: Transport> QnapClient<T> {
                 closed: false,
             }),
             firmware_cache: FirmwareCache::default(),
+            container_station: Mutex::new(CsState::Unknown),
         }
     }
 
@@ -98,24 +103,51 @@ impl<T: Transport> QnapClient<T> {
 
     /// User action „Erneut anmelden“: lifts the block and logs in once.
     pub async fn login(&self) -> Result<(), ProviderError> {
-        let mut state = self.state.lock().await;
-        state.blocked = None;
-        state.closed = false;
-        state.sid = None;
-        self.forget_firmware();
-        self.login_locked(&mut state).await.map(|_| ())
+        let result = {
+            let mut state = self.state.lock().await;
+            state.blocked = None;
+            state.closed = false;
+            state.sid = None;
+            self.forget_firmware();
+            self.login_locked(&mut state).await.map(|_| ())
+        };
+        self.forget_container_station().await;
+        result
     }
 
     /// User action „Zugang ändern“: new credentials, no session, no block.
     /// Sends nothing.
     pub async fn set_credentials(&self, user: impl Into<String>, password: impl Into<String>) {
-        let mut state = self.state.lock().await;
-        state.user = user.into();
-        state.password = password.into();
-        state.sid = None;
-        state.blocked = None;
-        state.closed = false;
-        self.forget_firmware();
+        {
+            let mut state = self.state.lock().await;
+            state.user = user.into();
+            state.password = password.into();
+            state.sid = None;
+            state.blocked = None;
+            state.closed = false;
+            self.forget_firmware();
+        }
+        self.forget_container_station().await;
+    }
+
+    /// The Container Station logs in again on its next request. Waits for
+    /// a running container request, so its outcome cannot overwrite this.
+    async fn forget_container_station(&self) {
+        *self.container_station.lock().await = CsState::Unknown;
+    }
+
+    /// User name and password for the Container Station login. While QTS
+    /// logins are blocked, the blocking error; after [`QnapClient::logout`],
+    /// [`ProviderError::LoginFailed`]. Sends nothing.
+    pub(crate) async fn credentials(&self) -> Result<(String, String), ProviderError> {
+        let state = self.state.lock().await;
+        if let Some(blocked) = &state.blocked {
+            return Err(blocked.clone());
+        }
+        if state.closed {
+            return Err(ProviderError::LoginFailed);
+        }
+        Ok((state.user.clone(), state.password.clone()))
     }
 
     /// Drops the cached firmware answer: another account may read it.
@@ -141,6 +173,7 @@ impl<T: Transport> QnapClient<T> {
             state.closed = true;
             state.sid.take()
         };
+        self.forget_container_station().await;
         let Some(sid) = sid else {
             return Ok(());
         };
