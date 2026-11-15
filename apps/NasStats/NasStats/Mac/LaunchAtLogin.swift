@@ -12,15 +12,22 @@ enum LaunchAtLogin {
         SMAppService.mainApp.status == .enabled
     }
 
-    /// Registers the app as a login item or removes it. When the system
-    /// wants the user to approve it, the login items settings open.
+    /// Registers the app as a login item or removes it.
     static func toggle() {
+        setEnabled(!isEnabled)
+    }
+
+    /// Registers the app as a login item or removes it, as asked; does
+    /// nothing when the system already has that state. When the system wants
+    /// the user to approve it, the login items settings open.
+    static func setEnabled(_ enabled: Bool) {
         let service = SMAppService.mainApp
+        guard enabled != (service.status == .enabled) else { return }
         do {
-            if service.status == .enabled {
-                try service.unregister()
-            } else {
+            if enabled {
                 try service.register()
+            } else {
+                try service.unregister()
             }
         } catch {
             logger.error("Login item not changed: \(error.localizedDescription, privacy: .public)")
