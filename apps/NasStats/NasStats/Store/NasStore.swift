@@ -165,25 +165,37 @@ final class NasStore {
     }
 
     /// New user name or password for a saved NAS, e.g. after a refused
-    /// login or "Passwort fehlt"; lifts a block and queries again.
+    /// login or "Passwort fehlt"; lifts a block and queries again. When the
+    /// core refuses them, the old credentials stay saved.
     func updateCredentials(id: String, credentials new: Credentials) async throws {
         guard let nas = stored.first(where: { $0.id == id }) else {
             throw FfiError.UnknownNas(id: id)
         }
+        let old = try? credentials.load(nasId: id)
         try credentials.save(new, nasId: id)
-        if registered.contains(id) {
-            try await core.updateCredentials(nasId: id, user: new.user, password: new.password)
-        } else {
-            // Not registered at the start (password missing or refused).
-            do {
-                try core.addNas(config: nas.config, user: new.user, password: new.password)
-            } catch {
-                localErrors[id] = Self.message(for: error)
-                rebuild()
-                throw error
+        do {
+            if registered.contains(id) {
+                try await core.updateCredentials(nasId: id, user: new.user, password: new.password)
+            } else {
+                // Not registered at the start (password missing or refused).
+                do {
+                    try core.addNas(config: nas.config, user: new.user, password: new.password)
+                } catch {
+                    localErrors[id] = Self.message(for: error)
+                    rebuild()
+                    throw error
+                }
             }
-            registered.insert(id)
+        } catch {
+            // The core did not take the credentials: the old ones stay saved.
+            if let old {
+                try? credentials.save(old, nasId: id)
+            } else {
+                try? credentials.delete(nasId: id)
+            }
+            throw error
         }
+        registered.insert(id)
         localErrors[id] = nil
         queryErrors[id] = nil
         rebuild()

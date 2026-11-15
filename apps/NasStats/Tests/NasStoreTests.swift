@@ -16,6 +16,8 @@ final class FakeCore: NasCoreProtocol {
     private let log = Mutex(Calls())
     /// `addNas` throws `InvalidInput` while set.
     let refuseAdd = Mutex(false)
+    /// `updateCredentials` throws `UnknownNas` while set.
+    let refuseUpdate = Mutex(false)
     /// `refresh` throws `Internal` while set.
     let failRefresh = Mutex(false)
 
@@ -65,6 +67,9 @@ final class FakeCore: NasCoreProtocol {
 
     func updateCredentials(nasId: String, user: String, password: String) async throws {
         log.withLock { $0.updated.append(nasId) }
+        if refuseUpdate.withLock({ $0 }) {
+            throw FfiError.UnknownNas(id: nasId)
+        }
     }
 }
 
@@ -307,6 +312,18 @@ struct NasStoreTests {
         let entry = try #require(store.entries.first)
         #expect(entry.localError == "Ungültige Angabe: kaputt")
         #expect(entry.health == .critical)
+        // The refused password is not kept.
+        #expect(try credentials.load(nasId: "a") == nil)
+    }
+
+    @Test func refusedNewCredentialsKeepTheOldOnes() async throws {
+        let core = FakeCore()
+        core.refuseUpdate.withLock { $0 = true }
+        let store = try await started([Self.nas("a", name: "Keller")], core: core)
+        await #expect(throws: FfiError.UnknownNas(id: "a")) {
+            try await store.updateCredentials(id: "a", credentials: Credentials(user: "neu", password: "neu"))
+        }
+        #expect(try credentials.load(nasId: "a") == login)
     }
 
     @Test func demoModeShowsTheThreeDemoNasWithoutQueries() async throws {
