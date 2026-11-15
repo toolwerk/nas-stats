@@ -620,6 +620,10 @@ struct NasStoreTests {
         AlertThresholds(fill: FillThresholds(warning: 90, critical: 80), diskTempWarningC: 50)
             .save(to: defaults)
         #expect(makeStore(MemoryAccountStore(), core: FakeCore()).thresholds == .standard)
+        // Closer than one step: the steppers would get an empty range.
+        AlertThresholds(fill: FillThresholds(warning: 50, critical: 52), diskTempWarningC: 50)
+            .save(to: defaults)
+        #expect(makeStore(MemoryAccountStore(), core: FakeCore()).thresholds == .standard)
         defaults.set(Data("kaputt".utf8), forKey: AlertThresholds.defaultsKey)
         #expect(makeStore(MemoryAccountStore(), core: FakeCore()).thresholds == .standard)
     }
@@ -670,14 +674,21 @@ struct NasStoreTests {
     @Test func confirmingANewCertificateRegistersAgainAndQueries() async throws {
         let a = Self.account("Keller")
         let keychain = MemoryAccountStore([a])
+        // Blocked by a changed certificate in an earlier launch.
+        _ = await started(keychain, core: FakeCore(states: [
+            Self.state(a, health: nil, problem: Self.problem(.certificateChanged, stops: true), blocked: true),
+        ]))
+        clock.advance(minutes: 60)
         let core = FakeCore()
         let store = await started(keychain, core: core)
+        #expect(store.entries.first?.blocked == true)
+        #expect(core.calls.refreshed.isEmpty)
         let newPrint = String(repeating: "CD", count: 32)
 
         try await store.confirmFingerprint(id: a.account.id, fingerprint: newPrint)
         #expect(try keychain.loadAll().first?.account.fingerprint == newPrint)
         #expect(core.calls.addedFingerprints.last == newPrint)
-        #expect(core.calls.refreshed.count == 2)
+        #expect(core.calls.refreshed == [a.account.id.uuidString])
         #expect(store.entries.first?.blocked == false)
         #expect(store.accounts.accounts.first?.fingerprint == newPrint)
     }
@@ -695,5 +706,45 @@ struct NasStoreTests {
         #expect(store.accounts.accounts.first?.fingerprint == a.account.fingerprint)
         #expect(store.entries.first?.localError == "Ungültige Angabe: kaputt")
         #expect(core.calls.refreshed.count == 1)
+    }
+
+    @Test func theStoreThresholdsColourAndSortRealNas() async throws {
+        let (a, b) = (Self.account("Anton"), Self.account("Berta"))
+        let core = FakeCore(states: [
+            NasState(
+                nasId: a.account.id.uuidString,
+                snapshot: Self.snapshot(a.account.id.uuidString, fill: 10, temp: 30),
+                problem: nil, lastAttemptAt: 100, blocked: false
+            ),
+            NasState(
+                nasId: b.account.id.uuidString,
+                snapshot: Self.snapshot(b.account.id.uuidString, fill: 85, temp: 30),
+                problem: nil, lastAttemptAt: 100, blocked: false
+            ),
+        ])
+        let store = await started(MemoryAccountStore([a, b]), core: core)
+        #expect(store.entries.map(\.displayName) == ["Berta", "Anton"])
+        #expect(store.entries.map(\.health) == [.warning, .ok])
+
+        store.thresholds.fill = FillThresholds(warning: 90, critical: 95)
+        #expect(store.entries.map(\.displayName) == ["Anton", "Berta"])
+        #expect(store.entries.map(\.health) == [.ok, .ok])
+    }
+
+    @Test func aFailedResumeIsNotRetriedByItself() async throws {
+        let a = Self.account("Keller")
+        let blocked = Self.state(a, health: nil, problem: Self.problem(.loginFailed, stops: true), blocked: true)
+        let core = FakeCore(states: [blocked])
+        let store = await started(MemoryAccountStore([a]), core: core)
+        #expect(core.calls.refreshed.count == 1)
+
+        try await store.resume(id: a.account.id)
+        #expect(core.calls.refreshed.count == 2)
+        #expect(store.entries.first?.blocked == true)
+
+        // Blocked again: no further query until the user acts.
+        clock.advance(minutes: 60)
+        await store.refreshAll()
+        #expect(core.calls.refreshed.count == 2)
     }
 }
