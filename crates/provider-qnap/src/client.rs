@@ -120,10 +120,12 @@ impl<T: Transport> QnapClient<T> {
 
     /// Drops the cached firmware answer: another account may read it.
     fn forget_firmware(&self) {
-        *self
+        let mut slot = self
             .firmware_cache
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slot.generation += 1;
+        slot.entry = None;
     }
 
     /// Ends the session at the NAS, for removing the NAS. Without a session

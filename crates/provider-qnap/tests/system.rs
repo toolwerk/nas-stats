@@ -36,7 +36,10 @@ async fn reads_the_recorded_answers() {
     let system = client.system().await.expect("system");
 
     assert_eq!(system.model.as_deref(), Some("TS-1685"));
-    assert_eq!(system.firmware.as_deref(), Some("5.2.11 Build 20261023"));
+    assert_eq!(
+        system.firmware.as_deref(),
+        Some("5.2.11.3661 Build 20261023")
+    );
     assert_eq!(system.hostname.as_deref(), Some("nas-demo"));
 
     let status = &system.status;
@@ -159,8 +162,8 @@ async fn a_refused_part_only_leaves_its_value_empty() {
 #[tokio::test]
 async fn a_part_refused_with_auth_passed_0_logs_in_once_and_goes_on() {
     // QTS refuses with HTTP 200 and `authPassed` 0 (issue #1): one new
-    // login, one repeat, then the part stays empty and the next one uses
-    // the new session.
+    // login, one repeat, then the part stays empty and the next part is
+    // still asked.
     let fake = FakeTransport::new(vec![
         Ok(LOGIN_OK),
         Ok(SYSINFO),
@@ -208,6 +211,46 @@ async fn new_credentials_fetch_the_firmware_again() {
     let second = client.system().await.expect("second");
     assert_eq!(second.status.update_available, Some(true));
     assert_eq!(calls(&fake).len(), 8);
+}
+
+#[tokio::test]
+async fn logging_in_again_fetches_the_firmware_again() {
+    let fake = FakeTransport::new(vec![
+        Ok(LOGIN_OK),
+        Ok(SYSINFO),
+        Ok(HEALTH_GOOD),
+        Ok(FIRMWARE_NONE),
+        Ok(LOGIN_OK),
+        Ok(SYSINFO),
+        Ok(HEALTH_GOOD),
+        Ok(FIRMWARE_AVAILABLE),
+    ]);
+    let client = QnapClient::new(&fake, "admin", "secret");
+    client.system().await.expect("first");
+    client.login().await.expect("login");
+    let second = client.system().await.expect("second");
+    assert_eq!(second.status.update_available, Some(true));
+}
+
+#[tokio::test]
+async fn missing_fields_stay_empty() {
+    let fake = FakeTransport::new(vec![
+        Ok(LOGIN_OK),
+        Ok(
+            "<QDocRoot><authPassed>1</authPassed><func><ownContent><root><cpu_usage>n/a</cpu_usage></root></ownContent></func></QDocRoot>",
+        ),
+        Ok(HEALTH_GOOD),
+        Ok(FIRMWARE_NONE),
+    ]);
+    let client = QnapClient::new(&fake, "admin", "secret");
+    let system = client.system().await.expect("system");
+    assert_eq!(system.model, None);
+    assert_eq!(system.firmware, None);
+    assert_eq!(system.hostname, None);
+    assert_eq!(system.status.cpu_percent, None);
+    assert_eq!(system.status.uptime_seconds, None);
+    assert_eq!(system.status.memory_total_bytes, None);
+    assert!(system.fans.is_empty());
 }
 
 #[tokio::test]

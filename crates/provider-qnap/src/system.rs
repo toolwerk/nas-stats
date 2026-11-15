@@ -13,7 +13,7 @@
 //! (issue #1) holds its state, charge or runtime.
 
 use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime};
 
 use nas_model::{Alert, AlertLevel, Fan, Health, ProviderError, SystemStatus, Ups};
 use roxmltree::Document;
@@ -42,8 +42,17 @@ const MIB: f64 = 1_048_576.0;
 /// Whether an update is offered and its version.
 pub(crate) type FirmwareInfo = (Option<bool>, Option<String>);
 
-/// Last firmware answer and when it was fetched.
-pub(crate) type FirmwareCache = Mutex<Option<(Instant, FirmwareInfo)>>;
+/// Last firmware answer and when it was fetched (wall clock, so the hour
+/// also passes while the Mac sleeps). `generation` grows with every change
+/// of the account, so an answer still on its way for the old account is
+/// not kept.
+#[derive(Debug, Default)]
+pub(crate) struct FirmwareSlot {
+    pub(crate) generation: u64,
+    pub(crate) entry: Option<(SystemTime, FirmwareInfo)>,
+}
+
+pub(crate) type FirmwareCache = Mutex<FirmwareSlot>;
 
 /// The system part of a QNAP snapshot.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -82,25 +91,32 @@ impl<T: Transport> QnapClient<T> {
     /// The firmware answer, from the cache while it is younger than
     /// [`FIRMWARE_INTERVAL`]. Every answer is kept, also an empty one.
     async fn firmware(&self) -> Result<FirmwareInfo, ProviderError> {
-        {
-            let cache = self
+        let generation = {
+            let slot = self
                 .firmware_cache
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            if let Some((at, info)) = cache.as_ref()
-                && at.elapsed() < FIRMWARE_INTERVAL
+            // A clock set back makes the entry stale, not eternal.
+            if let Some((at, info)) = slot.entry.as_ref()
+                && at
+                    .elapsed()
+                    .is_ok_and(|elapsed| elapsed < FIRMWARE_INTERVAL)
             {
                 return Ok(info.clone());
             }
-        }
+            slot.generation
+        };
         let info = match optional(self.get_xml(FIRMWARE_PATH, FIRMWARE_QUERY).await)? {
             Some(body) => parse_firmware(&body),
             None => (None, None),
         };
-        *self
+        let mut slot = self
             .firmware_cache
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((Instant::now(), info.clone()));
+            .unwrap_or_else(PoisonError::into_inner);
+        if slot.generation == generation {
+            slot.entry = Some((SystemTime::now(), info.clone()));
+        }
         Ok(info)
     }
 }
@@ -130,7 +146,13 @@ pub(crate) fn parse_sysinfo(body: &str) -> Result<QnapSystem, ProviderError> {
 
     let model = path_text(&doc, &["model", "displayModelName"])
         .or_else(|| path_text(&doc, &["model", "modelName"]));
+    // Same form as an offered update (`5.2.12.3700 Build 20261201`) and the
+    // QTS interface: version, number, build.
     let firmware = path_text(&doc, &["firmware", "version"]).map(|version| {
+        let version = match path_text(&doc, &["firmware", "number"]) {
+            Some(number) => format!("{version}.{number}"),
+            None => version,
+        };
         match path_text(&doc, &["firmware", "build"]) {
             Some(build) => format!("{version} Build {build}"),
             None => version,
@@ -263,16 +285,18 @@ pub(crate) fn parse_health(body: &str) -> Option<Alert> {
 }
 
 /// Parses the `firm_update` answer. QTS 5.2 puts the offered version in
-/// `official/newVersion` and writes `none` when there is no update; older
+/// `official/newVersion` (or `recommended/newVersion`) and writes `none`
+/// when there is no update; older
 /// firmware has `newVersion` directly below `ownContent`. Empty, `none` or
 /// missing means no update.
 pub(crate) fn parse_firmware(body: &str) -> FirmwareInfo {
     let Ok(doc) = parse_qdoc(body) else {
         return (None, None);
     };
-    let version = path_text(&doc, &["func", "ownContent", "official", "newVersion"])
-        .or_else(|| path_text(&doc, &["func", "ownContent", "newVersion"]))
-        .filter(|v| !v.eq_ignore_ascii_case("none"));
+    let offered = |path: &[&str]| path_text(&doc, path).filter(|v| !v.eq_ignore_ascii_case("none"));
+    let version = offered(&["func", "ownContent", "official", "newVersion"])
+        .or_else(|| offered(&["func", "ownContent", "recommended", "newVersion"]))
+        .or_else(|| offered(&["func", "ownContent", "newVersion"]));
     match version {
         Some(version) => (Some(true), Some(version)),
         None => (Some(false), None),
@@ -365,6 +389,8 @@ mod tests {
     #[test]
     fn firmware_without_build_and_older_update_form() {
         let body = "<QDocRoot><firmware><version>5.1.4</version></firmware></QDocRoot>";
+        let recommended = "<QDocRoot><func><ownContent><official><newVersion>none</newVersion></official><recommended><newVersion>5.2.12.3700 Build 20261201</newVersion></recommended></ownContent></func></QDocRoot>";
+        assert_eq!(parse_firmware(recommended).0, Some(true));
         assert_eq!(
             parse_sysinfo(body).expect("sysinfo").firmware.as_deref(),
             Some("5.1.4")

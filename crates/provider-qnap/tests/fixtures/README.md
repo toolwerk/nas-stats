@@ -51,5 +51,5 @@ Echte Antworten eines eigenen QNAP, aufgezeichnet mit `qnap-capture` (Issue #1) 
 - Eine ungültige Session antwortet mit HTTP 200 und `authPassed` 0, nicht mit 401.
 - `QSM40bandwidth` liefert auf QTS 5.2.11 nur `authPassed` 1 ohne Werte; die Bandbreite kommt aus `bandwidth`.
 - `syshealth.xml` meldet `warning`, `firmware.xml` `newVersion` `none`.
-- Lüfter stehen in `sysinfo.xml`: Systemlüfter als `sysfan_count`, `sysfan<n>` (U/min) und `sysfan_fail<n>`, CPU-Lüfter als `cpufan_count`, `cpufan<n>` und `fan_fail<n>`. Eine angeschlossene USV nennt nur `external_devices.xml` (Gerätetyp `ups`), ohne Zustand, Ladung oder Restlaufzeit.
+- Lüfter stehen in `sysinfo.xml`: Systemlüfter als `sysfan_count`, `sysfan<n>` (U/min) und `sysfan_fail<n>`, CPU-Lüfter als `cpufan_count`, `cpufan<n>` und `fan_fail<n>`. `sysfan_alias` ist ein einzelnes Feld ohne Nummer und lässt sich keinem Lüfter zuordnen; die Lüfter heißen deshalb „Lüfter <n>“ und „CPU-Lüfter <n>“. Eine angeschlossene USV nennt nur `external_devices.xml` (Gerätetyp `ups`), ohne Zustand, Ladung oder Restlaufzeit.
 - Die Abfragen für Speicherpools und Volumes (`disk_manage.cgi?store=…`) und `sysmonitor` stehen in `crates/qnap-capture/requests.txt`, sind aber noch nicht aufgezeichnet.
