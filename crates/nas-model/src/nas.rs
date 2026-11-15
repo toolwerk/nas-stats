@@ -41,8 +41,12 @@ pub struct SystemStatus {
     pub cpu_percent: Option<f64>,
     /// Used memory in percent (0 to 100).
     pub memory_percent: Option<f64>,
+    /// Installed memory, in bytes.
+    pub memory_total_bytes: Option<u64>,
     /// System temperature in degrees Celsius.
     pub temperature_c: Option<f64>,
+    /// CPU temperature in degrees Celsius.
+    pub cpu_temperature_c: Option<f64>,
     /// Whether the vendor offers a firmware update.
     pub update_available: Option<bool>,
     /// Version of the offered update, if the vendor names it.
