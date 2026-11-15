@@ -153,8 +153,8 @@ pub(crate) fn parse_sysinfo(body: &str) -> Result<QnapSystem, ProviderError> {
         cpu_percent: sys_number(&doc, "cpu_usage"),
         memory_percent,
         memory_total_bytes,
-        temperature_c: sys_number(&doc, "sys_tempc"),
-        cpu_temperature_c: sys_number(&doc, "cpu_tempc"),
+        temperature_c: temperature(&doc, "sys_tempc"),
+        cpu_temperature_c: temperature(&doc, "cpu_tempc"),
         update_available: None,
         update_version: None,
     };
@@ -179,8 +179,14 @@ pub(crate) fn parse_sysinfo(body: &str) -> Result<QnapSystem, ProviderError> {
     })
 }
 
+/// A temperature in °C. QTS writes `-1` (or another negative value) for a
+/// sensor it does not have, so negative values are `None`.
+fn temperature(doc: &Document<'_>, name: &str) -> Option<f64> {
+    sys_number(doc, name).filter(|t| *t >= 0.0)
+}
+
 /// Uptime from `uptime_day`, `_hour`, `_min` and `_sec`. A missing part
-/// counts as 0; when all four are missing, `None`.
+/// counts as 0; when all four are missing or the sum overflows, `None`.
 fn uptime(doc: &Document<'_>) -> Option<u64> {
     let parts = [
         ("uptime_day", 86_400),
@@ -193,7 +199,10 @@ fn uptime(doc: &Document<'_>) -> Option<u64> {
     for (name, factor) in parts {
         if let Some(value) = sys_number(doc, name).filter(|v| *v >= 0.0) {
             seen = true;
-            seconds += value as u64 * factor;
+            // A value too large for u64 seconds is unreadable, not a panic.
+            seconds = (value as u64)
+                .checked_mul(factor)
+                .and_then(|part| seconds.checked_add(part))?;
         }
     }
     seen.then_some(seconds)
@@ -319,6 +328,23 @@ mod tests {
                 rpm: None,
                 health: None,
             }]
+        );
+    }
+
+    #[test]
+    fn a_missing_sensor_is_no_temperature() {
+        let body = "<QDocRoot><func><ownContent><root><cpu_tempc>-1</cpu_tempc><sys_tempc>-1</sys_tempc></root></ownContent></func></QDocRoot>";
+        let status = parse_sysinfo(body).expect("sysinfo").status;
+        assert_eq!(status.temperature_c, None);
+        assert_eq!(status.cpu_temperature_c, None);
+    }
+
+    #[test]
+    fn an_overflowing_uptime_is_none() {
+        let body = "<QDocRoot><func><ownContent><root><uptime_day>1000000000000000</uptime_day><uptime_hour>1</uptime_hour></root></ownContent></func></QDocRoot>";
+        assert_eq!(
+            parse_sysinfo(body).expect("sysinfo").status.uptime_seconds,
+            None
         );
     }
 
