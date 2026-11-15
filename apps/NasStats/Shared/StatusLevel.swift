@@ -74,13 +74,16 @@ struct AlertThresholds: Codable, Equatable, Sendable {
     /// Allowed ranges of the settings.
     static let fillRange: ClosedRange<Double> = 50...95
     static let diskTempRange: ClosedRange<Double> = 40...65
+    /// Smallest gap between warning and critical, one step of the settings.
+    static let fillGap = 5.0
 
-    /// Warning below critical, both within `fillRange`, temperature within
-    /// `diskTempRange`.
+    /// Warning at least `fillGap` below critical, both within `fillRange`,
+    /// temperature within `diskTempRange`. The steppers of the settings
+    /// build their ranges from these values, so they never get empty.
     var isValid: Bool {
         Self.fillRange.contains(fill.warning)
             && Self.fillRange.contains(fill.critical)
-            && fill.warning < fill.critical
+            && fill.critical - fill.warning >= Self.fillGap
             && Self.diskTempRange.contains(diskTempWarningC)
     }
 

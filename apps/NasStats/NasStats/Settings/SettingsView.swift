@@ -42,7 +42,7 @@ struct SettingsView: View {
             } header: {
                 Text("Abfrage")
             } footer: {
-                Text("NAS Stats fragt jedes NAS höchstens alle 5 Minuten ab.")
+                Text("NAS Stats fragt jedes NAS höchstens in diesem Abstand ab, auch mit „Aktualisieren“, und nie öfter als alle 5 Minuten.")
             }
             thresholdSection
             #if os(macOS)
@@ -118,14 +118,14 @@ struct SettingsView: View {
         return Section {
             Stepper(
                 value: threshold(\.fill.warning),
-                in: AlertThresholds.fillRange.lowerBound...(fill.critical - 5),
+                in: AlertThresholds.fillRange.lowerBound...(fill.critical - AlertThresholds.fillGap),
                 step: 5
             ) {
                 LabeledContent("Füllstand Warnung", value: percent(fill.warning))
             }
             Stepper(
                 value: threshold(\.fill.critical),
-                in: (fill.warning + 5)...AlertThresholds.fillRange.upperBound,
+                in: (fill.warning + AlertThresholds.fillGap)...AlertThresholds.fillRange.upperBound,
                 step: 5
             ) {
                 LabeledContent("Füllstand kritisch", value: percent(fill.critical))
