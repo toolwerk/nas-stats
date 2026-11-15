@@ -77,13 +77,15 @@ final class NasAccounts {
         try? await core.removeNas(nasId: id.uuidString)
     }
 
-    /// New password for a stored NAS, e.g. after a refused login: lifts a
-    /// block in the core, or registers a NAS the core refused at start.
-    /// When the core refuses, the old keychain entry is put back.
-    func updatePassword(id: UUID, password: String) async throws {
-        guard let account = accounts.first(where: { $0.id == id }) else {
+    /// New user name and password for a stored NAS, e.g. after a refused
+    /// login: lifts a block in the core, or registers a NAS the core refused
+    /// at start. When the core refuses, the old keychain entry is put back.
+    func updateCredentials(id: UUID, user: String, password: String) async throws {
+        guard let current = accounts.first(where: { $0.id == id }) else {
             throw FfiError.UnknownNas(id: id.uuidString)
         }
+        var account = current
+        account.user = user
         let config = try Self.config(of: account)
         // A keychain that cannot be read stops here, so a failure below
         // never deletes an entry it could not see.
@@ -91,10 +93,10 @@ final class NasAccounts {
         try keychain.save(StoredAccount(account: account, password: password))
         do {
             if isRegistered(id) {
-                try await core.updateCredentials(nasId: id.uuidString, user: account.user, password: password)
+                try await core.updateCredentials(nasId: id.uuidString, user: user, password: password)
             } else {
                 do {
-                    try core.addNas(config: config, user: account.user, password: password)
+                    try core.addNas(config: config, user: user, password: password)
                 } catch {
                     registrationErrors[id] = connectionErrorText(error)
                     throw error
@@ -109,6 +111,7 @@ final class NasAccounts {
             throw error
         }
         registrationErrors[id] = nil
+        accounts = Self.sorted(accounts.map { $0.id == id ? account : $0 })
     }
 
     /// Registers a stored NAS with the core. A failure stays in

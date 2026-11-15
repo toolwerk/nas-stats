@@ -63,7 +63,7 @@ final class NasStore {
     @ObservationIgnored private var pollTask: Task<Void, Never>?
 
     /// - Parameter pollInterval: Time between two rounds of queries; `nil`
-    ///   queries only on `start`, `add`, `updatePassword` and explicit
+    ///   queries only on `start`, `add`, `updateCredentials` and explicit
     ///   `refreshAll` calls.
     init(
         accounts: NasAccounts,
@@ -156,12 +156,12 @@ final class NasStore {
         rebuild()
     }
 
-    /// New password for a stored NAS, e.g. after a refused login; lifts a
-    /// block and queries again. When the core refuses it, the old password
-    /// stays stored.
-    func updatePassword(id: UUID, password: String) async throws {
+    /// New user name and password for a stored NAS, e.g. after a refused
+    /// login; lifts a block and queries again. When the core refuses them,
+    /// the old credentials stay stored.
+    func updateCredentials(id: UUID, user: String, password: String) async throws {
         do {
-            try await accounts.updatePassword(id: id, password: password)
+            try await accounts.updateCredentials(id: id, user: user, password: password)
         } catch {
             // A refused registration is now in the entry.
             rebuild()
