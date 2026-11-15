@@ -153,6 +153,7 @@ struct AddNasView: View {
             password = ""
             certificate = nil
             errorText = nil
+            refusedCredentials = nil
         }
         .onChange(of: address) {
             certificate = nil
