@@ -14,6 +14,8 @@ final class FakeCore: NasCoreProtocol {
     private let presets: Mutex<[String: NasState]>
     private let registered = Mutex<[String: NasState]>([:])
     private let log = Mutex(Calls())
+    /// `addNas` throws `InvalidInput` while set.
+    let refuseAdd = Mutex(false)
 
     init(states: [NasState] = []) {
         presets = Mutex(Dictionary(uniqueKeysWithValues: states.map { ($0.nasId, $0) }))
@@ -23,6 +25,9 @@ final class FakeCore: NasCoreProtocol {
 
     func addNas(config: NasConfig, user: String, password: String) throws {
         log.withLock { $0.added.append(config.id) }
+        if refuseAdd.withLock({ $0 }) {
+            throw FfiError.InvalidInput(detail: "kaputt")
+        }
         let empty = NasState(nasId: config.id, snapshot: nil, problem: nil, lastAttemptAt: nil, blocked: false)
         registered.withLock { $0[config.id] = empty }
     }
@@ -255,6 +260,18 @@ struct NasStoreTests {
 
         try await store.updateCredentials(id: "a", credentials: login)
         #expect(core.calls.updated == ["a"])
+    }
+
+    @Test func refusedRegistrationReplacesMissingPassword() async throws {
+        let core = FakeCore()
+        core.refuseAdd.withLock { $0 = true }
+        let store = try await started([Self.nas("a", name: "Keller")], core: core, withPasswords: false)
+        await #expect(throws: FfiError.InvalidInput(detail: "kaputt")) {
+            try await store.updateCredentials(id: "a", credentials: login)
+        }
+        let entry = try #require(store.entries.first)
+        #expect(entry.localError == "Ungültige Angabe: kaputt")
+        #expect(entry.health == .critical)
     }
 
     @Test func demoModeShowsTheThreeDemoNasWithoutQueries() async throws {

@@ -115,16 +115,20 @@ final class NasStore {
 
     /// Saves a new NAS, or replaces one with the same id, and queries it.
     /// Throws when the core refuses it or the password cannot be saved;
-    /// the list stays unchanged then.
+    /// list, passwords and core stay as before then.
     func add(_ nas: StoredNas, credentials new: Credentials) async throws {
-        let known = registered.contains(nas.id)
+        let previous = registered.contains(nas.id)
+            ? stored.first(where: { $0.id == nas.id })
+            : nil
         try core.addNas(config: nas.config, user: new.user, password: new.password)
         do {
             try credentials.save(new, nasId: nas.id)
         } catch {
-            // A new NAS leaves the core again; a replaced one keeps the new
-            // config, which the next start overwrites from the list.
-            if !known {
+            // A new NAS leaves the core again, a replaced one gets its old
+            // config and credentials back.
+            if let previous, let old = try? credentials.load(nasId: nas.id) {
+                try? core.addNas(config: previous.config, user: old.user, password: old.password)
+            } else {
                 try? await core.removeNas(nasId: nas.id)
             }
             throw error
@@ -167,7 +171,13 @@ final class NasStore {
             try await core.updateCredentials(nasId: id, user: new.user, password: new.password)
         } else {
             // Not registered at the start (password missing or refused).
-            try core.addNas(config: nas.config, user: new.user, password: new.password)
+            do {
+                try core.addNas(config: nas.config, user: new.user, password: new.password)
+            } catch {
+                localErrors[id] = Self.message(for: error)
+                rebuild()
+                throw error
+            }
             registered.insert(id)
         }
         localErrors[id] = nil
