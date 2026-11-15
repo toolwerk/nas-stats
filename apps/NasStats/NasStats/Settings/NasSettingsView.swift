@@ -153,7 +153,9 @@ struct NasSettingsView: View {
     // MARK: - Actions
 
     private func saveName() {
-        guard let account, name.trimmingCharacters(in: .whitespacesAndNewlines) != account.name else {
+        // A running action stores the account with the name it started
+        // with; renaming now would let keychain and list disagree.
+        guard !busy, let account, name.trimmingCharacters(in: .whitespacesAndNewlines) != account.name else {
             return
         }
         do {
