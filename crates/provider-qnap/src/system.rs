@@ -32,6 +32,10 @@ const SYSINFO_QUERY: &[(&str, &str)] = &[("subfunc", "sysinfo"), ("hd", "no"), (
 const HEALTH_QUERY: &[(&str, &str)] = &[("subfunc", "sysinfo"), ("sysHealth", "1")];
 const FIRMWARE_QUERY: &[(&str, &str)] = &[("subfunc", "firm_update")];
 
+/// Upper bound for the fan count a NAS reports, so a broken answer cannot
+/// make the parser build millions of fans.
+const MAX_FANS: u32 = 64;
+
 /// QTS reports memory in MiB.
 const MIB: f64 = 1_048_576.0;
 
@@ -196,12 +200,13 @@ fn uptime(doc: &Document<'_>) -> Option<u64> {
 }
 
 /// Fans `<prefix>1` … `<prefix>n` with `n` from `count`, the failure flag
-/// in `<fail>i` and the name `<label> i`.
+/// in `<fail>i` and the name `<label> i`. A count above [`MAX_FANS`] is cut
+/// to it.
 fn fan_group(doc: &Document<'_>, count: &str, prefix: &str, fail: &str, label: &str) -> Vec<Fan> {
     let Some(count) = sys_number(doc, count).filter(|c| *c >= 0.0) else {
         return Vec::new();
     };
-    (1..=count as u32)
+    (1..=(count as u32).min(MAX_FANS))
         .map(|i| Fan {
             name: format!("{label} {i}"),
             rpm: sys_number(doc, &format!("{prefix}{i}"))
@@ -315,6 +320,12 @@ mod tests {
                 health: None,
             }]
         );
+    }
+
+    #[test]
+    fn a_huge_fan_count_is_cut() {
+        let body = "<QDocRoot><func><ownContent><root><sysfan_count>4294967295</sysfan_count></root></ownContent></func></QDocRoot>";
+        assert_eq!(parse_sysinfo(body).expect("sysinfo").fans.len(), 64);
     }
 
     #[test]
