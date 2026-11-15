@@ -13,6 +13,8 @@ final class FakeCore: NasCoreProtocol {
         var updated: [String] = []
         /// User of every `updateCredentials` call.
         var updatedUsers: [String] = []
+        /// Password of every `updateCredentials` call.
+        var updatedPasswords: [String] = []
     }
 
     private let presets: Mutex<[String: NasState]>
@@ -76,6 +78,7 @@ final class FakeCore: NasCoreProtocol {
         log.withLock {
             $0.updated.append(nasId)
             $0.updatedUsers.append(user)
+            $0.updatedPasswords.append(password)
         }
         if refuseUpdate.withLock({ $0 }) {
             throw FfiError.UnknownNas(id: nasId)
@@ -666,6 +669,7 @@ struct NasStoreTests {
         let fresh = await started(keychain, core: unblocked)
         try await fresh.resume(id: a.account.id)
         #expect(unblocked.calls.updatedUsers == ["monitor"])
+        #expect(unblocked.calls.updatedPasswords == ["demo"])
         #expect(unblocked.calls.refreshed == [a.account.id.uuidString])
         #expect(fresh.entries.first?.blocked == false)
         #expect(keychain.password(of: a.account.id) == "demo")
