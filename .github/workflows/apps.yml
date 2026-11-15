@@ -1,0 +1,53 @@
+name: Apps
+
+# Builds the iOS and macOS apps on the Xcode 27 runner. Only for changes to
+# the apps, the Rust core or the scripts: macOS minutes count tenfold.
+on:
+  pull_request:
+    paths:
+      - "apps/**"
+      - "crates/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/apps.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "crates/**"
+      - "scripts/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/apps.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: apps-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apps:
+    name: Build iOS and macOS apps
+    runs-on: xcode-27
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+      - run: brew install xcodegen
+      - run: scripts/build-ffi.sh debug macosx
+      - run: scripts/build-ffi.sh debug iphonesimulator
+      - run: xcodegen generate
+        working-directory: apps/NasStats
+      # No signing on the runner; the project keeps automatic signing.
+      - run: >
+          xcodebuild build -project NasStats.xcodeproj -scheme NasStatsMac
+          -destination 'generic/platform=macOS' CODE_SIGNING_ALLOWED=NO
+        working-directory: apps/NasStats
+      - run: >
+          xcodebuild build -project NasStats.xcodeproj -scheme NasStats
+          -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO
+        working-directory: apps/NasStats

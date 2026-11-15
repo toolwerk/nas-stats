@@ -1,7 +1,7 @@
 name: CI
 
-# The Rust core on Linux for every pull request and push to main. App builds
-# run locally until the GitHub runners have Xcode 27.
+# The Rust core on Linux for every pull request and push to main. The apps
+# build in apps.yml on the Xcode 27 runner.
 on:
   pull_request:
   push:
