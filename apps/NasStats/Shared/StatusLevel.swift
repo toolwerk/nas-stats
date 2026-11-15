@@ -31,7 +31,7 @@ enum StatusLevel: Sendable, CaseIterable {
 }
 
 /// Fill levels (percent) from which a volume turns yellow and red.
-struct FillThresholds: Sendable, Equatable {
+struct FillThresholds: Codable, Sendable, Equatable {
     var warning: Double
     var critical: Double
 
@@ -55,4 +55,47 @@ enum FillForecast: Sendable, Equatable {
 enum StatusMetrics {
     /// Disk temperature in °C from which the value turns yellow.
     static let diskTempWarningC = 50.0
+}
+
+/// Thresholds the user sets in the settings (#21): fill level of a volume
+/// for warning and critical, disk temperature for warning. Stored as JSON
+/// in the defaults; without FFI types, the widgets share this file.
+struct AlertThresholds: Codable, Equatable, Sendable {
+    var fill: FillThresholds
+    var diskTempWarningC: Double
+
+    static let standard = AlertThresholds(
+        fill: .standard, diskTempWarningC: StatusMetrics.diskTempWarningC
+    )
+
+    /// Key in the defaults.
+    static let defaultsKey = "thresholds"
+
+    /// Allowed ranges of the settings.
+    static let fillRange: ClosedRange<Double> = 50...95
+    static let diskTempRange: ClosedRange<Double> = 40...65
+
+    /// Warning below critical, both within `fillRange`, temperature within
+    /// `diskTempRange`.
+    var isValid: Bool {
+        Self.fillRange.contains(fill.warning)
+            && Self.fillRange.contains(fill.critical)
+            && fill.warning < fill.critical
+            && Self.diskTempRange.contains(diskTempWarningC)
+    }
+
+    /// The stored thresholds; missing, unreadable or invalid ones give
+    /// `.standard`.
+    static func load(from defaults: UserDefaults) -> AlertThresholds {
+        guard let data = defaults.data(forKey: defaultsKey),
+              let stored = try? JSONDecoder().decode(AlertThresholds.self, from: data),
+              stored.isValid
+        else { return .standard }
+        return stored
+    }
+
+    func save(to defaults: UserDefaults) {
+        guard let data = try? JSONEncoder().encode(self) else { return }
+        defaults.set(data, forKey: Self.defaultsKey)
+    }
 }

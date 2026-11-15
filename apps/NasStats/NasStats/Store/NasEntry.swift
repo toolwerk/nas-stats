@@ -46,6 +46,8 @@ struct NasEntry: Identifiable, Sendable {
     var localError: String?
     /// Error thrown by the last query (not a `problem` of the NAS).
     var queryError: String?
+    /// Thresholds of the settings for fill level and disk temperature.
+    var thresholds: AlertThresholds = .standard
 
     /// Model of the last snapshot, else of the test query.
     var displayModel: String? { snapshot?.nas.model ?? model }
@@ -57,20 +59,40 @@ struct NasEntry: Identifiable, Sendable {
         name ?? snapshot?.nas.name ?? NasAddress.host(of: baseUrl) ?? baseUrl
     }
 
-    /// Worst health of the snapshot; an error lifts it to at least warning,
-    /// a NAS waiting for the user (block, refused registration) is
+    /// Worst health of the snapshot and of the thresholds (fill level of
+    /// the volumes, disk temperature); an error lifts it to at least
+    /// warning, a NAS waiting for the user (block, refused registration) is
     /// critical. A NAS silent for hours never shows green.
     var health: StoreHealth {
         if blocked || problem?.stopsPolling == true || localError != nil {
             return .critical
         }
-        let base: StoreHealth = switch snapshot?.worstHealth {
+        let reported: StoreHealth = switch snapshot?.worstHealth {
         case .critical: .critical
         case .warning: .warning
         case .ok: .ok
         case nil: .unknown
         }
+        let base = min(reported, thresholdHealth ?? reported)
         return problem == nil && queryError == nil ? base : min(base, .warning)
+    }
+
+    /// Worst level by the thresholds; `nil` when no value crosses one.
+    /// Missing values do not count.
+    private var thresholdHealth: StoreHealth? {
+        guard let snapshot else { return nil }
+        var worst: StoreHealth?
+        for percent in snapshot.volumes.compactMap(\.usedPercent) {
+            switch thresholds.fill.level(for: percent) {
+            case .critical: worst = .critical
+            case .warning: worst = min(worst ?? .warning, .warning)
+            default: break
+            }
+        }
+        if snapshot.disks.contains(where: { ($0.temperatureC ?? -.infinity) >= thresholds.diskTempWarningC }) {
+            worst = min(worst ?? .warning, .warning)
+        }
+        return worst
     }
 
     /// Worst first, then by name, then by id.

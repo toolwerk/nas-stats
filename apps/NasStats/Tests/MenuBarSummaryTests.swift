@@ -14,6 +14,8 @@ struct MenuBarSummaryTests {
         snapshot.nas.id = id
         snapshot.demo = false
         snapshot.worstHealth = health
+        // The hot demo disk would lift the health by the thresholds (#21).
+        snapshot.disks = []
         let template = snapshot.volumes[0]
         snapshot.volumes = fills.map { fill in
             var volume = template
