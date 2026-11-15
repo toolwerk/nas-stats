@@ -132,7 +132,9 @@ impl<T: Transport> QnapClient<T> {
 }
 
 /// `None` for a part the account may not read or that cannot be read.
-fn optional(result: Result<String, ProviderError>) -> Result<Option<String>, ProviderError> {
+pub(crate) fn optional(
+    result: Result<String, ProviderError>,
+) -> Result<Option<String>, ProviderError> {
     match result {
         Ok(body) => Ok(Some(body)),
         Err(ProviderError::PermissionDenied | ProviderError::Parse(_)) => Ok(None),
