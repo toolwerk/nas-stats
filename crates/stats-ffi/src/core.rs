@@ -290,12 +290,20 @@ impl NasCore {
         user: String,
         password: String,
     ) -> Result<(), FfiError> {
-        let entry = self.entry(&nas_id)?;
         on_core(async move {
-            let _poll = entry.poll.lock().await;
-            entry.backend.set_credentials(user, password).await;
-            lock(&entry.status).reset();
-            Ok(())
+            // The entry may be replaced or removed while the call waits for
+            // a running query; the credentials go to the entry registered
+            // after the wait.
+            loop {
+                let entry = self.entry(&nas_id)?;
+                let _poll = entry.poll.lock().await;
+                if self.superseded(&nas_id, &entry).is_some() {
+                    continue;
+                }
+                entry.backend.set_credentials(user, password).await;
+                lock(&entry.status).reset();
+                return Ok(());
+            }
         })
         .await
     }
@@ -835,6 +843,64 @@ mod tests {
         // Only the old session ends; the new entry stays untouched.
         assert_eq!(fresh.logouts.load(Ordering::SeqCst), 0);
         assert_eq!(fresh.queries(), 0);
+    }
+
+    #[tokio::test]
+    async fn new_credentials_after_a_replace_reach_the_registered_entry() {
+        let (old, gate) = gated(vec![Err(ProviderError::LoginFailed)]);
+        let fresh = FakeBackend::answering(Vec::new());
+        let h = harness_with(vec![old.clone(), fresh.clone()]);
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        let running = tokio::spawn(h.core.clone().refresh("nas-1".into()));
+        gate.started.notified().await;
+        let updating = tokio::spawn(h.core.clone().update_credentials(
+            "nas-1".into(),
+            "monitor".into(),
+            "new".into(),
+        ));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p2".into())
+            .expect("replace");
+        gate.release.notify_one();
+        running.await.expect("join").expect("state");
+        updating.await.expect("join").expect("update");
+        assert!(lock(&old.credentials).is_empty());
+        assert_eq!(
+            lock(&fresh.credentials).clone(),
+            vec![("monitor".to_owned(), "new".to_owned())]
+        );
+    }
+
+    #[tokio::test]
+    async fn new_credentials_for_a_nas_removed_meanwhile_fail() {
+        let (backend, gate) = gated(vec![Ok(model_snapshot(10.0))]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        let running = tokio::spawn(h.core.clone().refresh("nas-1".into()));
+        gate.started.notified().await;
+        let updating = tokio::spawn(h.core.clone().update_credentials(
+            "nas-1".into(),
+            "monitor".into(),
+            "new".into(),
+        ));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let removing = tokio::spawn(h.core.clone().remove_nas("nas-1".into()));
+        while !h.core.states().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        gate.release.notify_one();
+        let _ = running.await.expect("join");
+        assert_eq!(
+            updating.await.expect("join"),
+            Err(FfiError::UnknownNas { id: "nas-1".into() })
+        );
+        removing.await.expect("join").expect("remove");
+        assert!(lock(&backend.credentials).is_empty());
     }
 
     #[tokio::test]
