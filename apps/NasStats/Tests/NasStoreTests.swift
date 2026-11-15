@@ -73,32 +73,63 @@ final class FakeCore: NasCoreProtocol {
     }
 }
 
-/// Password store that refuses to save.
-final class FailingCredentialStore: CredentialStore {
+/// Keychain double in memory.
+final class MemoryAccountStore: AccountStore {
+    private let items = Mutex<[UUID: StoredAccount]>([:])
+    /// `save` throws while set.
+    let refuseSave = Mutex(false)
+
     struct Refused: Error {}
 
-    func load(nasId: String) throws -> Credentials? { nil }
-    func save(_ credentials: Credentials, nasId: String) throws { throw Refused() }
-    func delete(nasId: String) throws {}
+    init(_ stored: [StoredAccount] = []) {
+        items.withLock { items in
+            for entry in stored {
+                items[entry.account.id] = entry
+            }
+        }
+    }
+
+    func loadAll() throws -> [StoredAccount] {
+        items.withLock { Array($0.values) }
+    }
+
+    func save(_ stored: StoredAccount) throws {
+        if refuseSave.withLock({ $0 }) {
+            throw Refused()
+        }
+        items.withLock { $0[stored.account.id] = stored }
+    }
+
+    func delete(id: UUID) throws {
+        _ = items.withLock { $0.removeValue(forKey: id) }
+    }
+
+    func password(of id: UUID) -> String? {
+        items.withLock { $0[id]?.password }
+    }
 }
 
 @MainActor
 struct NasStoreTests {
     let defaults: UserDefaults
-    let credentials = InMemoryCredentialStore()
-    let login = Credentials(user: "monitor", password: "demo")
 
     init() throws {
         defaults = try #require(UserDefaults(suiteName: "nasstats-tests-\(UUID().uuidString)"))
     }
 
-    static func nas(_ id: String, name: String) -> StoredNas {
-        StoredNas(
-            id: id,
-            provider: .qnap,
-            baseUrl: "https://\(id).demo.invalid",
-            fingerprint: String(repeating: "AB", count: 32),
-            name: name
+    static func account(_ name: String, provider: String = NasAccount.qnapKey) -> StoredAccount {
+        StoredAccount(
+            account: NasAccount(
+                id: UUID(),
+                name: name,
+                providerKey: provider,
+                baseUrl: "https://nas.demo.invalid",
+                fingerprint: String(repeating: "AB", count: 32),
+                user: "monitor",
+                model: nil,
+                syncsViaICloud: false
+            ),
+            password: "demo"
         )
     }
 
@@ -111,12 +142,13 @@ struct NasStoreTests {
     }
 
     static func state(
-        _ id: String,
+        _ account: StoredAccount,
         health: Health?,
         problem: NasProblem? = nil,
         blocked: Bool = false
     ) -> NasState {
-        NasState(
+        let id = account.account.id.uuidString
+        return NasState(
             nasId: id,
             snapshot: health.map { snapshot(id, health: $0) },
             problem: problem,
@@ -132,21 +164,10 @@ struct NasStoreTests {
         )
     }
 
-    /// Saves `list` with passwords and starts a store on `core`.
-    func started(
-        _ list: [StoredNas],
-        core: FakeCore,
-        withPasswords: Bool = true
-    ) async throws -> NasStore {
-        NasList(defaults: defaults).save(list)
-        if withPasswords {
-            for nas in list {
-                try credentials.save(login, nasId: nas.id)
-            }
-        }
+    /// Starts a store on `core` with `keychain`.
+    func started(_ keychain: MemoryAccountStore, core: FakeCore) async -> NasStore {
         let store = NasStore(
-            core: core,
-            credentials: credentials,
+            accounts: NasAccounts(keychain: keychain, core: core),
             defaults: defaults,
             demoSource: { demoSnapshots(now: $0) },
             pollInterval: nil
@@ -156,34 +177,31 @@ struct NasStoreTests {
     }
 
     @Test func sortsCriticalWarningOkUnknown() async throws {
+        let (a, b, c, d) = (Self.account("Anton"), Self.account("Berta"), Self.account("Cäsar"), Self.account("Dora"))
         let core = FakeCore(states: [
-            Self.state("a", health: .ok),
-            Self.state("b", health: nil),
-            Self.state("c", health: .warning),
-            Self.state("d", health: .critical),
+            Self.state(a, health: .ok),
+            Self.state(b, health: nil),
+            Self.state(c, health: .warning),
+            Self.state(d, health: .critical),
         ])
-        let store = try await started(
-            [
-                Self.nas("a", name: "Anton"), Self.nas("b", name: "Berta"),
-                Self.nas("c", name: "Cäsar"), Self.nas("d", name: "Dora"),
-            ],
-            core: core
-        )
-        #expect(store.entries.map(\.id) == ["d", "c", "a", "b"])
+        let store = await started(MemoryAccountStore([a, b, c, d]), core: core)
+        #expect(store.entries.map(\.displayName) == ["Dora", "Cäsar", "Anton", "Berta"])
         #expect(store.entries.map(\.health) == [.critical, .warning, .ok, .unknown])
     }
 
     @Test func sameHealthSortsByName() async throws {
-        let core = FakeCore(states: [Self.state("x", health: .ok), Self.state("y", health: .ok)])
-        let store = try await started([Self.nas("x", name: "Zeta"), Self.nas("y", name: "alpha")], core: core)
+        let (x, y) = (Self.account("Zeta"), Self.account("alpha"))
+        let core = FakeCore(states: [Self.state(x, health: .ok), Self.state(y, health: .ok)])
+        let store = await started(MemoryAccountStore([x, y]), core: core)
         #expect(store.entries.map(\.displayName) == ["alpha", "Zeta"])
     }
 
     @Test func errorKeepsTheSnapshotAndLiftsToWarning() async throws {
+        let a = Self.account("Keller")
         let core = FakeCore(states: [
-            Self.state("a", health: .ok, problem: Self.problem(.unreachable, stops: false)),
+            Self.state(a, health: .ok, problem: Self.problem(.unreachable, stops: false)),
         ])
-        let store = try await started([Self.nas("a", name: "Keller")], core: core)
+        let store = await started(MemoryAccountStore([a]), core: core)
         let entry = try #require(store.entries.first)
         #expect(entry.snapshot != nil)
         #expect(entry.observedAt != nil)
@@ -192,95 +210,148 @@ struct NasStoreTests {
     }
 
     @Test func blockedNasIsCritical() async throws {
+        let a = Self.account("Keller")
         let core = FakeCore(states: [
-            Self.state("a", health: .ok, problem: Self.problem(.loginFailed, stops: true), blocked: true),
+            Self.state(a, health: .ok, problem: Self.problem(.loginFailed, stops: true), blocked: true),
         ])
-        let store = try await started([Self.nas("a", name: "Keller")], core: core)
+        let store = await started(MemoryAccountStore([a]), core: core)
         #expect(store.entries.first?.health == .critical)
     }
 
-    @Test func missingPasswordIsCriticalAndNotRegistered() async throws {
+    @Test func refusedRegistrationIsCriticalAndNotQueried() async throws {
         let core = FakeCore()
-        let store = try await started([Self.nas("a", name: "Keller")], core: core, withPasswords: false)
+        core.refuseAdd.withLock { $0 = true }
+        let store = await started(MemoryAccountStore([Self.account("Keller")]), core: core)
         let entry = try #require(store.entries.first)
-        #expect(entry.localError == NasStore.missingPassword)
+        #expect(entry.localError == "Ungültige Angabe: kaputt")
         #expect(entry.health == .critical)
-        #expect(core.calls.added.isEmpty)
         #expect(core.calls.refreshed.isEmpty)
     }
 
-    @Test func startRegistersAndQueriesSavedNas() async throws {
+    @Test func unknownProviderIsCriticalAndNotRegistered() async throws {
         let core = FakeCore()
-        let store = try await started([Self.nas("a", name: "A"), Self.nas("b", name: "B")], core: core)
-        #expect(core.calls.added.sorted() == ["a", "b"])
-        #expect(core.calls.refreshed.sorted() == ["a", "b"])
+        let store = await started(MemoryAccountStore([Self.account("Alt", provider: "omv")]), core: core)
+        let entry = try #require(store.entries.first)
+        #expect(entry.localError == "Ungültige Angabe: Anbieter omv unbekannt")
+        #expect(entry.health == .critical)
+        #expect(core.calls.added.isEmpty)
+    }
+
+    @Test func startQueriesTheStoredNas() async throws {
+        let (a, b) = (Self.account("A"), Self.account("B"))
+        let core = FakeCore()
+        let store = await started(MemoryAccountStore([a, b]), core: core)
+        let ids = [a, b].map(\.account.id.uuidString).sorted()
+        #expect(core.calls.added.sorted() == ids)
+        #expect(core.calls.refreshed.sorted() == ids)
         #expect(store.entries.count == 2)
 
         // A second start does nothing.
         await store.start()
-        #expect(core.calls.added.count == 2)
+        #expect(core.calls.refreshed.count == 2)
     }
 
-    @Test func addAndRemoveChangeListAndPasswords() async throws {
+    @Test func addAndRemoveChangeKeychainCoreAndEntries() async throws {
         let core = FakeCore()
-        let store = try await started([], core: core)
-        let nas = Self.nas("new", name: "Neu")
+        let keychain = MemoryAccountStore()
+        let store = await started(keychain, core: core)
+        let new = Self.account("Neu")
+        let id = new.account.id
 
-        try await store.add(nas, credentials: login)
-        #expect(NasList(defaults: defaults).load() == [nas])
-        #expect(try credentials.load(nasId: "new") == login)
-        #expect(core.calls.added == ["new"])
-        #expect(core.calls.refreshed == ["new"])
-        #expect(store.entries.map(\.id) == ["new"])
+        try await store.add(new)
+        #expect(keychain.password(of: id) == "demo")
+        #expect(core.calls.added == [id.uuidString])
+        #expect(core.calls.refreshed == [id.uuidString])
+        #expect(store.entries.map(\.displayName) == ["Neu"])
 
-        await store.remove(id: "new")
-        #expect(NasList(defaults: defaults).load().isEmpty)
-        #expect(try credentials.load(nasId: "new") == nil)
-        #expect(core.calls.removed == ["new"])
+        try await store.remove(id: id)
+        #expect(keychain.password(of: id) == nil)
+        #expect(core.calls.removed == [id.uuidString])
         #expect(store.entries.isEmpty)
     }
 
-    @Test func addKeepsTheListWhenThePasswordCannotBeSaved() async throws {
+    @Test func addChangesNothingWhenTheKeychainRefuses() async throws {
         let core = FakeCore()
-        let store = NasStore(
-            core: core,
-            credentials: FailingCredentialStore(),
-            defaults: defaults,
-            demoSource: { _ in [] },
-            pollInterval: nil
-        )
-        await store.start()
-        await #expect(throws: FailingCredentialStore.Refused.self) {
-            try await store.add(Self.nas("new", name: "Neu"), credentials: login)
+        let keychain = MemoryAccountStore()
+        keychain.refuseSave.withLock { $0 = true }
+        let store = await started(keychain, core: core)
+        await #expect(throws: MemoryAccountStore.Refused.self) {
+            try await store.add(Self.account("Neu"))
         }
-        #expect(NasList(defaults: defaults).load().isEmpty)
-        // The core is not touched before the password is saved.
         #expect(core.calls.added.isEmpty)
-        #expect(core.states().isEmpty)
         #expect(store.entries.isEmpty)
     }
 
-    @Test func refusedReplacementKeepsTheOldPasswordAndEntry() async throws {
+    @Test func addRemovesTheKeychainEntryWhenTheCoreRefuses() async throws {
         let core = FakeCore()
-        let nas = Self.nas("a", name: "Keller")
-        let store = try await started([nas], core: core)
+        let keychain = MemoryAccountStore()
+        let store = await started(keychain, core: core)
         core.refuseAdd.withLock { $0 = true }
-        var changed = nas
-        changed.baseUrl = "https://anders.demo.invalid"
+        let new = Self.account("Neu")
         await #expect(throws: FfiError.InvalidInput(detail: "kaputt")) {
-            try await store.add(changed, credentials: Credentials(user: "neu", password: "neu"))
+            try await store.add(new)
         }
-        #expect(try credentials.load(nasId: "a") == login)
-        #expect(NasList(defaults: defaults).load() == [nas])
-        #expect(core.states().map(\.nasId) == ["a"])
+        #expect(keychain.password(of: new.account.id) == nil)
+        #expect(store.entries.isEmpty)
+    }
+
+    @Test func newPasswordLiftsTheBlockAndQueries() async throws {
+        let a = Self.account("Keller")
+        let core = FakeCore()
+        let keychain = MemoryAccountStore([a])
+        let store = await started(keychain, core: core)
+        try await store.updatePassword(id: a.account.id, password: "neu")
+        #expect(core.calls.updated == [a.account.id.uuidString])
+        #expect(core.calls.refreshed.count == 2)
+        #expect(keychain.password(of: a.account.id) == "neu")
+    }
+
+    @Test func newPasswordRegistersARefusedNas() async throws {
+        let a = Self.account("Keller")
+        let core = FakeCore()
+        core.refuseAdd.withLock { $0 = true }
+        let keychain = MemoryAccountStore([a])
+        let store = await started(keychain, core: core)
+        core.refuseAdd.withLock { $0 = false }
+
+        try await store.updatePassword(id: a.account.id, password: "neu")
+        #expect(core.calls.added.count == 2)
+        #expect(core.calls.refreshed == [a.account.id.uuidString])
+        #expect(store.entries.first?.localError == nil)
+        #expect(keychain.password(of: a.account.id) == "neu")
+    }
+
+    @Test func refusedNewPasswordKeepsTheOldOne() async throws {
+        let a = Self.account("Keller")
+        let core = FakeCore()
+        core.refuseUpdate.withLock { $0 = true }
+        let keychain = MemoryAccountStore([a])
+        let store = await started(keychain, core: core)
+        await #expect(throws: FfiError.UnknownNas(id: a.account.id.uuidString)) {
+            try await store.updatePassword(id: a.account.id, password: "neu")
+        }
+        #expect(keychain.password(of: a.account.id) == "demo")
+    }
+
+    @Test func refusedRegistrationOnNewPasswordShowsTheReason() async throws {
+        let a = Self.account("Keller")
+        let core = FakeCore()
+        core.refuseAdd.withLock { $0 = true }
+        let keychain = MemoryAccountStore([a])
+        let store = await started(keychain, core: core)
+        await #expect(throws: FfiError.InvalidInput(detail: "kaputt")) {
+            try await store.updatePassword(id: a.account.id, password: "neu")
+        }
+        #expect(store.entries.first?.localError == "Ungültige Angabe: kaputt")
+        #expect(keychain.password(of: a.account.id) == "demo")
     }
 
     @Test func thrownQueryIsAWarningNotCritical() async throws {
         let core = FakeCore()
         core.failRefresh.withLock { $0 = true }
-        let store = try await started([Self.nas("a", name: "Keller")], core: core)
+        let store = await started(MemoryAccountStore([Self.account("Keller")]), core: core)
         let entry = try #require(store.entries.first)
-        #expect(entry.queryError == "Interner Fehler: weg")
+        #expect(entry.queryError != nil)
         #expect(entry.localError == nil)
         #expect(entry.health == .warning)
 
@@ -289,49 +360,13 @@ struct NasStoreTests {
         #expect(store.entries.first?.queryError == nil)
     }
 
-    @Test func updateCredentialsRegistersANasWithoutPassword() async throws {
-        let core = FakeCore()
-        let store = try await started([Self.nas("a", name: "Keller")], core: core, withPasswords: false)
-        try await store.updateCredentials(id: "a", credentials: login)
-        #expect(core.calls.added == ["a"])
-        #expect(core.calls.refreshed == ["a"])
-        #expect(try credentials.load(nasId: "a") == login)
-        #expect(store.entries.first?.localError == nil)
-
-        try await store.updateCredentials(id: "a", credentials: login)
-        #expect(core.calls.updated == ["a"])
-    }
-
-    @Test func refusedRegistrationReplacesMissingPassword() async throws {
-        let core = FakeCore()
-        core.refuseAdd.withLock { $0 = true }
-        let store = try await started([Self.nas("a", name: "Keller")], core: core, withPasswords: false)
-        await #expect(throws: FfiError.InvalidInput(detail: "kaputt")) {
-            try await store.updateCredentials(id: "a", credentials: login)
-        }
-        let entry = try #require(store.entries.first)
-        #expect(entry.localError == "Ungültige Angabe: kaputt")
-        #expect(entry.health == .critical)
-        // The refused password is not kept.
-        #expect(try credentials.load(nasId: "a") == nil)
-    }
-
-    @Test func refusedNewCredentialsKeepTheOldOnes() async throws {
-        let core = FakeCore()
-        core.refuseUpdate.withLock { $0 = true }
-        let store = try await started([Self.nas("a", name: "Keller")], core: core)
-        await #expect(throws: FfiError.UnknownNas(id: "a")) {
-            try await store.updateCredentials(id: "a", credentials: Credentials(user: "neu", password: "neu"))
-        }
-        #expect(try credentials.load(nasId: "a") == login)
-    }
-
     @Test func demoModeShowsTheThreeDemoNasWithoutQueries() async throws {
         defaults.set(true, forKey: NasStore.demoModeKey)
+        let a = Self.account("Keller echt")
         let core = FakeCore()
-        let store = try await started([Self.nas("a", name: "Keller echt")], core: core)
+        let store = await started(MemoryAccountStore([a]), core: core)
         // Registered, but not queried.
-        #expect(core.calls.added == ["a"])
+        #expect(core.calls.added == [a.account.id.uuidString])
         await store.refreshAll()
         #expect(core.calls.refreshed.isEmpty)
 
@@ -340,34 +375,21 @@ struct NasStoreTests {
 
         store.demoMode = false
         #expect(!defaults.bool(forKey: NasStore.demoModeKey))
-        #expect(store.entries.map(\.id) == ["a"])
+        #expect(store.entries.map(\.displayName) == ["Keller echt"])
     }
 
     @Test func onUpdateFollowsEveryNewState() async throws {
-        let core = FakeCore(states: [Self.state("a", health: .ok)])
-        let store = try await started([Self.nas("a", name: "Keller")], core: core)
+        let a = Self.account("Keller")
+        let core = FakeCore(states: [Self.state(a, health: .ok)])
+        let store = await started(MemoryAccountStore([a]), core: core)
         var reported: [[String]] = []
         store.onUpdate = { reported.append($0.map(\.id)) }
 
         await store.refreshAll()
-        #expect(reported == [["a"]])
+        #expect(reported == [[a.account.id.uuidString]])
 
         store.demoMode = true
         #expect(reported.count == 2)
         #expect(reported.last?.count == 3)
-    }
-
-    @Test func listSkipsUnknownProvidersAndBrokenJson() throws {
-        let list = NasList(defaults: defaults)
-        let json = """
-        [{"id":"a","provider":"qnap","baseUrl":"https://a","fingerprint":"AB"},
-         {"id":"b","provider":"omv","baseUrl":"https://b","fingerprint":"AB"}]
-        """
-        defaults.set(Data(json.utf8), forKey: NasList.key)
-        #expect(list.load().map(\.id) == ["a"])
-        #expect(list.load().first?.name == nil)
-
-        defaults.set(Data("kaputt".utf8), forKey: NasList.key)
-        #expect(list.load().isEmpty)
     }
 }

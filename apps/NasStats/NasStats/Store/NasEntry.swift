@@ -21,10 +21,16 @@ enum StoreHealth: Int, Comparable, Sendable, CaseIterable {
     }
 }
 
-/// One NAS as the screens see it: the saved entry, the last snapshot and
+/// One NAS as the screens see it: name and address, the last snapshot and
 /// what went wrong since.
 struct NasEntry: Identifiable, Sendable {
-    var stored: StoredNas
+    /// Id of the NAS in the core (`NasAccount.id` as a string, `demo-…` in
+    /// demo mode).
+    var id: String
+    /// Name chosen by the user; `nil` uses the name the NAS reports.
+    var name: String?
+    /// `https://host[:port]`.
+    var baseUrl: String
     /// Last successful snapshot; it stays after an error.
     var snapshot: Snapshot?
     /// Error of the last query.
@@ -33,24 +39,22 @@ struct NasEntry: Identifiable, Sendable {
     var lastAttemptAt: Int64?
     /// The core does not query this NAS until the user acts.
     var blocked: Bool = false
-    /// Why the NAS waits for the user on the app side: missing password or
-    /// a registration the core refused.
+    /// Why the NAS waits for the user on the app side: the core refused
+    /// its registration (`NasAccounts.registrationErrors`).
     var localError: String?
     /// Error thrown by the last query (not a `problem` of the NAS).
     var queryError: String?
-
-    var id: String { stored.id }
 
     /// Time of the last snapshot, Unix seconds UTC.
     var observedAt: Int64? { snapshot?.observedAt }
 
     var displayName: String {
-        stored.name ?? snapshot?.nas.name ?? URL(string: stored.baseUrl)?.host() ?? stored.baseUrl
+        name ?? snapshot?.nas.name ?? NasAddress.host(of: baseUrl) ?? baseUrl
     }
 
     /// Worst health of the snapshot; an error lifts it to at least warning,
-    /// a NAS waiting for the user (block, missing password, refused
-    /// registration) is critical. A NAS silent for hours never shows green.
+    /// a NAS waiting for the user (block, refused registration) is
+    /// critical. A NAS silent for hours never shows green.
     var health: StoreHealth {
         if blocked || problem?.stopsPolling == true || localError != nil {
             return .critical

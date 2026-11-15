@@ -2,23 +2,38 @@ import Foundation
 import Observation
 import os
 
+/// Where the accounts are kept; `AccountKeychain` in the app, a memory
+/// store in the tests.
+protocol AccountStore: Sendable {
+    func loadAll() throws -> [StoredAccount]
+    func save(_ stored: StoredAccount) throws
+    func delete(id: UUID) throws
+}
+
+extension AccountKeychain: AccountStore {}
+
 /// The NAS of the user: loaded from the keychain and registered with the
-/// core at start, because the core keeps NAS only in memory.
+/// core at start, because the core keeps NAS only in memory. `NasStore`
+/// queries them and holds their state.
 @MainActor
 @Observable
 final class NasAccounts {
-    @ObservationIgnored let core = NasCore()
-    @ObservationIgnored private let keychain: AccountKeychain
+    @ObservationIgnored let core: any NasCoreProtocol
+    @ObservationIgnored private let keychain: any AccountStore
 
     /// Sorted by name.
     private(set) var accounts: [NasAccount] = []
     /// Set when the keychain could not be read; the list is empty then.
     private(set) var loadError: String?
+    /// Why a stored NAS is not registered with the core (unknown provider,
+    /// configuration refused). The core does not query such a NAS.
+    private(set) var registrationErrors: [UUID: String] = [:]
 
     private static let log = Logger(subsystem: "net.staude.nasstats", category: "accounts")
 
-    init(keychain: AccountKeychain = AccountKeychain()) {
+    init(keychain: any AccountStore = AccountKeychain(), core: any NasCoreProtocol = NasCore()) {
         self.keychain = keychain
+        self.core = core
         do {
             let stored = try keychain.loadAll()
             for entry in stored {
@@ -31,12 +46,15 @@ final class NasAccounts {
         }
     }
 
+    /// Whether the core knows the NAS.
+    func isRegistered(_ id: UUID) -> Bool {
+        accounts.contains { $0.id == id } && registrationErrors[id] == nil
+    }
+
     /// Stores a NAS after its test query and registers it with the core.
     /// If the core refuses it, the keychain entry is removed again.
     func add(_ stored: StoredAccount) throws {
-        guard let config = stored.account.config else {
-            throw FfiError.InvalidInput(detail: "Anbieter \(stored.account.providerKey) unbekannt")
-        }
+        let config = try Self.config(of: stored.account)
         try keychain.save(stored)
         do {
             try core.addNas(config: config, user: stored.account.user, password: stored.password)
@@ -44,22 +62,71 @@ final class NasAccounts {
             try? keychain.delete(id: stored.account.id)
             throw error
         }
+        registrationErrors[stored.account.id] = nil
         accounts = Self.sorted(accounts.filter { $0.id != stored.account.id } + [stored.account])
     }
 
-    /// Registers a stored NAS with the core. A failure only logs: the NAS
-    /// stays in the list.
-    private func register(_ stored: StoredAccount) {
-        let id = stored.account.id.uuidString
-        guard let config = stored.account.config else {
-            Self.log.error("NAS \(id, privacy: .public): unknown provider \(stored.account.providerKey, privacy: .public)")
-            return
+    /// Removes the NAS from the keychain and the core. Throws when the
+    /// keychain entry cannot be removed; the NAS stays then.
+    func remove(id: UUID) async throws {
+        try keychain.delete(id: id)
+        // The core only throws `UnknownNas` (not registered) or an internal
+        // error; the NAS is gone from the keychain either way.
+        try? await core.removeNas(nasId: id.uuidString)
+        accounts.removeAll { $0.id == id }
+        registrationErrors[id] = nil
+    }
+
+    /// New password for a stored NAS, e.g. after a refused login: lifts a
+    /// block in the core, or registers a NAS the core refused at start.
+    /// When the core refuses, the old keychain entry is put back.
+    func updatePassword(id: UUID, password: String) async throws {
+        guard let account = accounts.first(where: { $0.id == id }) else {
+            throw FfiError.UnknownNas(id: id.uuidString)
         }
+        let config = try Self.config(of: account)
+        let old = try? keychain.loadAll().first { $0.account.id == id }
+        try keychain.save(StoredAccount(account: account, password: password))
         do {
+            if isRegistered(id) {
+                try await core.updateCredentials(nasId: id.uuidString, user: account.user, password: password)
+            } else {
+                do {
+                    try core.addNas(config: config, user: account.user, password: password)
+                } catch {
+                    registrationErrors[id] = connectionErrorText(error)
+                    throw error
+                }
+            }
+        } catch {
+            if let old {
+                try? keychain.save(old)
+            } else {
+                try? keychain.delete(id: id)
+            }
+            throw error
+        }
+        registrationErrors[id] = nil
+    }
+
+    /// Registers a stored NAS with the core. A failure stays in
+    /// `registrationErrors`: the NAS stays in the list.
+    private func register(_ stored: StoredAccount) {
+        let id = stored.account.id
+        do {
+            let config = try Self.config(of: stored.account)
             try core.addNas(config: config, user: stored.account.user, password: stored.password)
         } catch {
-            Self.log.error("NAS \(id, privacy: .public) not registered: \(String(describing: error), privacy: .public)")
+            Self.log.error("NAS \(id.uuidString, privacy: .public) not registered: \(String(describing: error), privacy: .public)")
+            registrationErrors[id] = connectionErrorText(error)
         }
+    }
+
+    private static func config(of account: NasAccount) throws -> NasConfig {
+        guard let config = account.config else {
+            throw FfiError.InvalidInput(detail: "Anbieter \(account.providerKey) unbekannt")
+        }
+        return config
     }
 
     private static func sorted(_ accounts: [NasAccount]) -> [NasAccount] {

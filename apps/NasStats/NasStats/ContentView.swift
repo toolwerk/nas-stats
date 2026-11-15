@@ -1,15 +1,15 @@
 import SwiftUI
 
-/// Start screen of the iOS app: the stored NAS as a plain list until the
-/// overview arrives (#15).
+/// Start screen of the iOS app: the NAS with their state, worst first.
+/// Provisional; the real screens follow with #17 and #21.
 struct ContentView: View {
-    @Environment(NasAccounts.self) private var accounts
+    @Environment(NasStore.self) private var store
     @State private var addingNas = false
 
     var body: some View {
         NavigationStack {
             Group {
-                if accounts.accounts.isEmpty {
+                if store.entries.isEmpty {
                     empty
                 } else {
                     list
@@ -25,7 +25,7 @@ struct ContentView: View {
             }
             .sheet(isPresented: $addingNas) {
                 AddNasView()
-                    .environment(accounts)
+                    .environment(store)
             }
         }
     }
@@ -35,7 +35,7 @@ struct ContentView: View {
             Image(systemName: "externaldrive")
                 .font(.system(size: 56))
                 .foregroundStyle(.tint)
-            if let loadError = accounts.loadError {
+            if let loadError = store.loadError {
                 Text(loadError)
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
@@ -55,18 +55,26 @@ struct ContentView: View {
     private var list: some View {
         List {
             Section {
-                ForEach(accounts.accounts) { account in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(account.name)
-                            .font(.headline)
-                        Text(verbatim: "\(account.model ?? String(localized: "Modell unbekannt")) · \(account.baseUrl)")
-                            .font(.footnote)
+                ForEach(store.entries) { entry in
+                    HStack {
+                        Circle()
+                            .fill(entry.health.color)
+                            .frame(width: 10, height: 10)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(verbatim: entry.displayName)
+                                .font(.headline)
+                            Text(verbatim: entry.snapshot?.nas.model ?? entry.baseUrl)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(entry.health.title)
                             .foregroundStyle(.secondary)
                     }
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
-                    if let loadError = accounts.loadError {
+                    if let loadError = store.loadError {
                         Text(loadError)
                             .foregroundStyle(.red)
                     }
@@ -77,7 +85,7 @@ struct ContentView: View {
     }
 
     private var coreVersionText: some View {
-        Text(verbatim: "Core \(coreVersion())")
+        Text(verbatim: store.demoMode ? "Demo · Core \(coreVersion())" : "Core \(coreVersion())")
             .font(.footnote.monospacedDigit())
             .foregroundStyle(.secondary)
     }
@@ -85,5 +93,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .environment(NasAccounts())
+        .environment(NasStore.live())
 }
