@@ -6,6 +6,7 @@ use nas_model::ProviderError;
 use tokio::sync::Mutex;
 
 use crate::auth::{LoginAnswer, encode_password, parse_login};
+use crate::system::FirmwareCache;
 use crate::transport::Transport;
 use crate::xml::{parse_qdoc, root_text};
 
@@ -29,6 +30,8 @@ struct State {
 pub struct QnapClient<T: Transport> {
     transport: T,
     state: Mutex<State>,
+    /// Last answer of the firmware update request (see `system.rs`).
+    pub(crate) firmware_cache: FirmwareCache,
 }
 
 impl<T: Transport> fmt::Debug for QnapClient<T> {
@@ -50,6 +53,7 @@ impl<T: Transport> QnapClient<T> {
                 blocked: None,
                 closed: false,
             }),
+            firmware_cache: FirmwareCache::default(),
         }
     }
 
@@ -98,6 +102,7 @@ impl<T: Transport> QnapClient<T> {
         state.blocked = None;
         state.closed = false;
         state.sid = None;
+        self.forget_firmware();
         self.login_locked(&mut state).await.map(|_| ())
     }
 
@@ -110,6 +115,17 @@ impl<T: Transport> QnapClient<T> {
         state.sid = None;
         state.blocked = None;
         state.closed = false;
+        self.forget_firmware();
+    }
+
+    /// Drops the cached firmware answer: another account may read it.
+    fn forget_firmware(&self) {
+        let mut slot = self
+            .firmware_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slot.generation += 1;
+        slot.entry = None;
     }
 
     /// Ends the session at the NAS, for removing the NAS. Without a session

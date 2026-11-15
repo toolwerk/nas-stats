@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<QDocRoot version="1.0">
+<authPassed><![CDATA[1]]></authPassed><model><modelName><![CDATA[]]></modelName><displayModelName><![CDATA[]]></displayModelName></model>
+<firmware><version><![CDATA[]]></version><build><![CDATA[]]></build></firmware><hostname><![CDATA[]]></hostname>
+<func><name><![CDATA[S_MENU_40]]></name><ownContent><root>
+<cpu_usage><![CDATA[]]></cpu_usage><cpufan_count></cpufan_count><total_memory><![CDATA[]]></total_memory><free_memory><![CDATA[]]></free_memory><uptime_day><![CDATA[]]></uptime_day><uptime_hour><![CDATA[]]></uptime_hour><uptime_min><![CDATA[]]></uptime_min><uptime_sec><![CDATA[]]></uptime_sec><cpu_tempc></cpu_tempc><sys_tempc></sys_tempc><sysfan_count></sysfan_count><server_name><![CDATA[]]></server_name>
+</root>
+</ownContent>
+</func>
+</QDocRoot>

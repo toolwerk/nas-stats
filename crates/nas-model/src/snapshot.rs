@@ -141,7 +141,9 @@ mod tests {
             uptime_seconds: Some(86_400),
             cpu_percent: Some(12.5),
             memory_percent: Some(40.25),
+            memory_total_bytes: Some(17_179_869_184),
             temperature_c: Some(41.0),
+            cpu_temperature_c: Some(55.0),
             update_available: Some(true),
             update_version: Some("5.2.1".into()),
         };

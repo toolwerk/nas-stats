@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<QDocRoot version="1.0">
+<authPassed><![CDATA[1]]></authPassed><model><modelName><![CDATA[TS-X85]]></modelName><displayModelName><![CDATA[TS-1685]]></displayModelName></model>
+<firmware><name><![CDATA[QTS]]></name><version><![CDATA[5.2.11]]></version><build><![CDATA[20261023]]></build></firmware>
+<hostname><![CDATA[nas-demo]]></hostname>
+<func><name><![CDATA[S_MENU_40]]></name><ownContent><sysHealth><status><![CDATA[good]]></status></sysHealth>
+</ownContent>
+</func>
+</QDocRoot>
