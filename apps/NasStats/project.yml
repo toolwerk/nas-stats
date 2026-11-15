@@ -183,6 +183,9 @@ targets:
     platform: macOS
     sources:
       - path: Tests
+      # The store is tested without a host app, so its files are compiled
+      # into the test bundle.
+      - path: NasStats/Store
       - path: Shared
       - path: Generated/stats_ffi.swift
         optional: true

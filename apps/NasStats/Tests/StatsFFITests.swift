@@ -95,6 +95,15 @@ struct StatsFFITests {
         #expect(interface.txBytesPerSec == 310_000.0)
     }
 
+    @Test func demoSnapshotsAreTheThreeDemoNas() {
+        // 14 November 2026, 14:05 UTC.
+        let now: Int64 = 1_794_665_100
+        let snapshots = demoSnapshots(now: now)
+        #expect(snapshots.map(\.nas.id) == ["demo-keller", "demo-buero", "demo-homelab"])
+        #expect(snapshots.allSatisfy { $0.demo && $0.observedAt == now })
+        #expect(snapshots == demoSnapshots(now: now))
+    }
+
     @Test func newCoreKnowsNoNas() {
         #expect(NasCore().states().isEmpty)
     }
