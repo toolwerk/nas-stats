@@ -109,9 +109,19 @@ final class MemoryAccountStore: AccountStore {
     }
 }
 
+/// Clock of the store that the tests move on.
+final class TestClock {
+    var now: Int64 = 1_794_665_100
+
+    func advance(minutes: Int64) {
+        now += minutes * 60
+    }
+}
+
 @MainActor
 struct NasStoreTests {
     let defaults: UserDefaults
+    let clock = TestClock()
 
     init() throws {
         defaults = try #require(UserDefaults(suiteName: "nasstats-tests-\(UUID().uuidString)"))
@@ -170,7 +180,8 @@ struct NasStoreTests {
             accounts: NasAccounts(keychain: keychain, core: core),
             defaults: defaults,
             demoSource: { demoSnapshots(now: $0) },
-            pollInterval: nil
+            pollInterval: nil,
+            clock: { [clock] in clock.now }
         )
         await store.start()
         return store
@@ -357,13 +368,16 @@ struct NasStoreTests {
         _ = await started(keychain, core: first)
         #expect(first.calls.refreshed.count == 1)
 
-        // Next launch: a fresh core knows no block, the store does.
+        // Next launch, an hour later: a fresh core knows no block, the
+        // store does, with its reason.
+        clock.advance(minutes: 60)
         let second = FakeCore()
         let store = await started(keychain, core: second)
         #expect(second.calls.refreshed.isEmpty)
         await store.refreshAll()
         #expect(second.calls.refreshed.isEmpty)
         #expect(store.entries.first?.health == .critical)
+        #expect(store.entries.first?.localError == "Fehler")
 
         // A new password lifts it.
         try await store.updatePassword(id: a.account.id, password: "neu")
@@ -373,15 +387,35 @@ struct NasStoreTests {
     @Test func aLaunchWithinFiveMinutesDoesNotQueryAgain() async throws {
         let a = Self.account("Keller")
         let keychain = MemoryAccountStore([a])
-        var recent = Self.state(a, health: .ok)
-        recent.lastAttemptAt = Int64(Date().timeIntervalSince1970)
-        let first = FakeCore(states: [recent])
-        _ = await started(keychain, core: first)
+        _ = await started(keychain, core: FakeCore(states: [Self.state(a, health: .ok)]))
 
+        clock.advance(minutes: 4)
         let second = FakeCore()
         let store = await started(keychain, core: second)
         #expect(second.calls.refreshed.isEmpty)
-        #expect(store.entries.first?.lastAttemptAt == recent.lastAttemptAt)
+        #expect(store.entries.first?.lastAttemptAt == clock.now - 4 * 60)
+
+        // Not before 5 minutes, also not after leaving demo mode.
+        store.demoMode = true
+        store.demoMode = false
+        await store.refreshAll()
+        #expect(second.calls.refreshed.isEmpty)
+        clock.advance(minutes: 1)
+        await store.refreshAll()
+        #expect(second.calls.refreshed == [a.account.id.uuidString])
+    }
+
+    @Test func theTestQueryOfTheDialogCountsAsAQuery() async throws {
+        let core = FakeCore()
+        let store = await started(MemoryAccountStore(), core: core)
+        let new = Self.account("Neu")
+        try await store.add(new, snapshot: Self.snapshot(new.account.id.uuidString, health: .ok))
+        clock.advance(minutes: 4)
+        await store.refreshAll()
+        #expect(core.calls.refreshed.isEmpty)
+        clock.advance(minutes: 1)
+        await store.refreshAll()
+        #expect(core.calls.refreshed == [new.account.id.uuidString])
     }
 
     @Test func storedNasShowBeforeTheFirstQuery() {
@@ -404,6 +438,7 @@ struct NasStoreTests {
         #expect(entry.health == .warning)
 
         core.failRefresh.withLock { $0 = false }
+        clock.advance(minutes: 5)
         await store.refreshAll()
         #expect(store.entries.first?.queryError == nil)
     }
@@ -433,6 +468,7 @@ struct NasStoreTests {
         var reported: [[String]] = []
         store.onUpdate = { reported.append($0.map(\.id)) }
 
+        clock.advance(minutes: 5)
         await store.refreshAll()
         #expect(reported == [[a.account.id.uuidString]])
 

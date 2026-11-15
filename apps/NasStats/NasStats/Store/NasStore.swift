@@ -43,8 +43,8 @@ final class NasStore {
         /// Start of the last query per NAS id, Unix seconds UTC.
         var lastAttempts: [String: Int64] = [:]
         /// NAS the core blocked (refused login, second factor, changed
-        /// certificate); not queried until the user acts.
-        var blocked: Set<String> = []
+        /// certificate) with the reason; not queried until the user acts.
+        var blocked: [String: String] = [:]
     }
 
     /// List, passwords and registration with the core (#14).
@@ -52,6 +52,7 @@ final class NasStore {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let demoSource: (Int64) -> [Snapshot]
     @ObservationIgnored private let pollInterval: Duration?
+    @ObservationIgnored private let clock: () -> Int64
 
     @ObservationIgnored private var queryErrors: [String: String] = [:]
     @ObservationIgnored private var log: QueryLog
@@ -68,8 +69,10 @@ final class NasStore {
         accounts: NasAccounts,
         defaults: UserDefaults,
         demoSource: @escaping (Int64) -> [Snapshot],
-        pollInterval: Duration?
+        pollInterval: Duration?,
+        clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) }
     ) {
+        self.clock = clock
         self.accounts = accounts
         self.defaults = defaults
         self.demoSource = demoSource
@@ -101,19 +104,12 @@ final class NasStore {
 
     // MARK: - Start and queries
 
-    /// Queries the stored NAS, except those blocked or queried less than
-    /// 5 minutes ago in an earlier launch; then every `pollInterval`. Runs
-    /// once, later calls do nothing.
+    /// Queries the stored NAS (see `refreshAll`), then every
+    /// `pollInterval`. Runs once, later calls do nothing.
     func start() async {
         guard !started else { return }
         started = true
-        if !demoMode {
-            let now = Self.now()
-            await query(queryable().filter { id in
-                guard let last = log.lastAttempts[id.uuidString] else { return true }
-                return now < last || now - last >= Self.minInterval
-            })
-        }
+        await refreshAll()
         guard let pollInterval else { return }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -124,9 +120,9 @@ final class NasStore {
         }
     }
 
-    /// Queries every registered NAS in parallel. The core skips a NAS that
-    /// is blocked or was queried less than 5 minutes ago. Does nothing in
-    /// demo mode.
+    /// Queries every registered NAS in parallel, except those blocked or
+    /// queried less than 5 minutes ago, also in an earlier launch or by the
+    /// test query of the add dialog. Does nothing in demo mode.
     func refreshAll() async {
         guard !demoMode else { return }
         await query(queryable())
@@ -143,8 +139,8 @@ final class NasStore {
         let id = stored.account.id.uuidString
         queryErrors[id] = nil
         testSnapshots[id] = snapshot
-        log.blocked.remove(id)
-        log.lastAttempts[id] = Self.now()
+        log.blocked[id] = nil
+        log.lastAttempts[id] = clock()
         saveLog()
         rebuild()
     }
@@ -154,7 +150,7 @@ final class NasStore {
         try await accounts.remove(id: id)
         queryErrors[id.uuidString] = nil
         testSnapshots[id.uuidString] = nil
-        log.blocked.remove(id.uuidString)
+        log.blocked[id.uuidString] = nil
         log.lastAttempts[id.uuidString] = nil
         saveLog()
         rebuild()
@@ -172,7 +168,7 @@ final class NasStore {
             throw error
         }
         queryErrors[id.uuidString] = nil
-        log.blocked.remove(id.uuidString)
+        log.blocked[id.uuidString] = nil
         saveLog()
         rebuild()
         if !demoMode {
@@ -182,15 +178,16 @@ final class NasStore {
 
     // MARK: - Internals
 
-    /// Registered NAS that were not blocked in an earlier launch.
+    /// Registered NAS that are not blocked and were not queried in the
+    /// last 5 minutes.
     private func queryable() -> [UUID] {
-        accounts.accounts
-            .filter { accounts.isRegistered($0.id) && !log.blocked.contains($0.id.uuidString) }
-            .map(\.id)
-    }
-
-    private static func now() -> Int64 {
-        Int64(Date().timeIntervalSince1970)
+        let now = clock()
+        return accounts.accounts.map(\.id).filter { id in
+            let key = id.uuidString
+            guard accounts.isRegistered(id), log.blocked[key] == nil else { return false }
+            guard let last = log.lastAttempts[key] else { return true }
+            return now < last || now - last >= Self.minInterval
+        }
     }
 
     private func saveLog() {
@@ -198,44 +195,48 @@ final class NasStore {
         defaults.set(data, forKey: Self.queryLogKey)
     }
 
+    /// Queries the NAS in parallel. The time of the attempt is saved
+    /// before the request and every answer as soon as it comes, so a quit
+    /// in the middle of a round neither repeats a query nor loses a block.
     private func query(_ ids: [UUID]) async {
         guard !ids.isEmpty else { return }
+        let now = clock()
+        for id in ids {
+            log.lastAttempts[id.uuidString] = now
+        }
+        saveLog()
         let core = accounts.core
-        let results = await withTaskGroup(of: (UUID, String?).self) { group in
+        await withTaskGroup(of: (UUID, NasState?, String?).self) { group in
             for id in ids {
                 group.addTask {
                     do {
-                        _ = try await core.refresh(nasId: id.uuidString)
-                        return (id, nil)
+                        return (id, try await core.refresh(nasId: id.uuidString), nil)
                     } catch {
-                        return (id, connectionErrorText(error))
+                        return (id, nil, connectionErrorText(error))
                     }
                 }
             }
-            var results: [(UUID, String?)] = []
-            for await result in group {
-                results.append(result)
+            for await (id, state, error) in group {
+                record(id, state: state, error: error)
             }
-            return results
         }
+    }
+
+    /// Takes in the answer of one query.
+    private func record(_ id: UUID, state: NasState?, error: String?) {
         // A NAS removed while the query ran stays out.
-        let states = Dictionary(
-            accounts.core.states().map { ($0.nasId, $0) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        for (id, error) in results where accounts.isRegistered(id) {
-            let key = id.uuidString
-            queryErrors[key] = error
-            if let state = states[key] {
-                if let last = state.lastAttemptAt {
-                    log.lastAttempts[key] = last
-                }
-                if state.blocked {
-                    log.blocked.insert(key)
-                }
-                if state.snapshot != nil {
-                    testSnapshots[key] = nil
-                }
+        guard accounts.isRegistered(id) else { return }
+        let key = id.uuidString
+        queryErrors[key] = error
+        if let state {
+            if let last = state.lastAttemptAt {
+                log.lastAttempts[key] = max(last, log.lastAttempts[key] ?? last)
+            }
+            if state.blocked {
+                log.blocked[key] = state.problem?.message ?? "Gesperrt"
+            }
+            if state.snapshot != nil {
+                testSnapshots[key] = nil
             }
         }
         saveLog()
@@ -272,8 +273,10 @@ final class NasStore {
                     problem: state?.problem,
                     lastAttemptAt: state?.lastAttemptAt ?? log.lastAttempts[id],
                     // A block of an earlier launch holds until the user acts.
-                    blocked: (state?.blocked ?? false) || log.blocked.contains(id),
-                    localError: accounts.registrationErrors[account.id],
+                    blocked: (state?.blocked ?? false) || log.blocked[id] != nil,
+                    // After a restart the reason of a block comes from the log.
+                    localError: accounts.registrationErrors[account.id]
+                        ?? (state?.problem == nil ? log.blocked[id] : nil),
                     queryError: queryErrors[id]
                 )
             }
