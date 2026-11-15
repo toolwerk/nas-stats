@@ -79,4 +79,55 @@ struct StatusFormatTests {
         #expect(age(47 * 3600) == "vor 47 h")
         #expect(age(72 * 3600) == "vor 3 Tagen")
     }
+
+    @Test func uptime() {
+        #expect(StatusFormat.uptime(nil) == "n/a")
+        #expect(StatusFormat.uptime(45 * 60) == "45 min")
+        #expect(StatusFormat.uptime(30 * 3600) == "30 h")
+        #expect(StatusFormat.uptime(47 * 3600 + 3599) == "47 h")
+        #expect(StatusFormat.uptime(38 * 86400) == "38 Tage")
+    }
+
+    @Test func hours() {
+        #expect(StatusFormat.hours(21_412, locale: de) == "21.412 h")
+        #expect(StatusFormat.hours(312, locale: de) == "312 h")
+        #expect(StatusFormat.hours(nil, locale: de) == "n/a")
+    }
+
+    @Test func runtime() {
+        #expect(StatusFormat.runtime(34 * 60) == "34 min")
+        #expect(StatusFormat.runtime(65 * 60) == "1 h 05 min")
+        #expect(StatusFormat.runtime(130 * 60) == "2 h 10 min")
+        #expect(StatusFormat.runtime(nil) == "n/a")
+    }
+
+    @Test func bytes() {
+        #expect(StatusFormat.bytes(8_000_000_000, locale: de) == "7,5 GB")
+        #expect(StatusFormat.bytes(8 * 1024 * 1024 * 1024, locale: de) == "8 GB")
+        #expect(StatusFormat.bytes(512, locale: de) == "512 B")
+        #expect(StatusFormat.bytes(nil, locale: de) == "n/a")
+    }
+
+    @Test func throughput() {
+        #expect(StatusFormat.throughput(rx: 4_200_000, tx: 300_000, locale: de) == "↓ 4,2 · ↑ 0,3 MB/s")
+        #expect(StatusFormat.throughput(rx: nil, tx: 300_000, locale: de) == "↓ n/a · ↑ 0,3 MB/s")
+        #expect(StatusFormat.throughput(rx: nil, tx: nil, locale: de) == "n/a")
+    }
+
+    @Test func nextRun() {
+        // 2026-11-14 14:05 UTC
+        let now = Date(timeIntervalSince1970: 1_794_665_100)
+        func next(_ seconds: Double) -> String {
+            StatusFormat.nextRun(now.addingTimeInterval(seconds), now: now, locale: de, timeZone: utc)
+        }
+        #expect(next(11 * 3600 + 55 * 60) == "02:00")
+        #expect(next(55 * 60) == "15:00")
+        #expect(next(3 * 86400) == "17. Nov., 14:05")
+        #expect(StatusFormat.nextRun(nil, now: now, locale: de, timeZone: utc) == "n/a")
+    }
+
+    @Test func observed() {
+        let date = Date(timeIntervalSince1970: 1_794_665_100)
+        #expect(StatusFormat.observed(date, locale: de, timeZone: utc) == "Stand 14:05")
+    }
 }
