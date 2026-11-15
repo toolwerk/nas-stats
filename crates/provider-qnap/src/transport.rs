@@ -20,6 +20,13 @@ pub trait Transport: Send + Sync {
         path: &'a str,
         form: &'a [(&'a str, &'a str)],
     ) -> BoxFuture<'a, Result<String, ProviderError>>;
+
+    /// `POST <base><path>` with a JSON body, sent unchanged.
+    fn post_json_text<'a>(
+        &'a self,
+        path: &'a str,
+        body: &'a str,
+    ) -> BoxFuture<'a, Result<String, ProviderError>>;
 }
 
 impl Transport for NasClient {
@@ -37,5 +44,13 @@ impl Transport for NasClient {
         form: &'a [(&'a str, &'a str)],
     ) -> BoxFuture<'a, Result<String, ProviderError>> {
         Box::pin(NasClient::post_form_text(self, path, form))
+    }
+
+    fn post_json_text<'a>(
+        &'a self,
+        path: &'a str,
+        body: &'a str,
+    ) -> BoxFuture<'a, Result<String, ProviderError>> {
+        Box::pin(NasClient::post_json_text(self, path, body))
     }
 }
