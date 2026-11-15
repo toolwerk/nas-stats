@@ -2,8 +2,8 @@
 #![allow(clippy::unwrap_used)]
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use nas_http::{Fingerprint, NasClient, ProviderError, first_contact};
@@ -17,6 +17,8 @@ use tokio_rustls::TlsAcceptor;
 #[derive(Clone, Copy)]
 enum Answer {
     Status(u16),
+    /// 200 with `Set-Cookie: CSID=abc`.
+    Cookie,
     Never,
 }
 
@@ -24,6 +26,8 @@ struct Server {
     addr: SocketAddr,
     cert: CertificateDer<'static>,
     requests: Arc<AtomicUsize>,
+    /// Request line and headers of every request, in arrival order.
+    heads: Arc<Mutex<Vec<String>>>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -38,6 +42,10 @@ impl Server {
 
     fn requests(&self) -> usize {
         self.requests.load(Ordering::SeqCst)
+    }
+
+    fn heads(&self) -> Vec<String> {
+        self.heads.lock().unwrap().clone()
     }
 
     /// Stops accepting; the port is closed afterwards.
@@ -65,6 +73,8 @@ async fn server(answer: Answer) -> Server {
     let addr = listener.local_addr().unwrap();
     let requests = Arc::new(AtomicUsize::new(0));
     let counter = requests.clone();
+    let heads = Arc::new(Mutex::new(Vec::new()));
+    let seen = heads.clone();
     let task = tokio::spawn(async move {
         loop {
             let Ok((tcp, _)) = listener.accept().await else {
@@ -72,6 +82,7 @@ async fn server(answer: Answer) -> Server {
             };
             let acceptor = acceptor.clone();
             let counter = counter.clone();
+            let seen = seen.clone();
             tokio::spawn(async move {
                 let Ok(mut tls) = acceptor.accept(tcp).await else {
                     return;
@@ -84,13 +95,21 @@ async fn server(answer: Answer) -> Server {
                         Ok(n) => head.extend_from_slice(&buf[..n]),
                     }
                 }
+                let end = head.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(0);
+                seen.lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&head[..end]).into_owned());
                 counter.fetch_add(1, Ordering::SeqCst);
                 match answer {
                     Answer::Never => tokio::time::sleep(Duration::from_secs(30)).await,
-                    Answer::Status(code) => {
+                    Answer::Status(_) | Answer::Cookie => {
+                        let (code, cookie) = match answer {
+                            Answer::Status(code) => (code, ""),
+                            _ => (200, "Set-Cookie: CSID=abc; Path=/\r\n"),
+                        };
                         let body = "hallo";
                         let response = format!(
-                            "HTTP/1.1 {code} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            "HTTP/1.1 {code} X\r\n{cookie}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                             body.len()
                         );
                         let _ = tls.write_all(response.as_bytes()).await;
@@ -104,8 +123,17 @@ async fn server(answer: Answer) -> Server {
         addr,
         cert,
         requests,
+        heads,
         task,
     }
+}
+
+/// Value of header `name` in a request head, case-insensitive name.
+fn header<'a>(head: &'a str, name: &str) -> Option<&'a str> {
+    head.lines().skip(1).find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
+    })
 }
 
 #[tokio::test]
@@ -258,4 +286,35 @@ async fn later_unrelated_error_is_not_certificate_changed() {
     server.stop().await;
     let err = client.get_text("", &[]).await.unwrap_err();
     assert!(matches!(err, ProviderError::Unreachable(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn cookies_are_kept_and_json_is_posted_as_json() {
+    let server = server(Answer::Cookie).await;
+    let client = NasClient::new(&server.url(), server.fingerprint()).unwrap();
+    let body = client
+        .post_json_text("/container-station/api/v1/login", r#"{"username":"u"}"#)
+        .await
+        .unwrap();
+    assert_eq!(body, "hallo");
+    client
+        .get_text("/container-station/api/v1/container", &[])
+        .await
+        .unwrap();
+    let heads = server.heads();
+    assert_eq!(heads.len(), 2);
+    assert!(
+        heads[0].starts_with("POST /container-station/api/v1/login "),
+        "{}",
+        heads[0]
+    );
+    assert_eq!(header(&heads[0], "content-type"), Some("application/json"));
+    assert_eq!(header(&heads[0], "content-length"), Some("16"));
+    assert_eq!(header(&heads[0], "cookie"), None);
+    assert!(
+        heads[1].starts_with("GET /container-station/api/v1/container "),
+        "{}",
+        heads[1]
+    );
+    assert_eq!(header(&heads[1], "cookie"), Some("CSID=abc"));
 }

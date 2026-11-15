@@ -59,6 +59,9 @@ impl NasClient {
             .timeout(total)
             .connect_timeout(connect)
             .user_agent(USER_AGENT)
+            // Cookies stay with this client, so with this one NAS. The
+            // Container Station keeps its session in a cookie.
+            .cookie_store(true)
             .build()
             .map_err(|e| ProviderError::Parse(format!("HTTP-Client: {}", chain(&e))))?;
         Ok(Self {
@@ -92,6 +95,19 @@ impl NasClient {
     ) -> Result<String, ProviderError> {
         let url = self.url(path)?;
         self.send(self.http.post(url).form(form)).await
+    }
+
+    /// `POST <base><path>` with `body` as JSON (`Content-Type:
+    /// application/json`, sent unchanged), body of the answer as text.
+    pub async fn post_json_text(&self, path: &str, body: &str) -> Result<String, ProviderError> {
+        let url = self.url(path)?;
+        self.send(
+            self.http
+                .post(url)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(body.to_owned()),
+        )
+        .await
     }
 
     /// `path` relative to the base URL; it may not lead to another origin.

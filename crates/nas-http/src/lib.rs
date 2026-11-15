@@ -18,6 +18,7 @@
 //!   host name: the user confirmed this one certificate.
 //! - Every request has a time limit ([`TIMEOUT`], connect
 //!   [`CONNECT_TIMEOUT`]), goes out exactly once and follows no redirects.
+//! - Each [`NasClient`] keeps the cookies its NAS sets, in memory only.
 //!
 //! The crate is async; the tokio runtime comes with the FFI crate.
 
