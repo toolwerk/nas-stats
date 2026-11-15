@@ -87,6 +87,17 @@ pub(crate) fn parse_bandwidth(body: &str) -> Vec<NetInterface> {
                     .map(|i| format!("{kind}{i}"))
                     .collect::<Vec<_>>()
             })
+            // A broken list may repeat an index or be huge: each key once,
+            // and no more keys than interfaces are kept.
+            .scan(Vec::new(), |seen: &mut Vec<String>, key| {
+                if seen.contains(&key) {
+                    return Some(None);
+                }
+                seen.push(key.clone());
+                Some(Some(key))
+            })
+            .flatten()
+            .take(MAX_INTERFACES)
             .filter_map(|key| child(info, &key).map(|node| (node, Some(key))))
             .collect()
     } else {
@@ -159,6 +170,12 @@ mod tests {
     fn an_item_without_any_name_is_left_out() {
         let body = info("<item><rx>1</rx></item>");
         assert!(parse_bandwidth(&body).is_empty());
+    }
+
+    #[test]
+    fn a_repeated_index_gives_one_interface() {
+        let body = info("<eth_index_list>0,0,0</eth_index_list><eth0><rx>5</rx></eth0>");
+        assert_eq!(parse_bandwidth(&body).len(), 1);
     }
 
     #[test]
