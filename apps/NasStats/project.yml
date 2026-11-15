@@ -176,6 +176,23 @@ targets:
     info:
       path: Widgets/Info-macOS.plist
       properties: *widgetInfo
+  # Swift test of the bindings: calls the Rust core and decodes every
+  # record. No host app, so it runs without signing on the runner.
+  NasStatsMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+      - path: Generated/stats_ffi.swift
+        optional: true
+    dependencies:
+      - target: StatsFFI
+      - framework: Generated/StatsFFI.xcframework
+        embed: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: net.staude.nasstats.tests
+        GENERATE_INFOPLIST_FILE: YES
 aggregateTargets:
   # Runs scripts/build-ffi.sh before either app target, as a target of its
   # own: a script phase inside the app target cannot produce the framework
@@ -208,5 +225,9 @@ schemes:
         NasStatsMac: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets:
+        - NasStatsMacTests
     archive:
       config: Release
