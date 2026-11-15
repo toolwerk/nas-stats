@@ -183,6 +183,9 @@ targets:
     platform: macOS
     sources:
       - path: Tests
+      # Accounts code without UI; the tests do not touch the keychain.
+      - path: NasStats/Accounts
+      - path: Shared/AppGroup.swift
       - path: Generated/stats_ffi.swift
         optional: true
     dependencies:
