@@ -63,7 +63,7 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(verbatim: entry.displayName)
                                 .font(.headline)
-                            Text(verbatim: entry.snapshot?.nas.model ?? entry.baseUrl)
+                            Text(verbatim: "\(entry.displayModel ?? String(localized: "Modell unbekannt")) · \(entry.baseUrl)")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }

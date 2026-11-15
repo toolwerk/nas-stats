@@ -31,6 +31,8 @@ struct NasEntry: Identifiable, Sendable {
     var name: String?
     /// `https://host[:port]`.
     var baseUrl: String
+    /// Model from the test query when the NAS was added.
+    var model: String?
     /// Last successful snapshot; it stays after an error.
     var snapshot: Snapshot?
     /// Error of the last query.
@@ -44,6 +46,9 @@ struct NasEntry: Identifiable, Sendable {
     var localError: String?
     /// Error thrown by the last query (not a `problem` of the NAS).
     var queryError: String?
+
+    /// Model of the last snapshot, else of the test query.
+    var displayModel: String? { snapshot?.nas.model ?? model }
 
     /// Time of the last snapshot, Unix seconds UTC.
     var observedAt: Int64? { snapshot?.observedAt }

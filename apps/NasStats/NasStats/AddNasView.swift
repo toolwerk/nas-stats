@@ -261,7 +261,11 @@ struct AddNasView: View {
                     : typedName
                 account.model = snapshot.nas.model
                 guard attempt == started else { return }
-                try await store.add(StoredAccount(account: account, password: password))
+                // The test query counts as the first query of the NAS.
+                try await store.add(
+                    StoredAccount(account: account, password: password), snapshot: snapshot
+                )
+                guard attempt == started else { return }
                 close()
             } catch {
                 switch error as? FfiError {
@@ -291,5 +295,5 @@ struct AddNasView: View {
 
 #Preview {
     AddNasView()
-        .environment(NasAccounts())
+        .environment(NasStore.live())
 }

@@ -70,11 +70,11 @@ final class NasAccounts {
     /// keychain entry cannot be removed; the NAS stays then.
     func remove(id: UUID) async throws {
         try keychain.delete(id: id)
+        accounts.removeAll { $0.id == id }
+        registrationErrors[id] = nil
         // The core only throws `UnknownNas` (not registered) or an internal
         // error; the NAS is gone from the keychain either way.
         try? await core.removeNas(nasId: id.uuidString)
-        accounts.removeAll { $0.id == id }
-        registrationErrors[id] = nil
     }
 
     /// New password for a stored NAS, e.g. after a refused login: lifts a
@@ -85,7 +85,9 @@ final class NasAccounts {
             throw FfiError.UnknownNas(id: id.uuidString)
         }
         let config = try Self.config(of: account)
-        let old = try? keychain.loadAll().first { $0.account.id == id }
+        // A keychain that cannot be read stops here, so a failure below
+        // never deletes an entry it could not see.
+        let old = try keychain.loadAll().first { $0.account.id == id }
         try keychain.save(StoredAccount(account: account, password: password))
         do {
             if isRegistered(id) {

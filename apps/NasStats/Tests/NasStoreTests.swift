@@ -258,11 +258,13 @@ struct NasStoreTests {
         let new = Self.account("Neu")
         let id = new.account.id
 
-        try await store.add(new)
+        // The test query of the dialog counts as the first query.
+        try await store.add(new, snapshot: Self.snapshot(id.uuidString, health: .warning))
         #expect(keychain.password(of: id) == "demo")
         #expect(core.calls.added == [id.uuidString])
-        #expect(core.calls.refreshed == [id.uuidString])
+        #expect(core.calls.refreshed.isEmpty)
         #expect(store.entries.map(\.displayName) == ["Neu"])
+        #expect(store.entries.first?.health == .warning)
 
         try await store.remove(id: id)
         #expect(keychain.password(of: id) == nil)
@@ -344,6 +346,52 @@ struct NasStoreTests {
         }
         #expect(store.entries.first?.localError == "Ungültige Angabe: kaputt")
         #expect(keychain.password(of: a.account.id) == "demo")
+    }
+
+    @Test func aBlockHoldsAcrossLaunches() async throws {
+        let a = Self.account("Keller")
+        let keychain = MemoryAccountStore([a])
+        let first = FakeCore(states: [
+            Self.state(a, health: nil, problem: Self.problem(.loginFailed, stops: true), blocked: true),
+        ])
+        _ = await started(keychain, core: first)
+        #expect(first.calls.refreshed.count == 1)
+
+        // Next launch: a fresh core knows no block, the store does.
+        let second = FakeCore()
+        let store = await started(keychain, core: second)
+        #expect(second.calls.refreshed.isEmpty)
+        await store.refreshAll()
+        #expect(second.calls.refreshed.isEmpty)
+        #expect(store.entries.first?.health == .critical)
+
+        // A new password lifts it.
+        try await store.updatePassword(id: a.account.id, password: "neu")
+        #expect(second.calls.refreshed == [a.account.id.uuidString])
+    }
+
+    @Test func aLaunchWithinFiveMinutesDoesNotQueryAgain() async throws {
+        let a = Self.account("Keller")
+        let keychain = MemoryAccountStore([a])
+        var recent = Self.state(a, health: .ok)
+        recent.lastAttemptAt = Int64(Date().timeIntervalSince1970)
+        let first = FakeCore(states: [recent])
+        _ = await started(keychain, core: first)
+
+        let second = FakeCore()
+        let store = await started(keychain, core: second)
+        #expect(second.calls.refreshed.isEmpty)
+        #expect(store.entries.first?.lastAttemptAt == recent.lastAttemptAt)
+    }
+
+    @Test func storedNasShowBeforeTheFirstQuery() {
+        let store = NasStore(
+            accounts: NasAccounts(keychain: MemoryAccountStore([Self.account("Keller")]), core: FakeCore()),
+            defaults: defaults,
+            demoSource: { _ in [] },
+            pollInterval: nil
+        )
+        #expect(store.entries.map(\.displayName) == ["Keller"])
     }
 
     @Test func thrownQueryIsAWarningNotCritical() async throws {
