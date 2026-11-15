@@ -14,6 +14,7 @@
 //! again or changes the credentials, a missing Container Station for
 //! [`CONTAINER_RECHECK`].
 
+use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
 
 use nas_model::{Container, ProviderError};
@@ -42,6 +43,23 @@ pub(crate) enum CsState {
     NotInstalled(SystemTime),
 }
 
+/// The remembered state and the account generation it belongs to (see
+/// `QnapClient::cs_generation`).
+#[derive(Debug)]
+pub(crate) struct CsSlot {
+    pub(crate) state: CsState,
+    pub(crate) generation: u64,
+}
+
+impl Default for CsSlot {
+    fn default() -> Self {
+        Self {
+            state: CsState::Unknown,
+            generation: 0,
+        }
+    }
+}
+
 /// Outcome of one request to the Container Station.
 enum Step<B> {
     Done(B),
@@ -59,8 +77,27 @@ impl<T: Transport> QnapClient<T> {
     /// and returns that error. Timeout, network and other HTTP errors are
     /// returned and change nothing that is remembered.
     pub async fn containers(&self) -> Result<Vec<Container>, ProviderError> {
-        // Held for the whole call: two polls must not log in twice.
-        let mut cs = self.container_station.lock().await;
+        // Held for the whole call: two polls must not log in twice. The
+        // user actions never wait for it; they only raise the generation.
+        let mut slot = self.container_station.lock().await;
+        let generation = self.cs_generation.load(Ordering::SeqCst);
+        if slot.generation != generation {
+            *slot = CsSlot {
+                state: CsState::Unknown,
+                generation,
+            };
+        }
+        let mut cs = slot.state;
+        let result = self.read_containers(&mut cs).await;
+        // The account changed meanwhile: what this call learned is not
+        // kept, the next call starts from `Unknown`.
+        if self.cs_generation.load(Ordering::SeqCst) == generation {
+            slot.state = cs;
+        }
+        result
+    }
+
+    async fn read_containers(&self, cs: &mut CsState) -> Result<Vec<Container>, ProviderError> {
         let (user, password) = self.credentials().await?;
         match *cs {
             CsState::NoAccess => return Ok(Vec::new()),
@@ -73,22 +110,22 @@ impl<T: Transport> QnapClient<T> {
             }
             CsState::Session => {}
             CsState::Unknown | CsState::NotInstalled(_) => {
-                if let Step::Empty = self.cs_login(&mut cs, &user, &password).await? {
+                if let Step::Empty = self.cs_login(cs, &user, &password).await? {
                     return Ok(Vec::new());
                 }
             }
         }
-        if let Step::Done(list) = self.cs_list(&mut cs, false).await? {
+        if let Step::Done(list) = self.cs_list(cs, false).await? {
             return Ok(list);
         }
         if *cs != CsState::Unknown {
             return Ok(Vec::new());
         }
         // The session is gone: exactly one new login.
-        if let Step::Empty = self.cs_login(&mut cs, &user, &password).await? {
+        if let Step::Empty = self.cs_login(cs, &user, &password).await? {
             return Ok(Vec::new());
         }
-        match self.cs_list(&mut cs, true).await? {
+        match self.cs_list(cs, true).await? {
             Step::Done(list) => Ok(list),
             Step::Empty => Ok(Vec::new()),
         }

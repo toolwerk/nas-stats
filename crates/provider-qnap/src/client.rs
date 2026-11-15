@@ -1,12 +1,13 @@
 //! Session handling against `authLogin.cgi`.
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use nas_model::ProviderError;
 use tokio::sync::Mutex;
 
 use crate::auth::{LoginAnswer, encode_password, parse_login};
-use crate::containers::CsState;
+use crate::containers::CsSlot;
 use crate::system::FirmwareCache;
 use crate::transport::Transport;
 use crate::xml::{parse_qdoc, root_text};
@@ -34,8 +35,11 @@ pub struct QnapClient<T: Transport> {
     /// Last answer of the firmware update request (see `system.rs`).
     pub(crate) firmware_cache: FirmwareCache,
     /// Login state of the Container Station (see `containers.rs`). Never
-    /// locked while `state` is held.
-    pub(crate) container_station: Mutex<CsState>,
+    /// locked while `state` is held, and never awaited by user actions.
+    pub(crate) container_station: Mutex<CsSlot>,
+    /// Grows with every user action that changes the account; a remembered
+    /// Container Station state of an older generation is void.
+    pub(crate) cs_generation: AtomicU64,
 }
 
 impl<T: Transport> fmt::Debug for QnapClient<T> {
@@ -58,7 +62,8 @@ impl<T: Transport> QnapClient<T> {
                 closed: false,
             }),
             firmware_cache: FirmwareCache::default(),
-            container_station: Mutex::new(CsState::Unknown),
+            container_station: Mutex::new(CsSlot::default()),
+            cs_generation: AtomicU64::new(0),
         }
     }
 
@@ -111,7 +116,7 @@ impl<T: Transport> QnapClient<T> {
             self.forget_firmware();
             self.login_locked(&mut state).await.map(|_| ())
         };
-        self.forget_container_station().await;
+        self.forget_container_station();
         result
     }
 
@@ -127,13 +132,13 @@ impl<T: Transport> QnapClient<T> {
             state.closed = false;
             self.forget_firmware();
         }
-        self.forget_container_station().await;
+        self.forget_container_station();
     }
 
-    /// The Container Station logs in again on its next request. Waits for
-    /// a running container request, so its outcome cannot overwrite this.
-    async fn forget_container_station(&self) {
-        *self.container_station.lock().await = CsState::Unknown;
+    /// The Container Station logs in again on its next request. Does not
+    /// wait for a running container request; that one keeps nothing.
+    fn forget_container_station(&self) {
+        self.cs_generation.fetch_add(1, Ordering::SeqCst);
     }
 
     /// User name and password for the Container Station login. While QTS
@@ -173,7 +178,7 @@ impl<T: Transport> QnapClient<T> {
             state.closed = true;
             state.sid.take()
         };
-        self.forget_container_station().await;
+        self.forget_container_station();
         let Some(sid) = sid else {
             return Ok(());
         };

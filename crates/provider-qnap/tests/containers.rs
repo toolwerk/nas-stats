@@ -204,3 +204,36 @@ async fn a_login_with_is_admin_and_a_zero_code_is_a_session() {
     let client = QnapClient::new(&fake, "admin", "secret");
     assert_eq!(client.containers().await.expect("containers").len(), 6);
 }
+
+#[tokio::test]
+async fn new_credentials_do_not_wait_for_a_running_request() {
+    let fake = FakeTransport::slow(vec![Ok(CS_LOGIN_USER), Ok(CS_LOGIN), Ok(CS_CONTAINERS)]);
+    let client = QnapClient::new(&fake, "user", "secret");
+    let done = std::sync::Mutex::new(Vec::new());
+    let (first, ()) = tokio::join!(
+        async {
+            let result = client.containers().await;
+            done.lock().expect("done").push("containers");
+            result
+        },
+        async {
+            client.set_credentials("admin", "secret").await;
+            done.lock().expect("done").push("set_credentials");
+        },
+    );
+    // The user action returned while the login was still on its way.
+    assert_eq!(
+        *done.lock().expect("done"),
+        vec!["set_credentials", "containers"]
+    );
+    assert_eq!(first, Ok(Vec::new()));
+    // The answer for the old account is not kept: the next poll logs in
+    // with the new one instead of staying without access.
+    assert_eq!(client.containers().await.expect("containers").len(), 6);
+    let logins: Vec<_> = calls(&fake)
+        .into_iter()
+        .filter(|c| c.path == CS_LOGIN_PATH)
+        .collect();
+    assert_eq!(logins.len(), 2);
+    assert!(logins[1].params[0].1.contains(r#""username":"admin""#));
+}
