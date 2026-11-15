@@ -6,7 +6,11 @@ import SwiftUI
 struct AddNasView: View {
     @Environment(NasStore.self) private var store
     #if os(macOS)
-    @Environment(\.dismissWindow) private var dismissWindow
+    /// Closes the window; set by `StatusItemController`.
+    var onClose: () -> Void = {}
+    /// False once the window is closed; a test query still running then
+    /// saves nothing (the view state may be gone with the window).
+    var isOpen: () -> Bool = { true }
     #else
     @Environment(\.dismiss) private var dismiss
     #endif
@@ -260,12 +264,12 @@ struct AddNasView: View {
                     ? hostname ?? NasAddress.host(of: baseUrl) ?? baseUrl
                     : typedName
                 account.model = snapshot.nas.model
-                guard attempt == started else { return }
+                guard attempt == started, stillOpen else { return }
                 // The test query counts as the first query of the NAS.
                 try await store.add(
                     StoredAccount(account: account, password: password), snapshot: snapshot
                 )
-                guard attempt == started else { return }
+                guard attempt == started, stillOpen else { return }
                 close()
             } catch {
                 switch error as? FfiError {
@@ -284,9 +288,18 @@ struct AddNasView: View {
         }
     }
 
+    /// The dialog is still shown; always true on iOS.
+    private var stillOpen: Bool {
+        #if os(macOS)
+        isOpen()
+        #else
+        true
+        #endif
+    }
+
     private func close() {
         #if os(macOS)
-        dismissWindow(id: "add-nas")
+        onClose()
         #else
         dismiss()
         #endif
