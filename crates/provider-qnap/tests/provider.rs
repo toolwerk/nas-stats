@@ -2,8 +2,8 @@
 
 mod common;
 
-use common::{FakeTransport, logins};
-use nas_model::{Alert, AlertLevel, Health, Provider, ProviderError, ProviderKind};
+use common::{FakeTransport, calls, logins};
+use nas_model::{Alert, AlertLevel, Health, NetInterface, Provider, ProviderError, ProviderKind};
 use provider_qnap::{QnapClient, QnapProvider};
 
 const LOGIN_OK: &str = include_str!("fixtures/login.xml");
@@ -11,16 +11,26 @@ const LOGIN_WRONG: &str = include_str!("fixtures/login_wrong_password.xml");
 const SYSINFO: &str = include_str!("fixtures/sysinfo.xml");
 const HEALTH_WARNING: &str = include_str!("fixtures/syshealth.xml");
 const FIRMWARE_NONE: &str = include_str!("fixtures/firmware.xml");
+const USAGE: &str = include_str!("fixtures/disk_usage.xml");
+const SMART: &str = include_str!("fixtures/qsmart.xml");
+const BANDWIDTH: &str = include_str!("fixtures/bandwidth.xml");
+const CS_LOGIN: &str = include_str!("fixtures/cs_login.json");
+const CS_CONTAINERS: &str = include_str!("fixtures/cs_container.json");
 
 const BASE_URL: &str = "https://nas.example:443";
 
 #[tokio::test]
-async fn snapshot_holds_nas_system_fans_and_alerts() {
+async fn snapshot_holds_every_part() {
     let fake = FakeTransport::new(vec![
         Ok(LOGIN_OK),
         Ok(SYSINFO),
         Ok(HEALTH_WARNING),
         Ok(FIRMWARE_NONE),
+        Ok(USAGE),
+        Ok(SMART),
+        Ok(BANDWIDTH),
+        Ok(CS_LOGIN),
+        Ok(CS_CONTAINERS),
     ]);
     let provider = QnapProvider::new("nas-1", BASE_URL, QnapClient::new(&fake, "admin", "secret"));
     assert_eq!(provider.kind(), ProviderKind::Qnap);
@@ -57,12 +67,77 @@ async fn snapshot_holds_nas_system_fans_and_alerts() {
         }]
     );
     assert_eq!(snapshot.ups, None);
+    assert_eq!(snapshot.volumes.len(), 3);
+    assert_eq!(snapshot.disks.len(), 9);
+    assert_eq!(
+        snapshot.interfaces,
+        vec![NetInterface {
+            name: "Adapter 1".into(),
+            rx_bytes_per_sec: Some(16_746.0 / 5.0),
+            tx_bytes_per_sec: Some(31_895.0 / 5.0),
+        }]
+    );
+    assert_eq!(snapshot.containers.len(), 6);
+    assert!(snapshot.backups.is_empty());
+    assert_eq!(snapshot.worst_health(), Some(Health::Warning));
+
+    // One request after the other, in a fixed order, nothing else.
+    let paths: Vec<String> = calls(&fake).into_iter().map(|c| c.path).collect();
+    assert_eq!(
+        paths,
+        vec![
+            "/cgi-bin/authLogin.cgi",
+            "/cgi-bin/management/manaRequest.cgi",
+            "/cgi-bin/management/manaRequest.cgi",
+            "/cgi-bin/sys/sysRequest.cgi",
+            "/cgi-bin/management/chartReq.cgi",
+            "/cgi-bin/disk/qsmart.cgi",
+            "/cgi-bin/management/chartReq.cgi",
+            "/container-station/api/v1/login",
+            "/container-station/api/v1/container",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_http_error_of_storage_leaves_only_storage_empty() {
+    let fake = FakeTransport::new(vec![
+        Ok(LOGIN_OK),
+        Ok(SYSINFO),
+        Ok(HEALTH_WARNING),
+        Ok(FIRMWARE_NONE),
+        Err(ProviderError::Http(500)),
+        Ok(BANDWIDTH),
+        Ok(CS_LOGIN),
+        Ok(CS_CONTAINERS),
+    ]);
+    let provider = QnapProvider::new("nas-1", BASE_URL, QnapClient::new(&fake, "admin", "secret"));
+    let snapshot = provider.snapshot().await.expect("snapshot");
+
     assert!(snapshot.volumes.is_empty());
     assert!(snapshot.disks.is_empty());
-    assert!(snapshot.backups.is_empty());
-    assert!(snapshot.containers.is_empty());
-    assert!(snapshot.interfaces.is_empty());
-    assert_eq!(snapshot.worst_health(), Some(Health::Warning));
+    assert_eq!(snapshot.interfaces.len(), 1);
+    assert_eq!(snapshot.containers.len(), 6);
+}
+
+#[tokio::test]
+async fn a_timeout_of_the_network_fails_the_snapshot() {
+    let fake = FakeTransport::new(vec![
+        Ok(LOGIN_OK),
+        Ok(SYSINFO),
+        Ok(HEALTH_WARNING),
+        Ok(FIRMWARE_NONE),
+        Ok(USAGE),
+        Ok(SMART),
+        Err(ProviderError::Timeout),
+    ]);
+    let provider = QnapProvider::new("nas-1", BASE_URL, QnapClient::new(&fake, "admin", "secret"));
+    assert_eq!(
+        provider.snapshot().await.expect_err("timeout"),
+        ProviderError::Timeout
+    );
+    // No request to the Container Station after the failure.
+    assert_eq!(calls(&fake).len(), 7);
 }
 
 #[tokio::test]
