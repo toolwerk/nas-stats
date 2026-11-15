@@ -62,7 +62,16 @@ pub fn core_version() -> String {
 /// the user to confirm.
 #[uniffi::export]
 pub async fn fetch_fingerprint(base_url: String) -> Result<String, FfiError> {
-    on_core(async move { Ok(nas_http::first_contact(&base_url).await?.to_string()) }).await
+    on_core(async move {
+        match nas_http::first_contact(&base_url).await {
+            Ok(fingerprint) => Ok(fingerprint.to_string()),
+            // Before any connection only the address can be wrong, as for
+            // `NasCore::add_nas`.
+            Err(nas_model::ProviderError::Parse(detail)) => Err(FfiError::InvalidInput { detail }),
+            Err(e) => Err(e.into()),
+        }
+    })
+    .await
 }
 
 /// A fully filled snapshot of an invented NAS, with `demo` set.
@@ -121,7 +130,7 @@ mod tests {
     async fn fetch_fingerprint_refuses_http() {
         assert!(matches!(
             fetch_fingerprint("http://nas.example".into()).await,
-            Err(FfiError::Parse { .. })
+            Err(FfiError::InvalidInput { .. })
         ));
     }
 }
