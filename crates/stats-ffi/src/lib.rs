@@ -62,16 +62,17 @@ pub fn core_version() -> String {
 /// the user to confirm.
 #[uniffi::export]
 pub async fn fetch_fingerprint(base_url: String) -> Result<String, FfiError> {
-    on_core(async move {
-        match nas_http::first_contact(&base_url).await {
-            Ok(fingerprint) => Ok(fingerprint.to_string()),
-            // Before any connection only the address can be wrong, as for
-            // `NasCore::add_nas`.
-            Err(nas_model::ProviderError::Parse(detail)) => Err(FfiError::InvalidInput { detail }),
-            Err(e) => Err(e.into()),
-        }
-    })
-    .await
+    // The address is checked as for `NasCore::add_nas`, so a bad one is
+    // `InvalidInput` here too. The pin is a placeholder and never used.
+    {
+        let _runtime = runtime().enter();
+        nas_http::NasClient::new(&base_url, nas_http::Fingerprint::of_der(&[])).map_err(|e| {
+            FfiError::InvalidInput {
+                detail: e.to_string(),
+            }
+        })?;
+    }
+    on_core(async move { Ok(nas_http::first_contact(&base_url).await?.to_string()) }).await
 }
 
 /// A fully filled snapshot of an invented NAS, with `demo` set.
