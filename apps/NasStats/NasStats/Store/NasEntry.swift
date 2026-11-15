@@ -73,6 +73,22 @@ struct NasEntry: Identifiable, Sendable {
         return problem == nil && queryError == nil ? base : min(base, .warning)
     }
 
+    /// State for the status dot of the detail screen (#18): a NAS that did
+    /// not answer (unreachable, timeout) is offline, else as `health`.
+    var statusLevel: StatusLevel {
+        switch problem?.kind {
+        case .unreachable, .timeout:
+            return .offline
+        default:
+            switch health {
+            case .critical: return .critical
+            case .warning: return .warning
+            case .ok: return .ok
+            case .unknown: return .unknown
+            }
+        }
+    }
+
     /// Worst first, then by name, then by id.
     static func ordered(_ lhs: Self, _ rhs: Self) -> Bool {
         if lhs.health != rhs.health {

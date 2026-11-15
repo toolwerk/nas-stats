@@ -187,6 +187,8 @@ targets:
       # tests do not touch the keychain.
       - path: NasStats/Accounts
       - path: NasStats/Store
+      # Detail screen (#18): its content model is tested, the view compiles along.
+      - path: NasStats/Detail
       - path: Shared
       - path: Generated/stats_ffi.swift
         optional: true
