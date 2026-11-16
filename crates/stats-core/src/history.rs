@@ -507,6 +507,18 @@ impl HistoryStore {
         Ok(events)
     }
 
+    /// Ends an open „unreachable“ event of a NAS at `at`, when a snapshot
+    /// read at `at` by another device (#37) shows the NAS answered; one
+    /// started after `at` stays. `true` when one ended.
+    pub fn close_unreachable(&mut self, nas_id: &str, at: i64) -> Result<bool> {
+        let changed = self.conn.execute(
+            "UPDATE events SET ended_at = ?3
+             WHERE nas_id = ?1 AND kind = ?2 AND ended_at IS NULL AND started_at <= ?3",
+            params![nas_id, EventKind::Unreachable.as_str(), at],
+        )?;
+        Ok(changed > 0)
+    }
+
     /// Deletes everything stored about one NAS.
     pub fn delete_nas(&mut self, nas_id: &str) -> Result<()> {
         let tx = self.conn.transaction()?;
@@ -717,9 +729,12 @@ impl HistoryStore {
     }
 
     /// The raw samples of a NAS of the 24 hours before `now`, for the
-    /// transfer to another device (#37), so its day chart has every sample.
-    /// `None` without any.
+    /// transfer to another device (#37), so its day chart has every sample,
+    /// and the backup runs started in the 7 days before `now`, so a run that
+    /// ended after its day went over still arrives with its end. `None`
+    /// without any of both.
     pub fn export_recent(&self, nas_id: &str, now: i64) -> Result<Option<Export>> {
+        let tx = self.conn.unchecked_transaction()?;
         let mut stmt = self.conn.prepare_cached(
             "SELECT metric, key, at, value FROM samples
              WHERE nas_id = ?1 AND at >= ?2
@@ -734,7 +749,25 @@ impl HistoryStore {
             })
         })?;
         let samples: Vec<ExportSample> = rows.collect::<rusqlite::Result<_>>()?;
-        if samples.is_empty() {
+        drop(stmt);
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT task_id, started_at, finished_at, result, message FROM backup_runs
+             WHERE nas_id = ?1 AND started_at >= ?2
+             ORDER BY started_at, task_id",
+        )?;
+        let rows = stmt.query_map(params![nas_id, now - 7 * DAY], |row| {
+            Ok(ExportBackupRun {
+                task_id: row.get(0)?,
+                started_at: row.get(1)?,
+                finished_at: row.get(2)?,
+                result: row.get(3)?,
+                message: row.get(4)?,
+            })
+        })?;
+        let backup_runs: Vec<ExportBackupRun> = rows.collect::<rusqlite::Result<_>>()?;
+        drop(stmt);
+        tx.commit()?;
+        if samples.is_empty() && backup_runs.is_empty() {
             return Ok(None);
         }
         Ok(Some(Export {
@@ -744,7 +777,7 @@ impl HistoryStore {
             samples,
             hourly: Vec::new(),
             daily: Vec::new(),
-            backup_runs: Vec::new(),
+            backup_runs,
             events: Vec::new(),
         }))
     }
@@ -834,6 +867,28 @@ impl HistoryStore {
                 *counter += u32::try_from(changed).unwrap_or(0);
             }
         }
+        // A day whose hours came partly from here and partly from the
+        // other device is rolled up again from its hours, so it agrees with
+        // them; it replaces the daily value only with as many samples.
+        let touched: BTreeSet<(&str, &str, i64)> = export
+            .hourly
+            .iter()
+            .filter(|row| metric_from(&row.metric).is_some())
+            .map(|row| {
+                (
+                    row.metric.as_str(),
+                    row.key.as_str(),
+                    bucket(row.start, DAY),
+                )
+            })
+            .collect();
+        rollup_days(
+            &tx,
+            touched
+                .iter()
+                .map(|&(metric, key, day)| (nas_id, metric, key, day)),
+            now,
+        )?;
 
         let samples: Vec<Sample> = export
             .samples
@@ -955,7 +1010,45 @@ impl HistoryStore {
                     )
                     .optional()
             };
+            // An own event of the same problem with another start that
+            // overlaps it (both devices saw it begin) stands for it: the
+            // other one is not added beside it, its end closes the own one.
+            let mut own_overlapping = tx.prepare_cached(
+                "SELECT started_at FROM events
+                 WHERE nas_id = ?1 AND kind = ?2 AND subject = ?3 AND started_at <> ?4
+                   AND started_at <= ?5 AND (ended_at IS NULL OR ended_at >= ?4)
+                 ORDER BY started_at LIMIT 1",
+            )?;
+            let mut close = tx.prepare_cached(
+                "UPDATE events SET ended_at = ?5
+                 WHERE nas_id = ?1 AND kind = ?2 AND subject = ?3 AND started_at = ?4
+                   AND ended_at IS NULL",
+            )?;
             for event in &events {
+                let subject = event.subject.as_deref().unwrap_or("");
+                let own: Option<i64> = own_overlapping
+                    .query_row(
+                        params![
+                            nas_id,
+                            event.kind,
+                            subject,
+                            event.started_at,
+                            event.ended_at.unwrap_or(i64::MAX)
+                        ],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if read(event)?.is_none()
+                    && let Some(own) = own
+                {
+                    if let Some(end) = event.ended_at.filter(|&end| end >= own) {
+                        count.events += u32::try_from(
+                            close.execute(params![nas_id, event.kind, subject, own, end])?,
+                        )
+                        .unwrap_or(0);
+                    }
+                    continue;
+                }
                 let before = read(event)?;
                 upsert_events(&tx, std::slice::from_ref(event))?;
                 if read(event)? != before {
@@ -1251,9 +1344,30 @@ fn write_in(tx: &Transaction, samples: &[Sample], now: i64) -> Result<()> {
         }
     }
 
+    rollup_days(
+        tx,
+        days.iter()
+            .map(|&(nas_id, metric, key, day)| (nas_id, metric, key, day)),
+        now,
+    )?;
+
+    tx.prepare_cached("DELETE FROM samples WHERE at < ?1")?
+        .execute(params![now - RAW_KEEP])?;
+    tx.prepare_cached("DELETE FROM samples_hourly WHERE start < ?1")?
+        .execute(params![now - HOURLY_KEEP])?;
+    Ok(())
+}
+
+/// Rebuilds the daily values `(nas_id, metric, key, day start)` from their
+/// hours; one replaces a stored value only with at least as many samples.
+/// A day whose hours are partly pruned already keeps its daily value; it is
+/// only filled in when there is none yet.
+fn rollup_days<'a>(
+    tx: &Transaction,
+    days: impl Iterator<Item = (&'a str, &'a str, &'a str, i64)>,
+    now: i64,
+) -> Result<()> {
     {
-        // A day whose hours are partly pruned already keeps its daily value;
-        // it is only filled in when there is none yet.
         let daily_sql = |conflict: &str| {
             format!(
                 "INSERT INTO samples_daily
@@ -1275,7 +1389,7 @@ fn write_in(tx: &Transaction, samples: &[Sample], now: i64) -> Result<()> {
              WHERE excluded.count >= samples_daily.count",
         ))?;
         let mut fill = tx.prepare_cached(&daily_sql("NOTHING"))?;
-        for &(nas_id, metric, key, start) in &days {
+        for (nas_id, metric, key, start) in days {
             let stmt = if start >= now - HOURLY_KEEP {
                 &mut rebuild
             } else {
@@ -1284,11 +1398,6 @@ fn write_in(tx: &Transaction, samples: &[Sample], now: i64) -> Result<()> {
             stmt.execute(params![nas_id, metric, key, start, DAY])?;
         }
     }
-
-    tx.prepare_cached("DELETE FROM samples WHERE at < ?1")?
-        .execute(params![now - RAW_KEEP])?;
-    tx.prepare_cached("DELETE FROM samples_hourly WHERE start < ?1")?
-        .execute(params![now - HOURLY_KEEP])?;
     Ok(())
 }
 
@@ -2614,5 +2723,136 @@ mod tests {
         let export: Export = serde_json::from_str(json).expect("collector export parses");
         assert!(export.events.is_empty());
         assert_eq!(serde_json::to_string(&export).expect("serializes"), json);
+    }
+
+    #[test]
+    fn the_last_day_carries_the_backup_runs_of_a_week() {
+        let end = T0 + 10 * DAY;
+        let mut mac = collector("nas-1", end);
+        // A run that began on an earlier day and finished later.
+        mac.write_backup_runs(
+            "nas-1",
+            &[BackupRun {
+                task_id: "b1".into(),
+                started_at: end - 3 * DAY,
+                finished_at: Some(end - 2 * DAY),
+                result: BackupResult::Error,
+                message: Some("Ziel voll".into()),
+            }],
+        )
+        .expect("run");
+        let recent = mac
+            .export_recent("nas-1", end)
+            .expect("recent")
+            .expect("values");
+        assert!(
+            recent
+                .backup_runs
+                .iter()
+                .all(|run| run.started_at >= end - 7 * DAY)
+        );
+        assert_eq!(recent.backup_runs.len(), 8);
+        let mut phone = HistoryStore::in_memory().expect("store opens");
+        phone.import(&recent, "nas-1", end).expect("import");
+        let runs = phone
+            .backup_runs("nas-1", end - 3 * DAY, end - 3 * DAY)
+            .expect("runs");
+        assert_eq!(runs[0].result, BackupResult::Error);
+        assert_eq!(runs[0].finished_at, Some(end - 2 * DAY));
+
+        // Only runs, no samples: still an export.
+        let mut store = HistoryStore::in_memory().expect("store opens");
+        store
+            .write_backup_runs(
+                "nas-1",
+                &mac.backup_runs("nas-1", end - DAY, end).expect("runs"),
+            )
+            .expect("runs");
+        assert!(store.export_recent("nas-1", end).expect("recent").is_some());
+    }
+
+    #[test]
+    fn a_day_is_rolled_up_again_from_hours_of_both_devices() {
+        let now = T0 + DAY;
+        let mut phone = HistoryStore::in_memory().expect("store opens");
+        // The Mac slept in hour 3, the phone measured it 4 times.
+        let own: Vec<Sample> = (0..4).map(|i| cpu(T0 + 3 * HOUR + i * 600, 50.0)).collect();
+        phone.write_samples(&own, now).expect("own");
+        let mut mac = empty_export();
+        mac.hourly = vec![
+            bucket_row("cpu", T0 + HOUR, 10.0, 12),
+            bucket_row("cpu", T0 + 2 * HOUR, 10.0, 12),
+        ];
+        mac.daily = vec![bucket_row("cpu", T0, 10.0, 24)];
+        phone.import(&mac, "nas-1", now).expect("import");
+        let day = phone
+            .points("nas-1", Metric::Cpu, None, Resolution::Daily, T0, now)
+            .expect("day");
+        assert_eq!(day[0].count, 28);
+        assert_eq!(day[0].max, 50.0);
+        assert_eq!(day[0].mean, (24.0 * 10.0 + 4.0 * 50.0) / 28.0);
+    }
+
+    #[test]
+    fn the_same_problem_seen_on_both_devices_is_one_event() {
+        let now = T0 + DAY;
+        let mut phone = HistoryStore::in_memory().expect("store opens");
+        phone
+            .write_events(&[event("nas-1", Some("disk-1"), T0 + 60, None)])
+            .expect("own");
+        let row = |ended_at: Option<i64>| ExportEvent {
+            kind: "disk_temperature".into(),
+            subject: "disk-1".into(),
+            started_at: T0,
+            ended_at,
+            level: "warning".into(),
+            text: "Platte 1 bei 50 °C".into(),
+        };
+        let mut export = empty_export();
+        export.events = vec![row(None)];
+        phone.import(&export, "nas-1", now).expect("open");
+        let events = phone.events(Some("nas-1"), T0, now).expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].started_at, T0 + 60);
+
+        // Its end at the Mac ends the own one, also when it comes again.
+        export.events = vec![row(Some(T0 + HOUR))];
+        assert_eq!(
+            phone.import(&export, "nas-1", now).expect("ended").events,
+            1
+        );
+        phone.import(&export, "nas-1", now).expect("again");
+        let events = phone.events(Some("nas-1"), T0, now).expect("events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].ended_at, Some(T0 + HOUR));
+
+        // A later problem of the same kind is an event of its own.
+        export.events = vec![ExportEvent {
+            started_at: T0 + 5 * HOUR,
+            ..row(None)
+        }];
+        phone.import(&export, "nas-1", now).expect("later");
+        assert_eq!(
+            phone.events(Some("nas-1"), T0, now).expect("events").len(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_fresh_snapshot_elsewhere_ends_unreachable() {
+        let mut store = HistoryStore::in_memory().expect("store opens");
+        let unreachable = |started_at: i64| EventRecord {
+            kind: "unreachable".into(),
+            subject: None,
+            ..event("nas-1", None, started_at, None)
+        };
+        store
+            .write_events(&[unreachable(T0), event("nas-1", Some("disk-1"), T0, None)])
+            .expect("events");
+        assert!(!store.close_unreachable("nas-1", T0 - 1).expect("too early"));
+        assert!(store.close_unreachable("nas-1", T0 + 900).expect("close"));
+        let open = store.open_events("nas-1").expect("open");
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].kind, "disk_temperature");
     }
 }
