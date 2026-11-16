@@ -634,6 +634,235 @@ pub struct NasState {
     pub blocked: bool,
 }
 
+/// What a history series measures; the unit follows from the metric.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum Metric {
+    /// Used space of a volume, in bytes.
+    VolumeUsed,
+    /// Total space of a volume, in bytes.
+    VolumeTotal,
+    /// Disk temperature, in degrees Celsius.
+    DiskTemp,
+    /// CPU load, in percent.
+    Cpu,
+    /// Used memory, in percent.
+    Mem,
+    /// Received bytes per second of an interface.
+    NetRx,
+    /// Sent bytes per second of an interface.
+    NetTx,
+    /// System temperature, in degrees Celsius.
+    SysTemp,
+}
+
+impl From<Metric> for model::Metric {
+    fn from(metric: Metric) -> Self {
+        match metric {
+            Metric::VolumeUsed => Self::VolumeUsed,
+            Metric::VolumeTotal => Self::VolumeTotal,
+            Metric::DiskTemp => Self::DiskTemp,
+            Metric::Cpu => Self::Cpu,
+            Metric::Mem => Self::Mem,
+            Metric::NetRx => Self::NetRx,
+            Metric::NetTx => Self::NetTx,
+            Metric::SysTemp => Self::SysTemp,
+        }
+    }
+}
+
+/// Time range of a chart, ending now. Named `HistoryRange` because `Range`
+/// is taken in Swift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum HistoryRange {
+    /// Last 24 hours, every sample.
+    Day,
+    /// Last 7 days, hourly values.
+    Week,
+    /// Last 30 days, hourly values.
+    Month,
+    /// Last 365 days, daily values.
+    Year,
+}
+
+impl From<HistoryRange> for stats_core::Range {
+    fn from(range: HistoryRange) -> Self {
+        match range {
+            HistoryRange::Day => Self::Day,
+            HistoryRange::Week => Self::Week,
+            HistoryRange::Month => Self::Month,
+            HistoryRange::Year => Self::Year,
+        }
+    }
+}
+
+/// One point of a series: a sample, or an hour or day rolled up. For a
+/// sample min, mean and max are the value.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct HistoryPoint {
+    /// Time of the sample or start of the hour or day, Unix seconds UTC.
+    pub at: i64,
+    pub min: f64,
+    pub mean: f64,
+    pub max: f64,
+    /// Number of samples in the point.
+    pub count: u32,
+}
+
+impl From<stats_core::Point> for HistoryPoint {
+    fn from(p: stats_core::Point) -> Self {
+        Self {
+            at: p.at,
+            min: p.min,
+            mean: p.mean,
+            max: p.max,
+            count: p.count,
+        }
+    }
+}
+
+/// All points of one metric and key, oldest first.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct HistorySeries {
+    /// Volume, disk or interface id; `None` for values of the whole NAS.
+    pub key: Option<String>,
+    pub points: Vec<HistoryPoint>,
+}
+
+impl From<stats_core::Series> for HistorySeries {
+    fn from(s: stats_core::Series) -> Self {
+        Self {
+            key: s.key,
+            points: s.points.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// One past run of a backup task.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct BackupRun {
+    /// Id of the backup task the run belongs to.
+    pub task_id: String,
+    /// Start, Unix seconds UTC.
+    pub started_at: i64,
+    /// End, Unix seconds UTC; `None` while it runs or when unknown.
+    pub finished_at: Option<i64>,
+    pub result: BackupResult,
+    /// Message of the vendor about the run.
+    pub message: Option<String>,
+}
+
+impl From<model::BackupRun> for BackupRun {
+    fn from(r: model::BackupRun) -> Self {
+        Self {
+            task_id: r.task_id,
+            started_at: r.started_at,
+            finished_at: r.finished_at,
+            result: r.result.into(),
+            message: r.message,
+        }
+    }
+}
+
+/// Forecast "full in X days" of a volume.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Forecast {
+    /// Days from now until the volume is full; 0 when it is full already.
+    pub days_to_full: f64,
+    /// Time the volume is full, Unix seconds UTC.
+    pub full_at: i64,
+    /// Growth of the used space in bytes per day.
+    pub growth_per_day: f64,
+}
+
+impl From<stats_core::Forecast> for Forecast {
+    fn from(f: stats_core::Forecast) -> Self {
+        Self {
+            days_to_full: f.days_to_full,
+            full_at: f.full_at,
+            growth_per_day: f.growth_per_day,
+        }
+    }
+}
+
+/// The rule an event comes from: every finding kind plus `Unreachable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum EventKind {
+    Alert,
+    DiskHealth,
+    DiskTemperature,
+    VolumeHealth,
+    VolumeFill,
+    FanHealth,
+    UpsOnBattery,
+    BackupFailed,
+    BackupOverdue,
+    /// No snapshot for 15 minutes or longer.
+    Unreachable,
+}
+
+impl From<model::EventKind> for EventKind {
+    fn from(kind: model::EventKind) -> Self {
+        match kind {
+            model::EventKind::Alert => Self::Alert,
+            model::EventKind::DiskHealth => Self::DiskHealth,
+            model::EventKind::DiskTemperature => Self::DiskTemperature,
+            model::EventKind::VolumeHealth => Self::VolumeHealth,
+            model::EventKind::VolumeFill => Self::VolumeFill,
+            model::EventKind::FanHealth => Self::FanHealth,
+            model::EventKind::UpsOnBattery => Self::UpsOnBattery,
+            model::EventKind::BackupFailed => Self::BackupFailed,
+            model::EventKind::BackupOverdue => Self::BackupOverdue,
+            model::EventKind::Unreachable => Self::Unreachable,
+        }
+    }
+}
+
+/// Something about a NAS that needed attention, from its start to its end
+/// (see `nas_model::Event`).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct NasEvent {
+    pub nas_id: String,
+    pub kind: EventKind,
+    /// Id of the disk, volume or backup task; the name for a fan; the text
+    /// of the alert for an alert; `None` for the UPS and unreachable.
+    pub subject: Option<String>,
+    /// Highest level while the event was open, `Warning` or `Critical`.
+    pub level: Health,
+    /// German text of the start or of the last raise, e.g. „Platte 3 bei 52 °C“.
+    pub text: String,
+    /// Start, Unix seconds UTC.
+    pub started_at: i64,
+    /// End, Unix seconds UTC; `None` while the event is open.
+    pub ended_at: Option<i64>,
+}
+
+impl From<model::Event> for NasEvent {
+    fn from(e: model::Event) -> Self {
+        Self {
+            nas_id: e.nas_id,
+            kind: e.kind.into(),
+            subject: e.subject,
+            level: e.level.into(),
+            text: e.text,
+            started_at: e.started_at,
+            ended_at: e.ended_at,
+        }
+    }
+}
+
+/// Receives the state of a NAS after every finished query of the planner,
+/// also after a failed one (see `NasCore::start_planner`).
+///
+/// Called from a thread of the core, one call at a time, in the order the
+/// queries finished. The app must return at once and never wait
+/// synchronously for its main thread or call back into `NasCore` from the
+/// call itself (only from a task it starts): the core holds a lock during
+/// the call, so `add_nas` and the like would wait forever.
+#[uniffi::export(with_foreign)]
+pub trait StateListener: Send + Sync {
+    fn state_changed(&self, state: NasState);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

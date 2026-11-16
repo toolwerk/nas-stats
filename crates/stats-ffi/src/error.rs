@@ -34,9 +34,20 @@ pub enum FfiError {
     /// an `http://` address.
     #[error("Ungültige Angabe: {detail}")]
     InvalidInput { detail: String },
+    /// The history archive cannot be opened, read or written.
+    #[error("Verlauf nicht lesbar: {detail}")]
+    History { detail: String },
     /// A failure inside the core, e.g. a task that panicked.
     #[error("Interner Fehler: {detail}")]
     Internal { detail: String },
+}
+
+impl From<stats_core::HistoryError> for FfiError {
+    fn from(e: stats_core::HistoryError) -> Self {
+        Self::History {
+            detail: e.to_string(),
+        }
+    }
 }
 
 impl From<ProviderError> for FfiError {
