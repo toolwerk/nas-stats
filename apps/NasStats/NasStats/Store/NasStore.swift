@@ -24,6 +24,7 @@ final class NasStore {
             defaults.set(demoMode, forKey: Self.demoModeKey)
             rebuild()
             if !demoMode, started {
+                requestNotifications()
                 Task { await refreshAll() }
             }
         }
