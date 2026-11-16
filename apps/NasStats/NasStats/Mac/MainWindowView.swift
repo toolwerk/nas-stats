@@ -15,11 +15,20 @@ enum MainSection: Hashable {
 /// the views of the iPhone tabs; settings stay in their own window (⌘,).
 struct MainWindowView: View {
     @Environment(NasStore.self) private var store
-    @State private var selection: MainSection? = .overview
+    @State private var selection: MainSection = .overview
+
+    /// The list may clear its selection (⌘-click on the chosen row); an
+    /// empty one keeps the current section, so sidebar and content agree.
+    private var listSelection: Binding<MainSection?> {
+        Binding(
+            get: { selection },
+            set: { if let section = $0 { selection = section } }
+        )
+    }
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $selection) {
+            List(selection: listSelection) {
                 Label("Übersicht", systemImage: "externaldrive")
                     .tag(MainSection.overview)
                 Label("Verlauf", systemImage: "chart.xyaxis.line")
@@ -54,7 +63,7 @@ struct MainWindowView: View {
 
     @ViewBuilder
     private var detail: some View {
-        switch selection ?? .overview {
+        switch selection {
         case .overview:
             OverviewView(onOpenNas: { selection = .nas($0) })
         case .history:
