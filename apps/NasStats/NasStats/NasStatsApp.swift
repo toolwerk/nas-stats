@@ -26,6 +26,9 @@ struct NasStatsApp: App {
                 Tab("Übersicht", systemImage: "externaldrive") {
                     OverviewView()
                 }
+                Tab("Verlauf", systemImage: "chart.xyaxis.line") {
+                    HistoryView()
+                }
                 Tab("Ereignisse", systemImage: "bell") {
                     EventsView()
                 }

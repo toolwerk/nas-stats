@@ -194,6 +194,8 @@ targets:
       - path: NasStats/Store
       # Detail screen (#18): its content model is tested, the view compiles along.
       - path: NasStats/Detail
+      # History screen (#19): its content model is tested, the view compiles along.
+      - path: NasStats/History
       # Events tab (#20): its content model is tested, the view compiles along.
       - path: NasStats/Events
       - path: Shared
