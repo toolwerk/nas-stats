@@ -743,6 +743,47 @@ impl NasCore {
             .collect())
     }
 
+    /// The history of a NAS in a range ending now as CSV (#45): every
+    /// metric in the resolution of the range, times in `time_zone` (an IANA
+    /// name; an unknown one counts as UTC). Only the header without an
+    /// archive or values.
+    pub fn history_csv(
+        &self,
+        nas_id: String,
+        range: HistoryRange,
+        time_zone: String,
+    ) -> Result<String, FfiError> {
+        let now = (self.clock)();
+        let Some(store) = self.archive() else {
+            return Ok(stats_core::history_csv(&[], &time_zone));
+        };
+        let mut series = Vec::new();
+        for metric in model::Metric::ALL {
+            series.push((metric, store.history(&nas_id, metric, range.into(), now)?));
+        }
+        Ok(stats_core::history_csv(&series, &time_zone))
+    }
+
+    /// The events of a NAS open at some time in a range ending now as CSV
+    /// (#45), newest first, times in `time_zone`. The upper end stays open
+    /// like in the events tab, since the clock of the NAS may run ahead.
+    /// Kinds of a newer build keep their stored name. Only the header
+    /// without an archive.
+    pub fn events_csv(
+        &self,
+        nas_id: String,
+        range: HistoryRange,
+        time_zone: String,
+    ) -> Result<String, FfiError> {
+        let now = (self.clock)();
+        let Some(store) = self.archive() else {
+            return Ok(stats_core::events_csv(&[], &time_zone));
+        };
+        let from = now - stats_core::Range::from(range).span();
+        let events = store.events(Some(&nas_id), from, i64::MAX)?;
+        Ok(stats_core::events_csv(&events, &time_zone))
+    }
+
     /// Forecast "full in X days" of a volume from its daily values of the
     /// last 30 days; `None` without a rising trend, for an unknown NAS or
     /// volume, or without a known size.
@@ -2076,6 +2117,46 @@ mod tests {
 
     /// 14 November 2026, 14:05 UTC.
     const DEMO_NOW: i64 = 1_794_665_100;
+
+    #[test]
+    fn the_demo_core_hands_out_csv() {
+        let core = NasCore::demo(DEMO_NOW);
+        for range in [
+            HistoryRange::Day,
+            HistoryRange::Week,
+            HistoryRange::Month,
+            HistoryRange::Year,
+        ] {
+            let history = core
+                .history_csv("demo-keller".into(), range, "Europe/Berlin".into())
+                .expect("history csv");
+            assert!(history.lines().count() > 1, "{range:?}");
+            assert!(history.contains(";Belegung;"), "{range:?}");
+        }
+        let events = core
+            .events_csv(
+                "demo-keller".into(),
+                HistoryRange::Month,
+                "Europe/Berlin".into(),
+            )
+            .expect("events csv");
+        assert!(events.lines().count() > 1, "{events}");
+    }
+
+    #[test]
+    fn csv_of_an_unknown_nas_is_only_the_header() {
+        let h = harness(FakeBackend::answering(Vec::new()));
+        let history = h
+            .core
+            .history_csv("nope".into(), HistoryRange::Week, "UTC".into())
+            .expect("history csv");
+        assert_eq!(history.lines().count(), 1);
+        let events = h
+            .core
+            .events_csv("nope".into(), HistoryRange::Week, "UTC".into())
+            .expect("events csv");
+        assert_eq!(events.lines().count(), 1);
+    }
 
     #[test]
     fn the_demo_core_has_history_events_runs_and_forecast() {

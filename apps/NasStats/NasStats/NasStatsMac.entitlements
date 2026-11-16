@@ -16,6 +16,8 @@
 	<array>
 		<string>7N2W4T6UPV.net.staude.nasstats</string>
 	</array>
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
 	<key>keychain-access-groups</key>

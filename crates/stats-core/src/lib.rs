@@ -22,6 +22,9 @@
 //! ([`HistoryStore::export`]), the app takes it over with
 //! [`HistoryStore::import`].
 //!
+//! [`history_csv`] and [`events_csv`] hand the history and the events of a
+//! range out as CSV in the German format of 3D Stats (#45).
+//!
 //! The polling planner decides when each NAS is queried: [`Schedule`] holds
 //! the rules without a runtime, [`Planner`] runs them on tokio and hands
 //! every finished query to a [`PollSink`]. History, events and the callback
@@ -39,6 +42,7 @@
 //!   query and moves the next automatic one an interval later.
 
 mod archive;
+mod csv;
 mod export;
 mod forecast;
 mod history;
@@ -46,6 +50,7 @@ mod planner;
 mod schedule;
 
 pub use archive::archive_poll;
+pub use csv::{events_csv, history_csv};
 pub use export::{
     CollectorNas, EXPORT_VERSION, Export, ExportBackupRun, ExportBucket, ExportEvent, ExportSample,
     ImportCount,

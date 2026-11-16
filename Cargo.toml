@@ -44,6 +44,7 @@ log = "0.4"
 roxmltree = "0.21"
 uniffi = "0.32.2"
 rusqlite = { version = "0.41.0", features = ["bundled"] }
+jiff = "0.2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
