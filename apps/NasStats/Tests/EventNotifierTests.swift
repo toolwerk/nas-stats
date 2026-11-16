@@ -16,6 +16,7 @@ final class FakePoster: NotificationPoster {
     private(set) var withdrawn: [String] = []
     private(set) var authorizationRequests = 0
     var denied = false
+    var authorized = true
 
     func post(id: String, group: String, title: String, body: String, delay: TimeInterval?) {
         posts.append(Post(id: id, group: group, title: title, body: body, delay: delay))
@@ -30,6 +31,8 @@ final class FakePoster: NotificationPoster {
     }
 
     func isDenied() async -> Bool { denied }
+
+    func isAuthorized() async -> Bool { authorized }
 }
 
 @MainActor
@@ -55,8 +58,10 @@ struct EventNotifierTests {
         )
     }
 
-    func notifier(poster: FakePoster? = nil, at date: Date = Date(timeIntervalSince1970: 0)) -> EventNotifier {
-        EventNotifier(poster: poster ?? self.poster, defaults: defaults, clock: { date }, calendar: Self.berlin)
+    func notifier(at date: Date = Date(timeIntervalSince1970: 0)) async -> EventNotifier {
+        let notifier = EventNotifier(poster: poster, defaults: defaults, clock: { date }, calendar: Self.berlin)
+        await notifier.refreshAuthorization()
+        return notifier
     }
 
     static var berlin: Calendar {
@@ -70,8 +75,8 @@ struct EventNotifierTests {
         berlin.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: hour, minute: minute))!
     }
 
-    @Test func anOpenEventNotifiesOnceAndAgainOnlyAfterARecovery() {
-        let notifier = notifier()
+    @Test func anOpenEventNotifiesOnceAndAgainOnlyAfterARecovery() async {
+        let notifier = await notifier()
         let first = Self.event()
         notifier.update(nasId: Self.nas, name: "Keller", open: [first], settings: .init())
         #expect(poster.posts == [FakePoster.Post(
@@ -88,8 +93,8 @@ struct EventNotifierTests {
         #expect(poster.posts.map(\.id) == [EventNotifier.id(of: first), EventNotifier.id(of: again)])
     }
 
-    @Test func aRiseToCriticalNotifiesAgainWithTheSameId() {
-        let notifier = notifier()
+    @Test func aRiseToCriticalNotifiesAgainWithTheSameId() async {
+        let notifier = await notifier()
         let warning = Self.event(.volumeFill, subject: "vol1", text: "Volume 1 zu 82 % voll")
         notifier.update(nasId: Self.nas, name: "Keller", open: [warning], settings: .init())
         var critical = warning
@@ -102,8 +107,8 @@ struct EventNotifierTests {
         #expect(poster.posts.last?.body == "Volume 1 zu 91 % voll")
     }
 
-    @Test func anEndedEventWithdrawsItsNotification() {
-        let notifier = notifier()
+    @Test func anEndedEventWithdrawsItsNotification() async {
+        let notifier = await notifier()
         let event = Self.event()
         notifier.update(nasId: Self.nas, name: "Keller", open: [event], settings: .init())
         notifier.update(nasId: Self.nas, name: "Keller", open: [], settings: .init())
@@ -113,8 +118,8 @@ struct EventNotifierTests {
         #expect(poster.withdrawn.count == 1)
     }
 
-    @Test func aKindSwitchedOffStaysSilentAlsoAfterSwitchingItOn() {
-        let notifier = notifier()
+    @Test func aKindSwitchedOffStaysSilentAlsoAfterSwitchingItOn() async {
+        let notifier = await notifier()
         let event = Self.event()
         var off = NotificationSettings()
         off.disabled = [.disks]
@@ -128,18 +133,31 @@ struct EventNotifierTests {
         #expect(poster.posts.map(\.id) == [EventNotifier.id(of: ups)])
     }
 
-    @Test func inTheQuietHoursTheNotificationWaitsForTheirEnd() {
-        let notifier = notifier(at: Self.berlin(23))
+    @Test func inTheQuietHoursTheNotificationWaitsForTheirEnd() async {
+        let notifier = await notifier(at: Self.berlin(23))
         var settings = NotificationSettings()
         settings.quietHours.enabled = true
         notifier.update(nasId: Self.nas, name: "Keller", open: [Self.event()], settings: settings)
         #expect(poster.posts.first?.delay == 8 * 3600.0)
     }
 
-    @Test func aRestartDoesNotNotifyALastingEventAgain() {
+    @Test func withoutPermissionAnEventWaitsUntilItIsGiven() async {
+        poster.authorized = false
+        let notifier = await notifier()
         let event = Self.event()
-        notifier().update(nasId: Self.nas, name: "Keller", open: [event], settings: .init())
-        let restarted = notifier()
+        notifier.update(nasId: Self.nas, name: "Keller", open: [event], settings: .init())
+        #expect(poster.posts.isEmpty)
+
+        poster.authorized = true
+        await notifier.refreshAuthorization()
+        notifier.update(nasId: Self.nas, name: "Keller", open: [event], settings: .init())
+        #expect(poster.posts.map(\.id) == [EventNotifier.id(of: event)])
+    }
+
+    @Test func aRestartDoesNotNotifyALastingEventAgain() async {
+        let event = Self.event()
+        await notifier().update(nasId: Self.nas, name: "Keller", open: [event], settings: .init())
+        let restarted = await notifier()
         restarted.update(nasId: Self.nas, name: "Keller", open: [event], settings: .init())
         #expect(poster.posts.count == 1)
         // The restarted notifier still knows what to withdraw.
@@ -147,8 +165,8 @@ struct EventNotifierTests {
         #expect(poster.withdrawn == [EventNotifier.id(of: event)])
     }
 
-    @Test func forgetWithdrawsEveryNotificationOfTheNas() {
-        let notifier = notifier()
+    @Test func forgetWithdrawsEveryNotificationOfTheNas() async {
+        let notifier = await notifier()
         let disk = Self.event()
         let ups = Self.event(.upsOnBattery, subject: nil, text: "USV im Akkubetrieb")
         notifier.update(nasId: Self.nas, name: "Keller", open: [disk, ups], settings: .init())
@@ -159,8 +177,8 @@ struct EventNotifierTests {
         #expect(poster.posts.count == 3)
     }
 
-    @Test func otherNasKeepTheirNotifications() {
-        let notifier = notifier()
+    @Test func otherNasKeepTheirNotifications() async {
+        let notifier = await notifier()
         let event = Self.event()
         notifier.update(nasId: Self.nas, name: "Keller", open: [event], settings: .init())
         notifier.update(nasId: "nas-2", name: "Büro", open: [], settings: .init())

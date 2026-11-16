@@ -435,6 +435,8 @@ final class NasStore {
             log.lastAttempts[id.uuidString] = now
         }
         saveLog()
+        // Before the answers, so `record` knows whether it may notify.
+        await notifier?.refreshAuthorization()
         let core = accounts.core
         await withTaskGroup(of: (UUID, NasState?, String?).self) { group in
             for id in ids {

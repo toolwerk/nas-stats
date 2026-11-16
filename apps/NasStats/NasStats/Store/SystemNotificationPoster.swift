@@ -47,6 +47,13 @@ final class SystemNotificationPoster: NSObject, NotificationPoster, UNUserNotifi
         await center.notificationSettings().authorizationStatus == .denied
     }
 
+    func isAuthorized() async -> Bool {
+        switch await center.notificationSettings().authorizationStatus {
+        case .authorized, .provisional: true
+        default: false
+        }
+    }
+
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification

@@ -14,6 +14,8 @@ protocol NotificationPoster: AnyObject {
     func requestAuthorization() async
     /// Whether the user switched notifications off for the app.
     func isDenied() async -> Bool
+    /// Whether the system shows notifications of the app now.
+    func isAuthorized() async -> Bool
 }
 
 /// Turns the open events of the core (#10) into notifications (#39): one
@@ -39,6 +41,10 @@ final class EventNotifier {
     private let calendar: Calendar
     /// Event id → what was notified.
     private var notified: [String: Notified]
+    /// Whether the system shows notifications; until then `update` takes in
+    /// no new event, so one that began before the permission still
+    /// notifies once it is given (`refreshAuthorization`).
+    private(set) var authorized = false
 
     init(
         poster: any NotificationPoster,
@@ -61,8 +67,15 @@ final class EventNotifier {
         "\(event.nasId)|\(event.kind)|\(event.subject ?? "")|\(event.startedAt)"
     }
 
+    /// Reads the permission of the system again; call it before a query,
+    /// the user may change it in the system settings at any time.
+    func refreshAuthorization() async {
+        authorized = await poster.isAuthorized()
+    }
+
     /// Takes in the open events of one NAS after a query: notifies new
-    /// ones and a rise to critical, withdraws those that ended.
+    /// ones and a rise to critical, withdraws those that ended. Without
+    /// permission it only withdraws.
     func update(nasId: String, name: String, open: [NasEvent], settings: NotificationSettings) {
         var openIds = Set<String>()
         for event in open {
@@ -72,14 +85,14 @@ final class EventNotifier {
             let enabled = settings.isEnabled(NotificationCategory(event.kind))
             if var known = notified[id] {
                 // A rise from warning to critical replaces the notification.
-                guard critical, !known.critical else { continue }
+                guard critical, !known.critical, authorized else { continue }
                 known.critical = true
                 if enabled {
                     post(event, id: id, name: name, settings: settings)
                     known.posted = true
                 }
                 notified[id] = known
-            } else {
+            } else if authorized {
                 // An event that begins while its kind is off stays silent,
                 // also after switching it on.
                 if enabled {
