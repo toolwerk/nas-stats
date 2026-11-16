@@ -1,3 +1,4 @@
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -8,11 +9,11 @@ struct NasStatsWidgets: WidgetBundle {
     }
 }
 
-/// Placeholder widget until #24: the worst NAS of the widget snapshot the
-/// app writes into the App Group (#23).
+/// Placeholder widget until #24: the NAS chosen in its settings (#26) or the
+/// worst one, from the widget snapshot the app writes into the App Group (#23).
 struct StatusWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "net.staude.nasstats.status", provider: StatusProvider()) { entry in
+        AppIntentConfiguration(kind: "net.staude.nasstats.status", intent: SelectNasIntent.self, provider: StatusProvider()) { entry in
             StatusView(entry: entry)
                 .containerBackground(.fill.tertiary, for: .widget)
         }
@@ -26,31 +27,36 @@ struct StatusEntry: TimelineEntry {
     let date: Date
     /// `nil` before the app wrote a snapshot.
     let snapshot: WidgetSnapshot?
+    /// The NAS the widget shows; `nil` without a snapshot or a NAS.
+    let nas: WidgetNas?
 }
 
-struct StatusProvider: TimelineProvider {
+struct StatusProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> StatusEntry {
-        StatusEntry(date: .now, snapshot: nil)
+        StatusEntry(date: .now, snapshot: nil, nas: nil)
     }
 
-    func getSnapshot(in context: Context, completion: @escaping (StatusEntry) -> Void) {
-        completion(StatusEntry(date: .now, snapshot: WidgetSnapshot.load(from: WidgetSnapshot.fileURL)))
-    }
-
-    /// Entries and reload after `WidgetSnapshot.timeline(now:)`; without a
-    /// snapshot only an entry for now. The app reloads after every new state.
-    func getTimeline(in context: Context, completion: @escaping (Timeline<StatusEntry>) -> Void) {
-        let now = Date.now
+    func snapshot(for configuration: SelectNasIntent, in context: Context) async -> StatusEntry {
         let snapshot = WidgetSnapshot.load(from: WidgetSnapshot.fileURL)
-        guard let snapshot else {
-            completion(Timeline(entries: [StatusEntry(date: now, snapshot: nil)], policy: .never))
-            return
+        return StatusEntry(
+            date: .now, snapshot: snapshot, nas: snapshot?.selected(configuration.nas?.id)
+        )
+    }
+
+    /// Entries and reload after `WidgetSnapshot.timeline(for:now:)` for the
+    /// shown NAS; without a snapshot only an entry for now. The app reloads
+    /// after every new state.
+    func timeline(for configuration: SelectNasIntent, in context: Context) async -> Timeline<StatusEntry> {
+        let now = Date.now
+        guard let snapshot = WidgetSnapshot.load(from: WidgetSnapshot.fileURL) else {
+            return Timeline(entries: [StatusEntry(date: now, snapshot: nil, nas: nil)], policy: .never)
         }
-        let plan = snapshot.timeline(now: now)
-        completion(Timeline(
-            entries: plan.dates.map { StatusEntry(date: $0, snapshot: snapshot) },
+        let shown = snapshot.selected(configuration.nas?.id)
+        let plan = snapshot.timeline(for: shown, now: now)
+        return Timeline(
+            entries: plan.dates.map { StatusEntry(date: $0, snapshot: snapshot, nas: shown) },
             policy: plan.reloadAfter.map { .after($0) } ?? .never
-        ))
+        )
     }
 }
 
@@ -66,7 +72,7 @@ struct StatusView: View {
 
     @ViewBuilder private var content: some View {
         if let snapshot = entry.snapshot {
-            if let nas = snapshot.nas.first {
+            if let nas = entry.nas {
                 NasLines(nas: nas, snapshot: snapshot, now: entry.date)
             } else {
                 title
@@ -89,7 +95,7 @@ struct StatusView: View {
     }
 }
 
-/// The worst NAS: status dot, name, "DEMO", the error or the first warning,
+/// The shown NAS: status dot, name, "DEMO", the error or the first warning,
 /// and the time of the state once it is old.
 private struct NasLines: View {
     let nas: WidgetNas
