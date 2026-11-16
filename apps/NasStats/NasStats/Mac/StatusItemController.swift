@@ -16,7 +16,7 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSPopoverDelegate 
     private let defaults: UserDefaults
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
-    /// System uptime of the last closing of the popover.
+    /// System uptime of the last start of closing the popover.
     private var popoverClosedAt: TimeInterval = 0
     private var mainWindow: NSWindow?
     private var addNasWindow: NSWindow?
@@ -128,13 +128,15 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSPopoverDelegate 
         controller.sizingOptions = [.preferredContentSize]
         popover.contentViewController = controller
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        // Active and key, so the buttons take the first click and a click
-        // into another app closes the popover.
-        NSApp.activate()
+        // Key, so the buttons take the first click. Not activating the app:
+        // that would bring a hidden main window forward and keep the app
+        // active after the popover closed.
         popover.contentViewController?.view.window?.makeKey()
     }
 
-    func popoverDidClose(_ notification: Notification) {
+    /// Already at the start of the closing, which a mouse down on the symbol
+    /// triggers before the action of its mouse up.
+    func popoverWillClose(_ notification: Notification) {
         popoverClosedAt = ProcessInfo.processInfo.systemUptime
     }
 
@@ -284,11 +286,15 @@ final class StatusItemController: NSObject, NSWindowDelegate, NSPopoverDelegate 
         guard let window = notification.object as? NSWindow else { return }
         if window === mainWindow {
             mainWindow = nil
-            NSApp.setActivationPolicy(.accessory)
         } else if window === addNasWindow {
             addNasWindow = nil
         } else if window === settingsWindow {
             settingsWindow = nil
+        }
+        // A menu bar app again once the last window is gone; a settings
+        // window opened from the main window stays in the Dock until then.
+        if mainWindow == nil, addNasWindow == nil, settingsWindow == nil {
+            NSApp.setActivationPolicy(.accessory)
         }
     }
 }
