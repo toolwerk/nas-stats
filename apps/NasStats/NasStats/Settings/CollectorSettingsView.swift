@@ -10,7 +10,6 @@ struct CollectorSettingsView: View {
     @Environment(NasStore.self) private var store
     @Environment(\.dismiss) private var dismiss
 
-    @State private var busy = false
     @State private var errorText: String?
     @State private var pairingAgain = false
     @State private var confirmingRemove = false
@@ -95,15 +94,15 @@ struct CollectorSettingsView: View {
             nasSection
             Section {
                 Button("Jetzt abgleichen", action: syncNow)
-                    .disabled(busy || collector.running || store.demoMode)
+                    .disabled(collector.running || store.demoMode)
                 Button("Neu koppeln …") {
                     pairingAgain = true
                 }
-                .disabled(busy)
+                .disabled(collector.running)
                 Button("Container entfernen", role: .destructive) {
                     confirmingRemove = true
                 }
-                .disabled(busy)
+                .disabled(collector.running)
                 .confirmationDialog(
                     "Sammel-Container entfernen?",
                     isPresented: $confirmingRemove,
@@ -117,7 +116,7 @@ struct CollectorSettingsView: View {
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
-                    if busy || collector.running {
+                    if collector.running {
                         ProgressView()
                     }
                     if let errorText {
@@ -150,7 +149,6 @@ struct CollectorSettingsView: View {
                             Text(verbatim: account.name).tag(UUID?.some(account.id))
                         }
                     }
-                    .disabled(busy)
                     if assignments[nas.id]?.automatic == true {
                         Text("automatisch über das Zertifikat")
                             .font(.footnote)
