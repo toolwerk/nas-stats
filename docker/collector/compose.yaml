@@ -1,0 +1,20 @@
+# Collector of NAS Stats (#46) in Container Station. The paths on the left
+# are examples: the configuration lies in a folder of the NAS, the data in
+# a volume of Docker. Port 8743 stays in the home network: do not forward
+# it in the router.
+services:
+  nas-collector:
+    image: nas-collector:latest
+    container_name: nas-collector
+    restart: unless-stopped
+    # Time for a query in flight to report on stop (up to 30 s), so a
+    # refused login is kept as a block.
+    stop_grace_period: 45s
+    ports:
+      - "8743:8743"
+    volumes:
+      - /share/Container/nas-collector/collector.toml:/config/collector.toml:ro
+      - nas-collector-data:/data
+
+volumes:
+  nas-collector-data:

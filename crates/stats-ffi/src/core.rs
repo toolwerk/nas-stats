@@ -45,7 +45,8 @@ use nas_http::{Fingerprint, NasClient};
 use nas_model::{self as model, BoxFuture, Provider, ProviderError};
 use provider_qnap::{QnapClient, QnapProvider};
 use stats_core::{
-    Clock, EventRecord, HistoryError, HistoryStore, Planner, PollSink, PollState, system_clock,
+    Clock, EventRecord, Export, HistoryError, HistoryStore, ImportCount, Planner, PollSink,
+    PollState, archive_poll, system_clock,
 };
 
 use crate::error::FfiError;
@@ -235,59 +236,13 @@ impl PollSink for Sink {
         let thresholds = self.thresholds();
         if let Some(history) = &self.history {
             // An error of the archive must not stop the callback.
-            let _ = archive(&mut lock(history), state, &thresholds, (self.clock)());
+            let _ = archive_poll(&mut lock(history), state, &thresholds, (self.clock)());
         }
         let listener = lock(&self.listener).clone();
         if let Some(listener) = listener {
             listener.state_changed(record(state.clone(), &thresholds));
         }
     }
-}
-
-/// Writes one finished query: after a success the snapshot and the events
-/// it opens, raises or closes by `thresholds`; after no answer
-/// (unreachable, time-out, HTTP 502/503/504 of a proxy) an "unreachable"
-/// event when the last snapshot is 15 minutes old. Without any snapshot
-/// nothing.
-fn archive(
-    store: &mut HistoryStore,
-    state: &PollState,
-    thresholds: &model::Thresholds,
-    now: i64,
-) -> Result<(), HistoryError> {
-    let Some(snapshot) = &state.snapshot else {
-        return Ok(());
-    };
-    let changes = if let Some(error) = &state.error {
-        // Only a NAS that gave no answer is unreachable (no connection,
-        // time-out, HTTP 502/503/504 of a proxy); a refused login or an odd
-        // answer still came from it.
-        if !error.is_no_answer() {
-            return Ok(());
-        }
-        let open = open_events(store, &state.nas_id)?;
-        model::detect_unreachable(&open, &snapshot.nas, Some(snapshot.observed_at), now)
-            .into_iter()
-            .collect()
-    } else {
-        store.write_snapshot(snapshot, now)?;
-        let open = open_events(store, &state.nas_id)?;
-        model::detect_events(&open, snapshot, thresholds)
-    };
-    let records: Vec<EventRecord> = changes
-        .iter()
-        .map(|change| EventRecord::from(change.event()))
-        .collect();
-    store.write_events(&records)
-}
-
-/// Open events of a NAS; kinds of a newer build are left out.
-fn open_events(store: &HistoryStore, nas_id: &str) -> Result<Vec<model::Event>, HistoryError> {
-    Ok(store
-        .open_events(nas_id)?
-        .iter()
-        .filter_map(|record| record.to_event().ok())
-        .collect())
 }
 
 /// Fills an archive with the history, backup runs and events of the demo
@@ -453,6 +408,31 @@ impl NasCore {
 
     fn archive(&self) -> Option<MutexGuard<'_, HistoryStore>> {
         self.sink.history.as_ref().map(|history| lock(history))
+    }
+
+    /// `UnknownNas` unless the app registered `nas_id`.
+    pub(crate) fn check_registered(&self, nas_id: &str) -> Result<(), FfiError> {
+        self.entry(nas_id).map(|_| ())
+    }
+
+    /// Takes over an export of the collector (#46) under `nas_id`. An export
+    /// of another version is `Parse`.
+    pub(crate) fn import_export(
+        &self,
+        nas_id: &str,
+        export: &Export,
+    ) -> Result<ImportCount, FfiError> {
+        self.check_registered(nas_id)?;
+        let now = (self.clock)();
+        let Some(mut store) = self.archive() else {
+            return Err(FfiError::History {
+                detail: "kein Verlaufsarchiv".into(),
+            });
+        };
+        store.import(export, nas_id, now).map_err(|e| match e {
+            HistoryError::Format(detail) => FfiError::Parse { detail },
+            other => other.into(),
+        })
     }
 }
 
@@ -2325,5 +2305,49 @@ mod tests {
         assert!(state.blocked);
         assert!(h.core.states()[0].blocked);
         assert_eq!(backend.queries(), 1);
+    }
+
+    fn export_of(version: u32) -> Export {
+        Export {
+            version,
+            nas_id: "keller".into(),
+            until: T0,
+            samples: vec![stats_core::ExportSample {
+                metric: "cpu".into(),
+                key: String::new(),
+                at: T0 - 60,
+                value: 12.0,
+            }],
+            hourly: Vec::new(),
+            daily: Vec::new(),
+            backup_runs: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn collector_export_goes_to_the_registered_nas() {
+        let h = harness(FakeBackend::answering(vec![]));
+        assert!(matches!(
+            h.core.import_export("nas-1", &export_of(1)),
+            Err(FfiError::UnknownNas { .. })
+        ));
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        assert!(matches!(
+            h.core.import_export("nas-1", &export_of(2)),
+            Err(FfiError::Parse { .. })
+        ));
+        let count = h
+            .core
+            .import_export("nas-1", &export_of(1))
+            .expect("import");
+        assert_eq!(count.samples, 1);
+        let cpu = h
+            .core
+            .history("nas-1".into(), Metric::Cpu, HistoryRange::Day)
+            .expect("history");
+        assert_eq!(cpu[0].points.len(), 1);
+        assert!(h.core.events(None, 0, i64::MAX).expect("events").is_empty());
     }
 }

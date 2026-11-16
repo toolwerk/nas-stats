@@ -1,0 +1,31 @@
+[package]
+name = "nas-collector"
+description = "Collector of NAS Stats for a Docker container on the NAS itself: queries every configured NAS at most every 5 minutes into the history archive and hands the history to the apps over HTTPS in the home network."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+getrandom = "0.4"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", features = ["server", "http1"] }
+hyper-util = { version = "0.1.21", features = ["tokio", "server", "http1"] }
+nas-http = { workspace = true }
+nas-model = { workspace = true }
+provider-qnap = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+stats-core = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "macros", "signal", "fs", "sync"] }
+tokio-rustls = { workspace = true }
+toml = "1.2.1"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

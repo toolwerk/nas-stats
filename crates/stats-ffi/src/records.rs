@@ -600,6 +600,59 @@ pub struct NasConfig {
     pub fingerprint: String,
 }
 
+/// One NAS of the collector on the NAS (#46), as it lists them.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct CollectorNas {
+    /// Id of the NAS at the collector, for
+    /// `NasCore::import_from_collector`.
+    pub id: String,
+    pub provider: ProviderKind,
+    /// Name and model as the NAS reported them last; `None` before.
+    pub name: Option<String>,
+    pub model: Option<String>,
+    /// Address the collector queries, `https://…`.
+    pub base_url: String,
+    /// Fingerprint of the certificate of the NAS, `AB:CD:…`; matches the one
+    /// of the same NAS in the app.
+    pub fingerprint: String,
+    /// Time of the newest snapshot at the collector, Unix seconds UTC.
+    pub last_seen: Option<i64>,
+    /// The collector stopped after a rejected login.
+    pub blocked: bool,
+    /// Error of the last query of the collector, as text.
+    pub error: Option<String>,
+}
+
+impl From<stats_core::CollectorNas> for CollectorNas {
+    fn from(nas: stats_core::CollectorNas) -> Self {
+        Self {
+            id: nas.id,
+            provider: nas.provider.into(),
+            name: nas.name,
+            model: nas.model,
+            base_url: nas.base_url,
+            fingerprint: nas.fingerprint,
+            last_seen: nas.last_seen,
+            blocked: nas.blocked,
+            error: nas.error,
+        }
+    }
+}
+
+/// What one import from the collector took over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct CollectorImport {
+    /// Time of the export, Unix seconds UTC: `since` of the next import.
+    pub until: i64,
+    /// Raw samples that were new or had another value.
+    pub samples: u32,
+    /// Hourly and daily values written or replaced.
+    pub hourly: u32,
+    pub daily: u32,
+    /// Backup runs that were new or changed.
+    pub backup_runs: u32,
+}
+
 /// Kind of the last error of a NAS, one per `ProviderError`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
 pub enum ProblemKind {
