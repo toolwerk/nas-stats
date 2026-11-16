@@ -5,6 +5,7 @@ members = [
     "crates/nas-http",
     "crates/qnap-capture",
     "crates/provider-qnap",
+    "crates/stats-core",
     "crates/stats-ffi",
     "crates/uniffi-bindgen",
 ]
@@ -20,6 +21,7 @@ authors = ["Frank Neumann-Staude <frank@staude.net>"]
 nas-model = { path = "crates/nas-model" }
 nas-demo = { path = "crates/nas-demo" }
 nas-http = { path = "crates/nas-http" }
+stats-core = { path = "crates/stats-core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
@@ -39,6 +41,7 @@ base64 = "0.22"
 log = "0.4"
 roxmltree = "0.21"
 uniffi = "0.32.2"
+rusqlite = { version = "0.41.0", features = ["bundled"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
