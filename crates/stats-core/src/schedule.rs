@@ -301,6 +301,34 @@ impl Schedule {
         }
     }
 
+    /// Hands back what the app remembers across launches, keeping what is
+    /// stricter: a known block stays, a later own query counts over an
+    /// older time, and a NAS with a query in flight is left alone. When
+    /// something changes the error is cleared. `false` for an unknown NAS.
+    pub fn restore_poll(
+        &mut self,
+        nas_id: &str,
+        last_attempt_at: Option<i64>,
+        blocked: bool,
+    ) -> bool {
+        let Some(entry) = self.entries.get_mut(nas_id) else {
+            return false;
+        };
+        let state = &mut entry.state;
+        if state.running || state.blocked {
+            return true;
+        }
+        let last_attempt_at = state.last_attempt_at.max(last_attempt_at);
+        if !blocked && last_attempt_at == state.last_attempt_at {
+            return true;
+        }
+        state.last_attempt_at = last_attempt_at;
+        state.blocked = blocked;
+        state.error = None;
+        state.error_at = None;
+        true
+    }
+
     /// Takes a snapshot read elsewhere (e.g. a test query before adding
     /// the NAS) unless the NAS already has one observed later. `true` when
     /// it was taken; error, time of the last query and block stay.
@@ -403,6 +431,37 @@ mod tests {
             schedule.state("nas-1").expect("registered").snapshot,
             Some(snapshot(T0 + 1))
         );
+    }
+
+    #[test]
+    fn restored_poll_keeps_the_stricter_state_and_skips_a_running_query() {
+        let mut schedule = Schedule::new(300);
+        assert!(!schedule.restore_poll("nas-1", Some(T0), true));
+        schedule.add("nas-1", None, false);
+        assert!(schedule.restore_poll("nas-1", Some(T0 - 60), false));
+        assert_eq!(schedule.due(T0), Vec::<String>::new());
+        // An older time does not move it back.
+        assert!(schedule.restore_poll("nas-1", Some(T0 - 3_600), false));
+        let state = schedule.state("nas-1").expect("registered");
+        assert_eq!(state.last_attempt_at, Some(T0 - 60));
+        // A running query is left alone.
+        let generation = schedule.begin("nas-1", T0 + 300).expect("query starts");
+        assert!(schedule.restore_poll("nas-1", Some(T0), true));
+        assert!(!schedule.state("nas-1").expect("registered").blocked);
+        schedule
+            .finish(
+                "nas-1",
+                generation,
+                T0 + 300,
+                Err(ProviderError::LoginFailed),
+            )
+            .expect("result recorded");
+        // A known block stays.
+        assert!(schedule.restore_poll("nas-1", Some(T0), false));
+        let state = schedule.state("nas-1").expect("registered");
+        assert!(state.blocked);
+        assert_eq!(state.last_attempt_at, Some(T0 + 300));
+        assert!(state.error.is_some());
     }
 
     #[test]

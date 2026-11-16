@@ -651,27 +651,13 @@ impl NasCore {
         last_attempt_at: Option<i64>,
         blocked: bool,
     ) -> Result<(), FfiError> {
-        let entries = lock(&self.entries);
-        let entry = entries
-            .get(&nas_id)
-            .cloned()
-            .ok_or_else(|| FfiError::UnknownNas { id: nas_id.clone() })?;
-        let known = self
-            .planner
-            .state(&nas_id)
-            .ok_or_else(|| FfiError::UnknownNas { id: nas_id.clone() })?;
-        // A running query is newer than anything remembered; registering
-        // again would drop its result, a refused login included.
-        if known.running {
-            return Ok(());
+        // Under the planner lock in one step, so no query can start between
+        // the check and the change.
+        if self.planner.restore_poll(&nas_id, last_attempt_at, blocked) {
+            Ok(())
+        } else {
+            Err(FfiError::UnknownNas { id: nas_id })
         }
-        let last_attempt_at = known.last_attempt_at.max(last_attempt_at);
-        if known.blocked || (!blocked && last_attempt_at == known.last_attempt_at) {
-            return Ok(());
-        }
-        self.planner
-            .add(&nas_id, Polled::current(entry), last_attempt_at, blocked);
-        Ok(())
     }
 
     /// State of every registered NAS, sorted by id; sends nothing.

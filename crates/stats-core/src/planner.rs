@@ -187,6 +187,17 @@ impl Planner {
         self.lock().schedule.restore_snapshot(nas_id, snapshot)
     }
 
+    /// Hands back the remembered time of the last query and the block
+    /// ([`Schedule::restore_poll`]); `false` for an unknown NAS.
+    pub fn restore_poll(&self, nas_id: &str, last_attempt_at: Option<i64>, blocked: bool) -> bool {
+        let known = self
+            .lock()
+            .schedule
+            .restore_poll(nas_id, last_attempt_at, blocked);
+        self.wake.notify_one();
+        known
+    }
+
     /// Offers a snapshot read elsewhere ([`Schedule::offer_snapshot`]);
     /// `true` when the NAS took it.
     pub fn offer_snapshot(&self, nas_id: &str, snapshot: Snapshot) -> bool {
