@@ -21,7 +21,7 @@ Schwellen: Füllstand und Plattentemperatur stellen Sie selbst ein.
 
 Widgets: Zustand und Füllstand auf dem Home-Bildschirm, alle NAS in einem großen Widget, dazu Widgets für den Sperrbildschirm des iPhones.
 
-Mac: Menüleisten-Symbol in der Zustandsfarbe, ein Klick zeigt die NAS mit ihrem Zustand.
+Mac: Menüleisten-Symbol in der Zustandsfarbe, ein Klick zeigt die Karte eines NAS, ein Fenster Verlauf und Ereignisse.
 
 Unterstützt: QNAP QTS. Weitere Hersteller folgen.
 
@@ -39,7 +39,7 @@ Speicher, Platten und Warnungen Ihres NAS auf einen Blick. Mit Widgets und Mitte
 
 ### Hinweise für die Prüfung
 
-Die App braucht ein NAS im Netz (QNAP QTS). Ohne NAS lassen sich alle Funktionen im Demo-Modus ansehen: Einstellungen › Demo-Modus. Die Demo-Werte sind als „Demo“ gekennzeichnet. Die Mac-App ist eine Menüleisten-App ohne Dock-Symbol und ohne Hauptfenster; Einstellungen über Rechtsklick auf das Symbol oder ⌘,.
+Die App braucht ein NAS im Netz (QNAP QTS). Ohne NAS lassen sich alle Funktionen im Demo-Modus ansehen: Einstellungen › Demo-Modus. Die Demo-Werte sind als „Demo“ gekennzeichnet. Die Mac-App ist eine Menüleisten-App; ein Klick auf das Symbol zeigt ein Popover, „Fenster öffnen“ das Hauptfenster, solange es offen ist mit Dock-Symbol. Einstellungen über Rechtsklick auf das Symbol oder ⌘,.
 
 Die App greift nur lesend zu. Empfohlen ist ein eigenes Konto mit der Rolle „System Monitoring“ ohne 2-Schritt-Bestätigung; der Hinweis steht auch im Dialog „NAS hinzufügen“. Der Herstellername steht nur in der Beschreibung, nicht im Namen und nicht in den Schlüsselwörtern.
 
@@ -62,7 +62,7 @@ Thresholds: Set the fill level and disk temperature limits yourself.
 
 Widgets: State and fill level on the Home Screen, all NAS in one large widget, plus Lock Screen widgets on iPhone.
 
-Mac: A menu bar icon in the state colour; a click lists the NAS with their state.
+Mac: A menu bar icon in the state colour; a click shows the card of a NAS, a window the history and events.
 
 Supported: QNAP QTS. More brands follow.
 
@@ -80,6 +80,6 @@ Storage, disks and warnings of your NAS at a glance. With widgets and notificati
 
 ### Review notes
 
-The app needs a NAS on the network (QNAP QTS). Without one, every feature can be seen in demo mode: Settings › Demo mode. Demo values are marked “Demo”. The Mac app is a menu bar app with no Dock icon and no main window; settings via right-click on the icon or ⌘,.
+The app needs a NAS on the network (QNAP QTS). Without one, every feature can be seen in demo mode: Settings › Demo mode. Demo values are marked “Demo”. The Mac app is a menu bar app; a click on the icon shows a popover, “Fenster öffnen” the main window, with a Dock icon while it is open. Settings via right-click on the icon or ⌘,.
 
 The app is read-only. A separate account with the role “System Monitoring” without 2-step verification is recommended; the hint is also shown in the “Add NAS” dialog. The brand name appears only in the description, not in the name or keywords.
