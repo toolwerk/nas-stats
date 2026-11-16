@@ -61,8 +61,9 @@ struct NasDetailContentTests {
         #expect(backupKindLabel(.parity) == "Paritätsprüfung")
     }
 
+    /// Büro crosses no threshold, so its health is that of the snapshot.
     private func entry(problem kind: ProblemKind?, stops: Bool = false) -> NasEntry {
-        var snapshot = demo("demo-keller")
+        var snapshot = demo("demo-buero")
         snapshot.worstHealth = .ok
         var entry = NasEntry(id: "a", baseUrl: "https://a.invalid", snapshot: snapshot)
         entry.problem = kind.map {

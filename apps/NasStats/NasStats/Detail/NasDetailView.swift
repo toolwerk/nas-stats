@@ -44,7 +44,9 @@ struct NasDetailView: View {
                     header(entry, now: context.date)
                 }
                 if let snapshot = entry.snapshot {
-                    sections(snapshot, content: NasDetailContent(snapshot: snapshot), now: context.date)
+                    sections(
+                        snapshot, content: NasDetailContent(snapshot: snapshot),
+                        thresholds: entry.thresholds, now: context.date)
                 }
             }
         }
@@ -108,11 +110,13 @@ struct NasDetailView: View {
     // MARK: - Sections
 
     @ViewBuilder
-    private func sections(_ snapshot: Snapshot, content: NasDetailContent, now: Date) -> some View {
+    private func sections(
+        _ snapshot: Snapshot, content: NasDetailContent, thresholds: AlertThresholds, now: Date
+    ) -> some View {
         if !content.volumes.isEmpty || !content.pools.isEmpty {
             Section("Speicher") {
                 ForEach(content.volumes, id: \.id) { volume in
-                    volumeRow(volume)
+                    volumeRow(volume, thresholds: thresholds.fill)
                 }
                 ForEach(content.pools, id: \.id) { pool in
                     poolRow(pool)
@@ -122,7 +126,7 @@ struct NasDetailView: View {
         if !snapshot.disks.isEmpty {
             Section("Platten") {
                 ForEach(snapshot.disks, id: \.id) { disk in
-                    diskRow(disk)
+                    diskRow(disk, warningC: thresholds.diskTempWarningC)
                 }
             }
         }
@@ -181,13 +185,13 @@ struct NasDetailView: View {
         }
     }
 
-    private func volumeRow(_ volume: Volume) -> some View {
+    private func volumeRow(_ volume: Volume, thresholds: FillThresholds) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             // The forecast follows with #60 and #67.
             FillBar(
                 name: volume.name, percent: volume.usedPercent,
                 usedBytes: volume.usedBytes, totalBytes: volume.totalBytes,
-                forecast: nil)
+                forecast: nil, thresholds: thresholds)
             if volume.health == .warning || volume.health == .critical {
                 Text(verbatim: volume.statusText ?? partLabel(volume.health))
                     .font(.caption)
@@ -206,12 +210,12 @@ struct NasDetailView: View {
                 .foregroundStyle(partLevel(pool.health).color))
     }
 
-    private func diskRow(_ disk: Disk) -> some View {
+    private func diskRow(_ disk: Disk, warningC: Double) -> some View {
         var detail = "\(disk.model ?? StatusFormat.notAvailable) · \(StatusFormat.hours(disk.powerOnHours, locale: locale))"
         if disk.spinning == false {
             detail += " · Ruhezustand"
         }
-        let hot = (disk.temperatureC ?? 0) >= StatusMetrics.diskTempWarningC
+        let hot = (disk.temperatureC ?? 0) >= warningC
         let temperature = Text(verbatim: StatusFormat.temperature(disk.temperatureC, locale: locale))
             .foregroundStyle(hot ? StatusLevel.warning.color : Color.primary)
         let smart = Text(verbatim: disk.smartText ?? partLabel(disk.health))
