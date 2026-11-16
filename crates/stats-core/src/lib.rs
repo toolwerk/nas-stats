@@ -7,4 +7,6 @@
 
 mod history;
 
-pub use history::{HistoryError, HistoryStore, Point, Range, Resolution, SCHEMA_VERSION, Series};
+pub use history::{
+    EventRecord, HistoryError, HistoryStore, Point, Range, Resolution, SCHEMA_VERSION, Series,
+};

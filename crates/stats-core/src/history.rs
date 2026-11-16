@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use nas_model::{BackupResult, BackupRun, Metric, ProviderKind, Sample, Snapshot};
+use nas_model::{BackupResult, BackupRun, Health, Metric, ProviderKind, Sample, Snapshot};
 use rusqlite::{Connection, Transaction, params};
 
 /// Version of the schema this build writes and reads.
@@ -66,15 +66,16 @@ CREATE TABLE IF NOT EXISTS samples_daily (
     PRIMARY KEY (nas_id, metric, key, start)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS events (
-    id INTEGER PRIMARY KEY,
     nas_id TEXT NOT NULL,
-    at INTEGER NOT NULL,
     kind TEXT NOT NULL,
-    key TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT '',
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
     level TEXT NOT NULL,
-    text TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS events_nas_at ON events (nas_id, at);
+    text TEXT NOT NULL,
+    PRIMARY KEY (nas_id, kind, subject, started_at)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS events_open ON events (nas_id, ended_at);
 CREATE TABLE IF NOT EXISTS backup_runs (
     nas_id TEXT NOT NULL,
     task_id TEXT NOT NULL,
@@ -183,6 +184,27 @@ pub struct Series {
     /// Volume, disk or interface id; `None` for values of the whole NAS.
     pub key: Option<String>,
     pub points: Vec<Point>,
+}
+
+/// A stored event: something about a NAS that needed attention, from its
+/// start to its end. Mirrors the event of the detection (#10) field by
+/// field; `kind` is its serde name, e.g. `disk_temperature`.
+///
+/// An event is identified by `nas_id`, `kind`, `subject` and `started_at`.
+/// An empty subject is stored like `None` and reads back as `None`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EventRecord {
+    pub nas_id: String,
+    pub kind: String,
+    /// Disk, volume, task, fan or alert text; `None` for the whole NAS.
+    pub subject: Option<String>,
+    /// Highest level while the event was open.
+    pub level: Health,
+    pub text: String,
+    /// Start, Unix seconds UTC.
+    pub started_at: i64,
+    /// End, Unix seconds UTC; `None` while the event is open.
+    pub ended_at: Option<i64>,
 }
 
 /// History archive of all NAS in one SQLite database.
@@ -333,6 +355,69 @@ impl HistoryStore {
             }
         }
         Ok(series)
+    }
+
+    /// Stores opened, raised and closed events. A known event (same NAS,
+    /// kind, subject and start) gets the new level and text; its end stays
+    /// once set.
+    pub fn write_events(&mut self, events: &[EventRecord]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT INTO events (nas_id, kind, subject, started_at, ended_at, level, text)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                 ON CONFLICT (nas_id, kind, subject, started_at) DO UPDATE SET
+                     ended_at = COALESCE(events.ended_at, excluded.ended_at),
+                     level = excluded.level,
+                     text = excluded.text",
+            )?;
+            for event in events {
+                stmt.execute(params![
+                    event.nas_id,
+                    event.kind,
+                    event.subject.as_deref().unwrap_or(""),
+                    event.started_at,
+                    event.ended_at,
+                    health_str(event.level),
+                    event.text
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Events of a NAS that are still open, oldest first. The detection
+    /// needs them as input after a restart.
+    pub fn open_events(&self, nas_id: &str) -> Result<Vec<EventRecord>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT kind, subject, started_at, level, text FROM events
+             WHERE nas_id = ?1 AND ended_at IS NULL
+             ORDER BY started_at, kind, subject",
+        )?;
+        let rows = stmt.query_map(params![nas_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?;
+        let mut events = Vec::new();
+        for row in rows {
+            let (kind, subject, started_at, level, text) = row?;
+            events.push(EventRecord {
+                nas_id: nas_id.to_owned(),
+                kind,
+                subject: (!subject.is_empty()).then_some(subject),
+                level: health_from(&level)?,
+                text,
+                started_at,
+                ended_at: None,
+            });
+        }
+        Ok(events)
     }
 
     /// Deletes everything stored about one NAS.
@@ -632,6 +717,24 @@ fn result_str(result: BackupResult) -> &'static str {
         BackupResult::Error => "error",
         BackupResult::Running => "running",
         BackupResult::Never => "never",
+    }
+}
+
+/// Stored name of a level, as serde writes it.
+fn health_str(level: Health) -> &'static str {
+    match level {
+        Health::Ok => "ok",
+        Health::Warning => "warning",
+        Health::Critical => "critical",
+    }
+}
+
+fn health_from(text: &str) -> Result<Health> {
+    match text {
+        "ok" => Ok(Health::Ok),
+        "warning" => Ok(Health::Warning),
+        "critical" => Ok(Health::Critical),
+        other => Err(HistoryError::Value(format!("level {other:?}"))),
     }
 }
 
@@ -1196,11 +1299,7 @@ mod tests {
             .write_snapshot(&snapshot("nas-2", T0, 0), T0)
             .expect("second NAS");
         store
-            .conn
-            .execute(
-                "INSERT INTO events (nas_id, at, kind, level, text) VALUES ('nas-1', ?1, 'x', 'info', 't')",
-                params![T0],
-            )
+            .write_events(&[event("nas-1", Some("disk-1"), T0, None)])
             .expect("event is written");
         store.delete_nas("nas-1").expect("NAS is deleted");
 
@@ -1234,6 +1333,104 @@ mod tests {
         assert_eq!(count(&store, "SELECT COUNT(*) FROM nas"), 1);
     }
 
+    fn event(
+        nas_id: &str,
+        subject: Option<&str>,
+        started_at: i64,
+        ended_at: Option<i64>,
+    ) -> EventRecord {
+        EventRecord {
+            nas_id: nas_id.into(),
+            kind: "disk_temperature".into(),
+            subject: subject.map(str::to_owned),
+            level: Health::Warning,
+            text: "Platte 1 bei 50 °C".into(),
+            started_at,
+            ended_at,
+        }
+    }
+
+    #[test]
+    fn events_open_raise_close_and_reload() {
+        let mut store = HistoryStore::in_memory().expect("store opens");
+        let opened = event("nas-1", Some("disk-1"), T0, None);
+        let ups = EventRecord {
+            kind: "ups_on_battery".into(),
+            subject: None,
+            level: Health::Critical,
+            text: "USV auf Batterie".into(),
+            ..event("nas-1", None, T0 + 60, None)
+        };
+        let other = event("nas-2", Some("disk-1"), T0, None);
+        let done = event("nas-1", Some("disk-2"), T0 - DAY, Some(T0 - HOUR));
+        store
+            .write_events(&[opened.clone(), ups.clone(), other, done])
+            .expect("events are written");
+        assert_eq!(
+            store.open_events("nas-1").expect("open events"),
+            vec![opened.clone(), ups.clone()]
+        );
+
+        // Raised: same key and start, new level and text.
+        let raised = EventRecord {
+            level: Health::Critical,
+            text: "Platte 1 bei 56 °C".into(),
+            ..opened.clone()
+        };
+        store
+            .write_events(std::slice::from_ref(&raised))
+            .expect("raise is written");
+        assert_eq!(
+            store.open_events("nas-1").expect("open events"),
+            vec![raised.clone(), ups.clone()]
+        );
+
+        // Closed: the end is set and stays when the event is written again.
+        let closed = EventRecord {
+            ended_at: Some(T0 + HOUR),
+            ..raised.clone()
+        };
+        store.write_events(&[closed]).expect("close is written");
+        store
+            .write_events(&[raised])
+            .expect("stale open is written");
+        assert_eq!(store.open_events("nas-1").expect("open events"), vec![ups]);
+        assert_eq!(
+            count(&store, "SELECT COUNT(*) FROM events WHERE nas_id = 'nas-1'"),
+            3
+        );
+    }
+
+    #[test]
+    fn reopened_file_keeps_open_events() {
+        let path = std::env::temp_dir().join(format!(
+            "nas-stats-events-test-{}.sqlite",
+            std::process::id()
+        ));
+        let remove = || {
+            for suffix in ["", "-wal", "-shm"] {
+                let mut file = path.clone().into_os_string();
+                file.push(suffix);
+                let _ = std::fs::remove_file(file);
+            }
+        };
+        remove();
+        let opened = event("nas-1", Some("disk-1"), T0, None);
+        {
+            let mut store = HistoryStore::open(&path).expect("file opens");
+            store
+                .write_events(std::slice::from_ref(&opened))
+                .expect("event is written");
+        }
+        let store = HistoryStore::open(&path).expect("file opens again");
+        assert_eq!(
+            store.open_events("nas-1").expect("open events"),
+            vec![opened]
+        );
+        drop(store);
+        remove();
+    }
+
     #[test]
     fn stored_names_match_serde() {
         for provider in [
@@ -1254,6 +1451,11 @@ mod tests {
             let json = serde_json::to_string(&result).expect("result serializes");
             assert_eq!(json, format!("\"{}\"", result_str(result)));
             assert_eq!(result_from(result_str(result)).expect("known"), result);
+        }
+        for level in [Health::Ok, Health::Warning, Health::Critical] {
+            let json = serde_json::to_string(&level).expect("level serializes");
+            assert_eq!(json, format!("\"{}\"", health_str(level)));
+            assert_eq!(health_from(health_str(level)).expect("known"), level);
         }
         assert!(matches!(result_from("later"), Err(HistoryError::Value(_))));
     }
