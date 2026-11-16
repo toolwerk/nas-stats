@@ -377,3 +377,52 @@ async fn replacing_during_a_query_starts_no_second_one() {
     harness.planner.stop();
     task.await.expect("planner ends");
 }
+
+/// Panics on every query.
+struct PanickingProvider;
+
+impl Provider for PanickingProvider {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Qnap
+    }
+
+    fn snapshot(&self) -> BoxFuture<'_, Result<Snapshot, ProviderError>> {
+        Box::pin(async { panic!("provider broke") })
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn panicking_provider_does_not_stop_the_nas_for_good() {
+    let harness = Harness::new(300);
+    harness
+        .planner
+        .add("nas-1", Arc::new(PanickingProvider), None, false);
+    let task = harness.run();
+    harness.at(1).await;
+    let state = harness.planner.state("nas-1").expect("registered");
+    assert!(!state.running);
+    assert_eq!(state.last_attempt_at, Some(T0));
+    assert_eq!(harness.sink.count(), 0);
+    harness.planner.stop();
+    task.await.expect("planner ends");
+}
+
+#[tokio::test(start_paused = true)]
+async fn removing_and_adding_during_a_query_starts_no_second_one() {
+    let harness = Harness::new(300);
+    let old = FakeProvider::slow(Duration::from_secs(10));
+    let new = FakeProvider::new();
+    harness.planner.add("nas-1", old.clone(), None, false);
+    let task = harness.run();
+
+    harness.at(1).await;
+    assert!(harness.planner.remove("nas-1"));
+    harness.planner.add("nas-1", new.clone(), None, false);
+    harness.at(5).await;
+    assert_eq!(new.calls(), 0);
+    harness.at(11).await;
+    assert_eq!(new.calls(), 1);
+
+    harness.planner.stop();
+    task.await.expect("planner ends");
+}

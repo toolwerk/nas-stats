@@ -16,7 +16,9 @@ use crate::schedule::{Manual, PollState, Schedule};
 /// the task that ran the query, one call at a time and in the order the
 /// queries finished. A NAS removed or replaced during its query is not
 /// reported. The sink may read the planner, but must not call
-/// [`Planner::add`] or [`Planner::remove`] (that would deadlock).
+/// [`Planner::add`] or [`Planner::remove`], and must not wait for a thread
+/// that may call them (e.g. a synchronous hand-over to the main thread);
+/// both would deadlock.
 pub trait PollSink: Send + Sync {
     fn polled(&self, state: &PollState);
 }
@@ -38,22 +40,45 @@ pub fn system_clock() -> Clock {
 /// set or a machine that slept.
 pub const MAX_SLEEP_SECS: u64 = 60;
 
-/// Releases the running mark of a query that ends without a result
-/// (cancelled future or panicking provider).
-struct InFlight<'a> {
-    planner: &'a Planner,
-    nas_id: &'a str,
+/// A started query. Created right after [`Schedule::begin`]; when it is
+/// dropped without a recorded result (cancelled future, task never polled,
+/// panic in provider or clock) it releases the running mark.
+struct InFlight {
+    planner: Arc<Planner>,
+    nas_id: String,
     generation: u64,
+    provider: Arc<dyn Provider>,
     done: bool,
 }
 
-impl Drop for InFlight<'_> {
+impl InFlight {
+    /// Runs the query and hands the result to the sink.
+    async fn run(mut self) -> Option<PollState> {
+        let result = self.provider.snapshot().await;
+        let planner = Arc::clone(&self.planner);
+        let now = planner.now();
+        let report = planner.report_lock();
+        let state = planner
+            .lock()
+            .schedule
+            .finish(&self.nas_id, self.generation, now, result);
+        self.done = true;
+        if let Some(state) = &state {
+            planner.sink.polled(state);
+        }
+        drop(report);
+        planner.wake.notify_one();
+        state
+    }
+}
+
+impl Drop for InFlight {
     fn drop(&mut self) {
         if !self.done {
             self.planner
                 .lock()
                 .schedule
-                .abandon(self.nas_id, self.generation);
+                .abandon(&self.nas_id, self.generation);
             self.planner.wake.notify_one();
         }
     }
@@ -166,39 +191,18 @@ impl Planner {
         self.lock().schedule.states()
     }
 
-    /// Starts a query if the schedule allows it, with the generation for
-    /// [`Schedule::finish`].
-    fn begin(&self, nas_id: &str, now: i64) -> Option<(u64, Arc<dyn Provider>)> {
+    /// Starts a query if the schedule allows it.
+    fn begin(self: &Arc<Self>, nas_id: &str, now: i64) -> Option<InFlight> {
         let mut inner = self.lock();
         let provider = inner.providers.get(nas_id).cloned()?;
         let generation = inner.schedule.begin(nas_id, now)?;
-        Some((generation, provider))
-    }
-
-    /// Runs one started query and hands the result to the sink.
-    async fn poll(
-        &self,
-        nas_id: &str,
-        generation: u64,
-        provider: Arc<dyn Provider>,
-    ) -> Option<PollState> {
-        let mut in_flight = InFlight {
-            planner: self,
-            nas_id,
+        Some(InFlight {
+            planner: Arc::clone(self),
+            nas_id: nas_id.to_owned(),
             generation,
+            provider,
             done: false,
-        };
-        let result = provider.snapshot().await;
-        in_flight.done = true;
-        let now = self.now();
-        let report = self.report_lock();
-        let state = self.lock().schedule.finish(nas_id, generation, now, result);
-        if let Some(state) = &state {
-            self.sink.polled(state);
-        }
-        drop(report);
-        self.wake.notify_one();
-        state
+        })
     }
 
     /// Manual refresh: queries now unless the last query is less than
@@ -207,25 +211,17 @@ impl Planner {
     /// time for [`Manual::TooSoon`]. A NAS removed or replaced during the
     /// query gives [`Manual::Unknown`]. Dropping the future before it ends
     /// frees the NAS again; the start counts as the last query.
-    pub async fn refresh_now(&self, nas_id: &str) -> Result<PollState, Manual> {
+    ///
+    /// Works also after [`Planner::stop`]: a manual refresh is the user's
+    /// own action.
+    pub async fn refresh_now(self: &Arc<Self>, nas_id: &str) -> Result<PollState, Manual> {
         let now = self.now();
-        let (generation, provider) = {
-            let mut inner = self.lock();
-            match inner.schedule.manual(nas_id, now) {
-                Manual::Go => {}
-                other => return Err(other),
-            }
-            let provider = inner
-                .providers
-                .get(nas_id)
-                .cloned()
-                .ok_or(Manual::Unknown)?;
-            let generation = inner.schedule.begin(nas_id, now).ok_or(Manual::Unknown)?;
-            (generation, provider)
-        };
-        self.poll(nas_id, generation, provider)
-            .await
-            .ok_or(Manual::Unknown)
+        match self.lock().schedule.manual(nas_id, now) {
+            Manual::Go => {}
+            other => return Err(other),
+        }
+        let query = self.begin(nas_id, now).ok_or(Manual::Unknown)?;
+        query.run().await.ok_or(Manual::Unknown)
     }
 
     /// Queries every due NAS, each in its own task, until [`Planner::stop`].
@@ -234,13 +230,9 @@ impl Planner {
             let now = self.now();
             let due = self.lock().schedule.due(now);
             for nas_id in due {
-                let Some((generation, provider)) = self.begin(&nas_id, now) else {
-                    continue;
-                };
-                let planner = Arc::clone(&self);
-                tokio::spawn(async move {
-                    planner.poll(&nas_id, generation, provider).await;
-                });
+                if let Some(query) = self.begin(&nas_id, now) {
+                    tokio::spawn(query.run());
+                }
             }
 
             let now = self.now();

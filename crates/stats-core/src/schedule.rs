@@ -57,6 +57,9 @@ struct Entry {
 pub struct Schedule {
     interval: i64,
     entries: BTreeMap<String, Entry>,
+    /// Queries in flight of removed NAS, so that adding the NAS again
+    /// starts no second query beside them.
+    orphans: BTreeMap<String, u64>,
     next_generation: u64,
 }
 
@@ -67,6 +70,7 @@ impl Schedule {
         Self {
             interval: interval_secs.max(MIN_INTERVAL_SECS),
             entries: BTreeMap::new(),
+            orphans: BTreeMap::new(),
             next_generation: 0,
         }
     }
@@ -86,11 +90,14 @@ impl Schedule {
     ///
     /// Replacing an existing NAS keeps only its snapshot; a query still in
     /// flight for the old entry is discarded when it finishes, and until
-    /// then the new entry counts as running.
+    /// then the new entry counts as running (also after a [`Schedule::remove`]).
+    /// With `last_attempt_at` `None` (new credentials) it is due once that
+    /// query ends.
     pub fn add(&mut self, nas_id: &str, last_attempt_at: Option<i64>, blocked: bool) {
-        let (snapshot, in_flight) = self.entries.remove(nas_id).map_or((None, None), |entry| {
-            (entry.state.snapshot, entry.in_flight)
-        });
+        let (snapshot, in_flight) = match self.entries.remove(nas_id) {
+            Some(entry) => (entry.state.snapshot, entry.in_flight),
+            None => (None, self.orphans.remove(nas_id)),
+        };
         self.next_generation += 1;
         self.entries.insert(
             nas_id.to_owned(),
@@ -112,7 +119,22 @@ impl Schedule {
 
     /// Removes a NAS; `false` when it was not registered.
     pub fn remove(&mut self, nas_id: &str) -> bool {
-        self.entries.remove(nas_id).is_some()
+        let Some(entry) = self.entries.remove(nas_id) else {
+            return false;
+        };
+        if let Some(generation) = entry.in_flight {
+            self.orphans.insert(nas_id.to_owned(), generation);
+        }
+        true
+    }
+
+    /// Ends the query of a removed NAS; `true` when it was one.
+    fn release_orphan(&mut self, nas_id: &str, generation: u64) -> bool {
+        if self.orphans.get(nas_id) == Some(&generation) {
+            self.orphans.remove(nas_id);
+            return true;
+        }
+        false
     }
 
     fn is_due(&self, state: &PollState, now: i64) -> bool {
@@ -198,7 +220,7 @@ impl Schedule {
     /// stays. `false` when that query is not in flight.
     pub fn abandon(&mut self, nas_id: &str, generation: u64) -> bool {
         let Some(entry) = self.entries.get_mut(nas_id) else {
-            return false;
+            return self.release_orphan(nas_id, generation);
         };
         if entry.in_flight != Some(generation) {
             return false;
@@ -221,7 +243,10 @@ impl Schedule {
         now: i64,
         result: Result<Snapshot, ProviderError>,
     ) -> Option<PollState> {
-        let entry = self.entries.get_mut(nas_id)?;
+        let Some(entry) = self.entries.get_mut(nas_id) else {
+            self.release_orphan(nas_id, generation);
+            return None;
+        };
         if entry.in_flight != Some(generation) {
             return None;
         }
@@ -485,6 +510,29 @@ mod tests {
         assert!(!state.running);
         assert_eq!(state.snapshot, None);
         assert_eq!(schedule.due(T0 + 5), vec!["nas-1".to_owned()]);
+    }
+
+    #[test]
+    fn removing_and_adding_during_a_query_starts_no_second_one() {
+        let mut schedule = Schedule::new(300);
+        schedule.add("nas-1", None, false);
+        let old = schedule.begin("nas-1", T0).expect("query starts");
+        assert!(schedule.remove("nas-1"));
+        schedule.add("nas-1", None, false);
+        assert!(schedule.due(T0 + 1).is_empty());
+        assert_eq!(schedule.manual("nas-1", T0 + 1), Manual::Running);
+        assert_eq!(
+            schedule.finish("nas-1", old, T0 + 5, Ok(snapshot(T0))),
+            None
+        );
+        assert_eq!(schedule.due(T0 + 5), vec!["nas-1".to_owned()]);
+
+        // An orphan that ends before the NAS comes back leaves nothing.
+        let old = schedule.begin("nas-1", T0 + 5).expect("query starts");
+        assert!(schedule.remove("nas-1"));
+        assert!(schedule.abandon("nas-1", old));
+        schedule.add("nas-1", None, false);
+        assert_eq!(schedule.due(T0 + 6), vec!["nas-1".to_owned()]);
     }
 
     #[test]
