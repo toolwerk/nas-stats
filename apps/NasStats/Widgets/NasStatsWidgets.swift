@@ -9,16 +9,19 @@ struct NasStatsWidgets: WidgetBundle {
     }
 }
 
-/// Placeholder widget until #24: the NAS chosen in its settings (#26) or the
-/// worst one, from the widget snapshot the app writes into the App Group (#23).
+/// The widget „NAS“ (#24): small with the ring of the fullest volume, medium
+/// with bars per volume and key figures. It shows the NAS chosen in its
+/// settings (#26) or the worst one, from the widget snapshot the app writes
+/// into the App Group (#23). The kind stays, so placed widgets keep their
+/// choice.
 struct StatusWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: "net.staude.nasstats.status", intent: SelectNasIntent.self, provider: StatusProvider()) { entry in
             StatusView(entry: entry)
                 .containerBackground(.fill.tertiary, for: .widget)
         }
-        .configurationDisplayName("NAS Stats")
-        .description("Zustand Ihrer NAS.")
+        .configurationDisplayName("NAS")
+        .description("Zustand, Füllstand und Kennzahlen eines NAS.")
         .supportedFamilies([.systemSmall, .systemMedium])
     }
 }
@@ -31,13 +34,24 @@ struct StatusEntry: TimelineEntry {
     let nas: WidgetNas?
 }
 
+extension StatusEntry {
+    /// Demo values for the gallery and the placeholder.
+    static var sample: StatusEntry { .init(entry: WidgetSamples.demo, now: WidgetSamples.now) }
+
+    init(entry snapshot: WidgetSnapshot, now: Date) {
+        self.init(date: now, snapshot: snapshot, nas: snapshot.nas.first)
+    }
+}
+
 struct StatusProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> StatusEntry {
-        StatusEntry(date: .now, snapshot: nil, nas: nil)
+        .sample
     }
 
     func snapshot(for configuration: SelectNasIntent, in context: Context) async -> StatusEntry {
         let snapshot = WidgetSnapshot.load(from: WidgetSnapshot.fileURL)
+        // The gallery shows demo values until the app wrote a state.
+        if snapshot == nil, context.isPreview { return .sample }
         return StatusEntry(
             date: .now, snapshot: snapshot, nas: snapshot?.selected(configuration.nas?.id)
         )
@@ -62,77 +76,54 @@ struct StatusProvider: AppIntentTimelineProvider {
 
 struct StatusView: View {
     let entry: StatusEntry
+    @Environment(\.widgetFamily) private var family
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            content
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder private var content: some View {
         if let snapshot = entry.snapshot {
             if let nas = entry.nas {
-                NasLines(nas: nas, snapshot: snapshot, now: entry.date)
+                if family == .systemMedium {
+                    NasMediumView(nas: nas, snapshot: snapshot, now: entry.date)
+                } else {
+                    NasSmallView(nas: nas, snapshot: snapshot, now: entry.date)
+                }
             } else {
-                title
-                note("Kein NAS eingerichtet")
+                empty("Kein NAS eingerichtet")
             }
         } else {
-            title
-            note("Noch keine Daten")
+            empty("Noch keine Daten")
         }
     }
 
-    private var title: some View {
-        Text("NAS Stats").font(.headline)
-    }
-
-    private func note(_ text: String) -> some View {
-        Text(text)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+    private func empty(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("NAS Stats").font(.headline)
+            Text(text)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
-/// The shown NAS: status dot, name, "DEMO", the error or the first warning,
-/// and the time of the state once it is old.
-private struct NasLines: View {
-    let nas: WidgetNas
-    let snapshot: WidgetSnapshot
-    let now: Date
+private let previews: [(String, WidgetSnapshot)] = [
+    ("Demo", WidgetSamples.demo), ("Gesund", WidgetSamples.healthy),
+    ("Nicht erreichbar", WidgetSamples.offline), ("Alter Stand", WidgetSamples.old),
+    ("Ohne Volumes", WidgetSamples.noVolumes),
+]
 
-    var body: some View {
-        HStack(spacing: 6) {
-            StatusDot(level: nas.status)
-            Text(nas.name)
-                .font(.headline)
-                .lineLimit(1)
-            Spacer(minLength: 0)
-            if snapshot.demo {
-                Text("DEMO")
-                    .font(.caption2.bold())
-                    .foregroundStyle(.secondary)
-            }
-        }
-        // The error first: it explains a red or dashed dot, while the
-        // findings may be those of an old state.
-        if let problem = nas.problemLine {
-            Text(problem)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .lineLimit(3)
-        } else if let finding = nas.firstFinding {
-            Text(finding)
-                .font(.subheadline)
-                .foregroundStyle(nas.firstFindingLevel?.color ?? .primary)
-                .lineLimit(3)
-        }
-        Spacer(minLength: 0)
-        if let observedAt = nas.observedAt, snapshot.isStale(nas, now: now) {
-            Text(StatusFormat.observed(observedAt, now: now))
-                .font(.caption)
-                .foregroundStyle(StatusLevel.offline.color)
-        }
-    }
+#Preview("Klein", as: .systemSmall) {
+    StatusWidget()
+} timeline: {
+    for (_, snapshot) in previews { StatusEntry(entry: snapshot, now: WidgetSamples.now) }
+}
+
+#Preview("Mittel", as: .systemMedium) {
+    StatusWidget()
+} timeline: {
+    for (_, snapshot) in previews { StatusEntry(entry: snapshot, now: WidgetSamples.now) }
 }
