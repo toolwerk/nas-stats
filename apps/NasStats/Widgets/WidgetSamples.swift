@@ -49,4 +49,56 @@ enum WidgetSamples {
     static let old = snapshot(
         nas(status: .ok, finding: nil, volumes: threeVolumes, observedAgo: 3 * 3600), demo: false)
     static let noVolumes = snapshot(nas(status: .ok, finding: nil, volumes: []))
+
+    // MARK: Widget „Alle NAS“ (#38)
+
+    private static let tb: UInt64 = 1_099_511_627_776
+
+    private static func sizedVolume(_ name: String, percent: Double, totalTB: Double) -> WidgetVolume {
+        let total = UInt64(totalTB * Double(tb))
+        return WidgetVolume(
+            id: name, name: name, usedPercent: percent,
+            usedBytes: UInt64(Double(total) * percent / 100), totalBytes: total, forecast: nil)
+    }
+
+    private static func row(
+        _ id: String, _ name: String, status: StatusLevel, findings: Int = 0,
+        volumes: [WidgetVolume], history: [WidgetFillPoint] = []
+    ) -> WidgetNas {
+        WidgetNas(
+            id: id, name: name, model: nil, vendor: nil, status: status,
+            firstFinding: findings > 0 ? "Platte 3 bei 52 °C" : nil,
+            firstFindingLevel: findings > 0 ? .warning : nil, findingCount: findings,
+            problemLine: nil, volumes: volumes, hottestDiskC: nil, cpuPercent: nil,
+            memoryPercent: nil, lastBackupAt: now.addingTimeInterval(-9 * 3600),
+            observedAt: now.addingTimeInterval(-60), fullestVolumeHistory: history)
+    }
+
+    /// 30 daily values from 84 to 88 percent, the last one today.
+    private static let thirtyDays: [WidgetFillPoint] = (0 ..< 30).map { offset in
+        WidgetFillPoint(
+            day: now.addingTimeInterval(-Double(29 - offset) * 86400),
+            percent: 84 + 4 * Double(offset) / 29)
+    }
+
+    private static func allSnapshot(history: [WidgetFillPoint]) -> WidgetSnapshot {
+        WidgetSnapshot(
+            writtenAt: now, demo: true,
+            staleAfterSeconds: WidgetSnapshot.staleAfter(intervalMinutes: 5),
+            thresholds: .standard,
+            nas: [
+                row("demo-keller", "Keller", status: .warning, findings: 1,
+                    volumes: [sizedVolume("DataVol1", percent: 87, totalTB: 21.8)], history: history),
+                row("demo-buero", "Büro", status: .ok,
+                    volumes: [sizedVolume("Volume 1", percent: 52, totalTB: 10.9)]),
+                row("demo-homelab", "Homelab", status: .ok,
+                    volumes: [sizedVolume("tank", percent: 64, totalTB: 21.8),
+                              sizedVolume("apps", percent: 23, totalTB: 0.7)]),
+                row("demo-archiv", "Archiv", status: .ok,
+                    volumes: [sizedVolume("Archiv", percent: 30, totalTB: 8)]),
+            ])
+    }
+
+    static let all = allSnapshot(history: thirtyDays)
+    static let allWithoutHistory = allSnapshot(history: [])
 }

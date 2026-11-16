@@ -46,8 +46,9 @@ struct NasQuery: EntityQuery {
     func defaultResult() async -> NasEntity? { .automatic }
 }
 
-/// Settings of the NAS widgets: which NAS they show. The volume of the fill
-/// level widget follows with #38.
+/// Settings of the widgets „NAS“ and „Füllstand“: which NAS they show. The
+/// fill level widget shows the three fullest volumes of it, there is no
+/// volume choice (#38).
 struct SelectNasIntent: WidgetConfigurationIntent {
     static let title: LocalizedStringResource = "NAS wählen"
     static let description = IntentDescription("Welches NAS das Widget zeigt.")
