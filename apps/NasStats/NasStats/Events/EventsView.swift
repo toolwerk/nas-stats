@@ -98,7 +98,8 @@ struct EventsView: View {
     private func load() {
         let now = Int64(Date().timeIntervalSince1970)
         do {
-            events = try store.events(nasId: nil, from: now - Int64(Self.windowDays) * 86_400, to: now)
+            // No upper bound: `startedAt` is the clock of the NAS, which may run ahead.
+            events = try store.events(nasId: nil, from: now - Int64(Self.windowDays) * 86_400, to: .max)
             loadFailed = false
         } catch {
             loadFailed = true
