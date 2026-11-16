@@ -124,7 +124,11 @@ final class NasStore {
             demoSource: { demoSnapshots(now: $0) },
             pollInterval: .seconds(300)
         )
-        // Without a container (previews) the writer does nothing.
+        // Previews never touch the file of the real app.
+        guard ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] != "1" else {
+            return store
+        }
+        // Without a container the writer does nothing.
         let writer = WidgetSnapshotWriter(fileURL: WidgetSnapshot.fileURL) {
             WidgetCenter.shared.reloadAllTimelines()
         }
