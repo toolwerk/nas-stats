@@ -48,5 +48,5 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
-- The settings of each NAS show „Über iCloud-Schlüsselbund auf meine Geräte“ and switch it afterwards: the keychain entry moves to or from iCloud Keychain, the NAS stays reachable and the password is never shown or logged (#98).
+- One setting „Zugänge über iCloud-Schlüsselbund teilen“ in the settings, on by default, keeps the access of every NAS in iCloud Keychain, so a NAS added on the Mac shows on the iPhone. Switching it moves every keychain entry to or from iCloud Keychain (turning it off asks first), the NAS stay reachable and the password is never shown or logged. The first launch after the update shares the NAS kept only on this device once; the switch per NAS in the add dialog and the NAS settings is gone (#98, #113).
 - Fill bar: a total just below a unit boundary shows in the next unit („1,0 TB“ instead of „1.024,0 GB“); `capacity` and `bytes` share the rule for the unit (#86).

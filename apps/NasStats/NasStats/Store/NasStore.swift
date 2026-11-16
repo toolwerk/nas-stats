@@ -72,6 +72,14 @@ final class NasStore {
     /// reloads the widgets (#23).
     @ObservationIgnored var onUpdate: (@MainActor ([NasEntry]) -> Void)?
 
+    /// Whether the NAS of this device are kept in iCloud Keychain, so they
+    /// show on every device with the same Apple Account (#113). One setting
+    /// for all NAS, on by default; it belongs to this device and is saved
+    /// under `sharesAccessViaICloud` in the defaults. Change it with
+    /// `setSharesAccessViaICloud`.
+    private(set) var sharesAccessViaICloud: Bool
+
+    static let sharesAccessViaICloudKey = "sharesAccessViaICloud"
     static let demoModeKey = "demoMode"
     static let queryLogKey = "queryLog"
     static let queryIntervalKey = "queryInterval"
@@ -150,6 +158,22 @@ final class NasStore {
         let thresholds = AlertThresholds.load(from: defaults)
         self.thresholds = thresholds
         self.queryIntervalMinutes = Self.storedInterval(in: defaults)
+        let storedShares = defaults.object(forKey: Self.sharesAccessViaICloudKey) as? Bool
+        self.sharesAccessViaICloud = storedShares ?? true
+        // First launch with the global setting: the NAS kept only on this
+        // device so far follow it once, so "on" holds. With an unreadable
+        // keychain nothing is saved, so it runs again at the next launch.
+        if storedShares == nil, accounts.loadError == nil {
+            defaults.set(true, forKey: Self.sharesAccessViaICloudKey)
+            do {
+                let failed = try accounts.setSyncsViaICloud(all: true)
+                if failed > 0 {
+                    Self.logger.error("First move to iCloud Keychain: \(failed, privacy: .public) NAS not moved")
+                }
+            } catch {
+                Self.logger.error("First move to iCloud Keychain failed: \(String(describing: error), privacy: .public)")
+            }
+        }
         // Before the first state, so restored ones get the same findings.
         accounts.core.setThresholds(thresholds: thresholds.core)
         // The last state of an earlier launch shows until the first answer;
@@ -209,10 +233,16 @@ final class NasStore {
     /// Every new state goes into the widget snapshot of the App Group (#23).
     static func live() -> NasStore {
         let isPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+        // Previews get an empty keychain and defaults of their own, so
+        // neither the first move to iCloud Keychain nor the switch of the
+        // settings (#113) touches the real entries or marks the move done,
+        // and no real NAS data shows.
         let store = NasStore(
             // Previews keep the history in memory.
-            accounts: NasAccounts(core: isPreview ? NasCore() : archiveCore()),
-            defaults: UserDefaults(suiteName: AppGroup.id) ?? .standard,
+            accounts: isPreview
+                ? NasAccounts(keychain: NoAccountStore(), core: NasCore())
+                : NasAccounts(core: archiveCore()),
+            defaults: UserDefaults(suiteName: isPreview ? "preview-live" : AppGroup.id) ?? .standard,
             demoSource: { demoSnapshots(now: $0, thresholds: $1) },
             lastStates: LastStates(fileURL: isPreview ? nil : LastStates.liveURL)
         )
@@ -322,7 +352,10 @@ final class NasStore {
     /// counts as its first: its snapshot shows until the core has its own,
     /// and the planner queries it next after the interval of the settings.
     /// Throws when the keychain or the core refuses it; nothing changes then.
+    /// The entry follows the iCloud Keychain setting of the settings.
     func add(_ stored: StoredAccount, snapshot: Snapshot? = nil) async throws {
+        var stored = stored
+        stored.account.syncsViaICloud = sharesAccessViaICloud
         // The core registers a new NAS as due and wakes its planner at once;
         // held until the test query counts, it does not query again.
         let planning = started && !demoMode
@@ -376,10 +409,17 @@ final class NasStore {
         rebuild()
     }
 
-    /// Switches the iCloud Keychain setting of a NAS (#98). No query: the
-    /// NAS and its state stay as they are.
-    func setSyncsViaICloud(id: UUID, to syncs: Bool) throws {
-        try accounts.setSyncsViaICloud(id: id, syncs: syncs)
+    /// Switches the global iCloud Keychain setting (#113) and moves every
+    /// stored NAS with it. Throws when the keychain could not be read at
+    /// start; the setting stays then. Otherwise the setting is saved, also
+    /// when single entries could not be moved, and their number is
+    /// returned. No query: the NAS and their state stay as they are.
+    @discardableResult
+    func setSharesAccessViaICloud(_ shares: Bool) throws -> Int {
+        let failed = try accounts.setSyncsViaICloud(all: shares)
+        sharesAccessViaICloud = shares
+        defaults.set(shares, forKey: Self.sharesAccessViaICloudKey)
+        return failed
     }
 
     /// "Erneut versuchen": starts a blocked NAS again with its stored
@@ -683,4 +723,11 @@ final class StoreListener: StateListener {
     func finish() {
         continuation.finish()
     }
+}
+
+/// A keychain without entries that stores nothing; for the previews.
+private struct NoAccountStore: AccountStore {
+    func loadAll() throws -> [StoredAccount] { [] }
+    func save(_ stored: StoredAccount) throws {}
+    func delete(id: UUID) throws {}
 }

@@ -146,6 +146,30 @@ final class NasAccounts {
         accounts = Self.sorted(accounts.map { $0.id == id ? stored.account : $0 })
     }
 
+    /// Moves the keychain entry of every NAS to or from iCloud Keychain
+    /// (#113), one by one with `setSyncsViaICloud(id:syncs:)`. A failure
+    /// does not stop the others; that entry stays as it was. Returns the
+    /// number of entries that could not be moved. Throws `InvalidInput`
+    /// and changes nothing when the keychain could not be read at start.
+    @discardableResult
+    func setSyncsViaICloud(all syncs: Bool) throws -> Int {
+        if loadError != nil {
+            throw FfiError.InvalidInput(detail: "Die gespeicherten NAS ließen sich nicht aus dem Schlüsselbund lesen.")
+        }
+        var failed = 0
+        for account in accounts where account.syncsViaICloud != syncs {
+            do {
+                try setSyncsViaICloud(id: account.id, syncs: syncs)
+            } catch {
+                failed += 1
+                // Only the status, never the entry or its password.
+                let status = (error as? KeychainError).map { String($0.status) } ?? "-"
+                Self.log.error("iCloud Keychain setting not moved, OSStatus \(status, privacy: .public)")
+            }
+        }
+        return failed
+    }
+
     /// Starts a blocked NAS again with its stored user and password ("Erneut
     /// versuchen"); see `updateCredentials`.
     func resume(id: UUID) async throws {
