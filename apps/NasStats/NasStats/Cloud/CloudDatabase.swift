@@ -190,8 +190,10 @@ struct CloudKitDatabase: CloudDatabase {
     }
 
     /// The record of the transfer; `nil` for another type or missing fields.
-    /// An asset that does not read throws.
-    private static func cloudRecord(_ ck: CKRecord) throws -> CloudRecord? {
+    /// An asset that does not read is left out and logged: the Mac writes
+    /// the state with its asset anew after every new snapshot, so the next
+    /// upload brings the 24 hours, and the rest of the fetch is not held up.
+    private static func cloudRecord(_ ck: CKRecord) -> CloudRecord? {
         guard let kind = CloudRecord.Kind(rawValue: ck.recordType),
               let nasId = ck["nasId"] as? String,
               let payload = ck["payload"] as? Data
@@ -205,8 +207,10 @@ struct CloudKitDatabase: CloudDatabase {
         }
         var recent: Data?
         if let asset = ck["recent"] as? CKAsset {
-            guard let url = asset.fileURL else { throw CocoaError(.fileReadNoSuchFile) }
-            recent = try Data(contentsOf: url)
+            recent = asset.fileURL.flatMap { try? Data(contentsOf: $0) }
+            if recent == nil {
+                log.error("Asset not read, left out: \(ck.recordID.recordName, privacy: .public)")
+            }
         }
         return CloudRecord(
             kind: kind,
