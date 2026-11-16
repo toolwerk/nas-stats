@@ -187,6 +187,12 @@ impl Planner {
         self.lock().schedule.restore_snapshot(nas_id, snapshot)
     }
 
+    /// Offers a snapshot read elsewhere ([`Schedule::offer_snapshot`]);
+    /// `true` when the NAS took it.
+    pub fn offer_snapshot(&self, nas_id: &str, snapshot: Snapshot) -> bool {
+        self.lock().schedule.offer_snapshot(nas_id, snapshot)
+    }
+
     /// State of one NAS.
     pub fn state(&self, nas_id: &str) -> Option<PollState> {
         self.lock().schedule.state(nas_id)

@@ -301,6 +301,25 @@ impl Schedule {
         }
     }
 
+    /// Takes a snapshot read elsewhere (e.g. a test query before adding
+    /// the NAS) unless the NAS already has one observed later. `true` when
+    /// it was taken; error, time of the last query and block stay.
+    pub fn offer_snapshot(&mut self, nas_id: &str, snapshot: Snapshot) -> bool {
+        let Some(entry) = self.entries.get_mut(nas_id) else {
+            return false;
+        };
+        if entry
+            .state
+            .snapshot
+            .as_ref()
+            .is_some_and(|kept| kept.observed_at >= snapshot.observed_at)
+        {
+            return false;
+        }
+        entry.state.snapshot = Some(snapshot);
+        true
+    }
+
     /// State of one NAS.
     pub fn state(&self, nas_id: &str) -> Option<PollState> {
         self.entries.get(nas_id).map(|entry| entry.state.clone())
@@ -368,6 +387,21 @@ mod tests {
         assert_eq!(
             schedule.state("nas-1").expect("registered").snapshot,
             Some(snapshot(T0))
+        );
+    }
+
+    #[test]
+    fn offered_snapshot_wins_unless_the_kept_one_is_newer() {
+        let mut schedule = Schedule::new(300);
+        assert!(!schedule.offer_snapshot("nas-1", snapshot(T0)));
+        schedule.add("nas-1", None, false);
+        assert!(schedule.offer_snapshot("nas-1", snapshot(T0)));
+        assert!(!schedule.offer_snapshot("nas-1", snapshot(T0)));
+        assert!(!schedule.offer_snapshot("nas-1", snapshot(T0 - 1)));
+        assert!(schedule.offer_snapshot("nas-1", snapshot(T0 + 1)));
+        assert_eq!(
+            schedule.state("nas-1").expect("registered").snapshot,
+            Some(snapshot(T0 + 1))
         );
     }
 

@@ -16,12 +16,17 @@
 //!   certificate the core no longer queries the NAS until the app changes
 //!   the credentials or adds the NAS again.
 //! - The last snapshot stays after every error.
+//! - Findings are checked against the thresholds the app set with
+//!   [`NasCore::set_thresholds`] (standard until then). They are computed
+//!   from the snapshot as read whenever the app asks, so a change of the
+//!   thresholds shows at once, without a query.
 //! - With [`NasCore::start_planner`] the core queries on its own and calls
 //!   the [`StateListener`] after every finished query, also a failed one.
 //!
 //! Every finished query goes into the history archive: the samples of a
-//! snapshot, and the events found with the standard thresholds (disk 50 °C,
-//! volume 80 and 90 %), "unreachable" 15 minutes after the last snapshot.
+//! snapshot, and the events found with the thresholds set (standard: disk
+//! 50 °C, volume 80 and 90 %), "unreachable" 15 minutes after the last
+//! snapshot without an answer.
 //! An error of the archive never stops a query or the callback. The archive
 //! lives in a file ([`NasCore::with_history`]) or in memory.
 //!
@@ -45,7 +50,7 @@ use stats_core::{
 use crate::error::FfiError;
 use crate::records::{
     BackupRun, Forecast, HistoryRange, HistorySeries, Metric, NasConfig, NasEvent, NasProblem,
-    NasState, ProviderKind, Snapshot, StateListener,
+    NasState, ProviderKind, Snapshot, StateListener, Thresholds,
 };
 use crate::{on_core, runtime};
 
@@ -138,16 +143,16 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The record the app sees for a state of the planner; snapshots of the
-/// demo NAS are marked as demo.
-fn record(state: PollState) -> NasState {
+/// The record the app sees for a state of the planner, with findings by
+/// `thresholds`; snapshots of the demo NAS are marked as demo.
+fn record(state: PollState, thresholds: &model::Thresholds) -> NasState {
     let demo = nas_demo::is_demo_id(&state.nas_id);
     NasState {
         snapshot: state.snapshot.map(|s| {
             if demo {
-                Snapshot::demo(s)
+                Snapshot::demo(s, thresholds)
             } else {
-                Snapshot::real(s)
+                Snapshot::real(s, thresholds)
             }
         }),
         problem: state.error.as_ref().map(NasProblem::from),
@@ -212,27 +217,42 @@ type Archive = Arc<Mutex<HistoryStore>>;
 struct Sink {
     history: Option<Archive>,
     listener: Mutex<Option<Arc<dyn StateListener>>>,
+    /// Thresholds the app set (#85), for findings and events. Never locked
+    /// together with another lock: copy it first.
+    thresholds: Mutex<model::Thresholds>,
     clock: Clock,
+}
+
+impl Sink {
+    fn thresholds(&self) -> model::Thresholds {
+        *lock(&self.thresholds)
+    }
 }
 
 impl PollSink for Sink {
     fn polled(&self, state: &PollState) {
+        let thresholds = self.thresholds();
         if let Some(history) = &self.history {
             // An error of the archive must not stop the callback.
-            let _ = archive(&mut lock(history), state, (self.clock)());
+            let _ = archive(&mut lock(history), state, &thresholds, (self.clock)());
         }
         let listener = lock(&self.listener).clone();
         if let Some(listener) = listener {
-            listener.state_changed(record(state.clone()));
+            listener.state_changed(record(state.clone(), &thresholds));
         }
     }
 }
 
 /// Writes one finished query: after a success the snapshot and the events
-/// it opens, raises or closes; after no answer (unreachable, time-out) an
+/// it opens, raises or closes by `thresholds`; after no answer (unreachable, time-out) an
 /// "unreachable" event when the last snapshot is 15 minutes old. Without
 /// any snapshot nothing.
-fn archive(store: &mut HistoryStore, state: &PollState, now: i64) -> Result<(), HistoryError> {
+fn archive(
+    store: &mut HistoryStore,
+    state: &PollState,
+    thresholds: &model::Thresholds,
+    now: i64,
+) -> Result<(), HistoryError> {
     let Some(snapshot) = &state.snapshot else {
         return Ok(());
     };
@@ -252,7 +272,7 @@ fn archive(store: &mut HistoryStore, state: &PollState, now: i64) -> Result<(), 
     } else {
         store.write_snapshot(snapshot, now)?;
         let open = open_events(store, &state.nas_id)?;
-        model::detect_events(&open, snapshot, &model::Thresholds::default())
+        model::detect_events(&open, snapshot, thresholds)
     };
     let records: Vec<EventRecord> = changes
         .iter()
@@ -302,6 +322,10 @@ pub struct NasCore {
     run: Mutex<Option<tokio::task::JoinHandle<()>>>,
     connect: Connector,
     clock: Clock,
+    /// Snapshot of the last [`NasCore::test_connection`], as read; the next
+    /// [`NasCore::add_nas`] of that NAS takes it over. Never locked
+    /// together with another lock.
+    last_test: Mutex<Option<model::Snapshot>>,
 }
 
 impl NasCore {
@@ -314,6 +338,7 @@ impl NasCore {
         let sink = Arc::new(Sink {
             history: history.map(|store| Arc::new(Mutex::new(store))),
             listener: Mutex::new(None),
+            thresholds: Mutex::new(model::Thresholds::default()),
             clock: Arc::clone(&clock),
         });
         let planner = Planner::new(
@@ -328,7 +353,13 @@ impl NasCore {
             run: Mutex::new(None),
             connect,
             clock,
+            last_test: Mutex::new(None),
         }
+    }
+
+    /// The thresholds set now, copied so no lock is held.
+    fn thresholds(&self) -> model::Thresholds {
+        self.sink.thresholds()
     }
 
     fn entry(&self, nas_id: &str) -> Result<Arc<Entry>, FfiError> {
@@ -353,8 +384,15 @@ impl NasCore {
 
     /// Registers or replaces a NAS with the planner, as never queried; the
     /// session of a replaced entry ends in the background, after a query
-    /// still running on it (its error is ignored).
-    fn register(&self, nas_id: String, provider: model::ProviderKind, backend: Arc<dyn Backend>) {
+    /// still running on it (its error is ignored). A `tested` snapshot
+    /// becomes its snapshot unless the kept one is newer.
+    fn register(
+        &self,
+        nas_id: String,
+        provider: model::ProviderKind,
+        backend: Arc<dyn Backend>,
+        tested: Option<model::Snapshot>,
+    ) {
         let entry = Arc::new(Entry {
             backend,
             provider,
@@ -368,6 +406,9 @@ impl NasCore {
         let replaced = entries.insert(nas_id.clone(), Arc::clone(&entry));
         self.planner
             .add(&nas_id, Polled::current(entry), None, false);
+        if let Some(tested) = tested {
+            self.planner.offer_snapshot(&nas_id, tested);
+        }
         drop(entries);
         if let Some(old) = replaced {
             runtime().spawn(async move {
@@ -380,7 +421,7 @@ impl NasCore {
     fn state(&self, nas_id: &str) -> Result<NasState, FfiError> {
         self.planner
             .state(nas_id)
-            .map(record)
+            .map(|state| record(state, &self.thresholds()))
             .ok_or_else(|| FfiError::UnknownNas {
                 id: nas_id.to_owned(),
             })
@@ -402,10 +443,10 @@ impl NasCore {
             .last_attempt_at
             .is_some_and(|last| now >= last && now - last < MIN_INTERVAL_SECS);
         if state.blocked || (interval && recent) {
-            return Ok(record(state));
+            return Ok(record(state, &self.thresholds()));
         }
         match self.planner.refresh_now(nas_id).await {
-            Ok(state) => Ok(record(state)),
+            Ok(state) => Ok(record(state, &self.thresholds())),
             Err(_) => self.state(nas_id),
         }
     }
@@ -478,6 +519,7 @@ impl NasCore {
                     nas_id: snapshot.nas.id.clone(),
                     clock: Arc::clone(&clock),
                 }),
+                None,
             );
         }
         core
@@ -486,7 +528,9 @@ impl NasCore {
     /// Registers a NAS; sends nothing for a new id. An entry with the same
     /// id is replaced: its snapshot stays, the error, the time of the last
     /// query and a block are cleared, and its old session is logged out in
-    /// the background.
+    /// the background. The snapshot of the last [`NasCore::test_connection`]
+    /// of this NAS becomes its snapshot, unless it already has a newer one,
+    /// so its findings follow the thresholds like any other.
     pub fn add_nas(
         &self,
         config: NasConfig,
@@ -494,8 +538,23 @@ impl NasCore {
         password: String,
     ) -> Result<(), FfiError> {
         let backend = (self.connect)(&config, user, password)?;
-        self.register(config.id, config.provider.into(), backend);
+        let tested = {
+            let mut last_test = lock(&self.last_test);
+            match last_test.as_ref() {
+                Some(t) if t.nas.id == config.id => last_test.take(),
+                _ => None,
+            }
+        };
+        self.register(config.id, config.provider.into(), backend, tested);
         Ok(())
+    }
+
+    /// Thresholds for the findings of every snapshot the core hands out
+    /// from now on, also of those already read, and for the events of the
+    /// following queries. Taken over unchecked; the backup limit stays at
+    /// two days. Sends nothing.
+    pub fn set_thresholds(&self, thresholds: Thresholds) {
+        *lock(&self.sink.thresholds) = thresholds.into();
     }
 
     /// Removes a NAS, deletes its history and events and ends its session;
@@ -584,8 +643,8 @@ impl NasCore {
     /// [`NasCore::add_nas`] and before [`NasCore::start_planner`], so a
     /// restart neither queries at once nor repeats a rejected login. The
     /// core keeps what is stricter: a block it knows stays, and a later
-    /// query of its own counts over an older time. Clears the error; the
-    /// snapshot stays. Sends nothing.
+    /// query of its own counts over an older time, and a running query is
+    /// left alone. Clears the error; the snapshot stays. Sends nothing.
     pub fn restore_poll(
         &self,
         nas_id: String,
@@ -597,7 +656,15 @@ impl NasCore {
             .get(&nas_id)
             .cloned()
             .ok_or_else(|| FfiError::UnknownNas { id: nas_id.clone() })?;
-        let known = self.state(&nas_id)?;
+        let known = self
+            .planner
+            .state(&nas_id)
+            .ok_or_else(|| FfiError::UnknownNas { id: nas_id.clone() })?;
+        // A running query is newer than anything remembered; registering
+        // again would drop its result, a refused login included.
+        if known.running {
+            return Ok(());
+        }
         let last_attempt_at = known.last_attempt_at.max(last_attempt_at);
         if known.blocked || (!blocked && last_attempt_at == known.last_attempt_at) {
             return Ok(());
@@ -609,7 +676,12 @@ impl NasCore {
 
     /// State of every registered NAS, sorted by id; sends nothing.
     pub fn states(&self) -> Vec<NasState> {
-        self.planner.states().into_iter().map(record).collect()
+        let thresholds = self.thresholds();
+        self.planner
+            .states()
+            .into_iter()
+            .map(|state| record(state, &thresholds))
+            .collect()
     }
 
     /// Starts the planner: from now on the core queries every NAS when it
@@ -766,7 +838,9 @@ impl NasCore {
             let backend = (self.connect)(&config, user, password)?;
             let result = backend.snapshot().await;
             let _ = backend.logout().await;
-            Ok(Snapshot::real(result?))
+            let raw = result?;
+            *lock(&self.last_test) = Some(raw.clone());
+            Ok(Snapshot::real(raw, &self.thresholds()))
         })
         .await
     }
@@ -2071,6 +2145,153 @@ mod tests {
             .refresh_now("nas-1".into())
             .await
             .expect("blocked");
+        assert_eq!(backend.queries(), 1);
+    }
+
+    /// A snapshot with disk 3 at 52 °C.
+    fn disk3_hot() -> model::Snapshot {
+        model::Snapshot {
+            disks: vec![model::Disk {
+                id: "disk-3".into(),
+                name: "Platte 3".into(),
+                model: None,
+                serial_hash: None,
+                temperature_c: Some(52.0),
+                health: None,
+                smart_text: None,
+                power_on_hours: None,
+                spinning: None,
+            }],
+            ..model_snapshot(10.0)
+        }
+    }
+
+    fn finding_kinds(state: &NasState) -> Vec<crate::records::FindingKind> {
+        state
+            .snapshot
+            .as_ref()
+            .map(|s| s.findings.iter().map(|f| f.kind).collect())
+            .unwrap_or_default()
+    }
+
+    fn thresholds(disk_temp_warning_c: f64) -> Thresholds {
+        Thresholds {
+            disk_temp_warning_c,
+            fill_warning_percent: 80.0,
+            fill_critical_percent: 90.0,
+        }
+    }
+
+    #[tokio::test]
+    async fn new_thresholds_apply_at_once_without_a_query() {
+        use crate::records::FindingKind;
+        let backend = FakeBackend::answering(vec![Ok(disk3_hot())]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        let state = h.core.clone().refresh("nas-1".into()).await.expect("state");
+        assert_eq!(finding_kinds(&state), [FindingKind::DiskTemperature]);
+
+        h.core.set_thresholds(thresholds(55.0));
+        assert!(finding_kinds(&h.core.states()[0]).is_empty());
+        let state = h.core.clone().refresh("nas-1".into()).await.expect("state");
+        assert!(finding_kinds(&state).is_empty());
+
+        h.core.set_thresholds(thresholds(50.0));
+        assert_eq!(
+            finding_kinds(&h.core.states()[0]),
+            [FindingKind::DiskTemperature]
+        );
+        assert_eq!(backend.queries(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_restored_state_uses_the_thresholds_set() {
+        let h = harness(FakeBackend::answering(vec![Ok(disk3_hot())]));
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        h.core.clone().refresh("nas-1".into()).await.expect("state");
+        let json = h
+            .core
+            .saved_state("nas-1".into())
+            .expect("saved")
+            .expect("json");
+
+        let restarted = harness(FakeBackend::answering(Vec::new()));
+        restarted.core.set_thresholds(thresholds(55.0));
+        restarted
+            .core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        restarted
+            .core
+            .restore_state("nas-1".into(), json)
+            .expect("restore");
+        let state = restarted.core.states().remove(0);
+        assert!(state.snapshot.is_some());
+        assert!(finding_kinds(&state).is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_test_snapshot_follows_the_thresholds_after_adding() {
+        let backend = FakeBackend::answering(vec![Ok(disk3_hot())]);
+        let h = harness(backend.clone());
+        let tested = h
+            .core
+            .clone()
+            .test_connection(config("nas-1"), "u".into(), "p".into())
+            .await
+            .expect("test");
+        assert_eq!(tested.findings.len(), 1);
+        // Another NAS does not take it over.
+        h.core
+            .add_nas(config("nas-2"), "u".into(), "p".into())
+            .expect("add");
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        let states = h.core.states();
+        assert_eq!(states[1].snapshot, None);
+        assert_eq!(states[0].snapshot.as_ref(), Some(&tested));
+        assert_eq!(states[0].last_attempt_at, None);
+
+        h.core.set_thresholds(thresholds(55.0));
+        assert!(finding_kinds(&h.core.states()[0]).is_empty());
+        assert!(h.core.saved_state("nas-1".into()).expect("saved").is_some());
+        assert_eq!(backend.queries(), 1);
+    }
+
+    #[tokio::test]
+    async fn events_follow_the_thresholds_set() {
+        let backend = FakeBackend::answering(vec![Ok(disk3_hot())]);
+        let h = harness(backend);
+        h.core.set_thresholds(thresholds(55.0));
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        h.core.clone().refresh("nas-1".into()).await.expect("state");
+        assert!(h.core.events(None, 0, i64::MAX).expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn restore_poll_leaves_a_running_query_alone() {
+        let (backend, gate) = gated(vec![Err(ProviderError::LoginFailed)]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        let running = tokio::spawn(h.core.clone().refresh("nas-1".into()));
+        gate.started.notified().await;
+        h.core
+            .restore_poll("nas-1".into(), Some(T0 - 3_600), false)
+            .expect("restore");
+        gate.release.notify_one();
+        // The refused login still blocks the NAS.
+        let state = running.await.expect("join").expect("state");
+        assert!(state.blocked);
+        assert!(h.core.states()[0].blocked);
         assert_eq!(backend.queries(), 1);
     }
 }

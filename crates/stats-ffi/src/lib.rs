@@ -2,12 +2,14 @@
 //!
 //! Keeps its own records (`records.rs`) so `nas-model` stays free of FFI
 //! attributes. [`NasCore`] holds the registered NAS, queries them through
-//! the planner of `stats-core`, keeps their last state and error, archives
-//! every query and hands out history, events, backup runs and the forecast.
-//! Started with [`NasCore::start_planner`], it queries on its own and calls
-//! a [`StateListener`] of the app after every query. Free calls:
-//! [`core_version`], [`fetch_fingerprint`], [`demo_snapshot`] and
-//! [`demo_snapshots`].
+//! the planner of `stats-core`, keeps their last state and error, computes
+//! their findings with the thresholds the app sets
+//! ([`NasCore::set_thresholds`]), archives every query and hands out
+//! history, events, backup runs and the forecast. Started with
+//! [`NasCore::start_planner`], it queries on its own and calls a
+//! [`StateListener`] of the app after every query. Free calls:
+//! [`core_version`], [`fetch_fingerprint`], [`standard_thresholds`],
+//! [`demo_snapshot`] and [`demo_snapshots`].
 //!
 //! Every network call runs on one tokio runtime of the core ([`runtime`]);
 //! the apps only await the result.
@@ -23,8 +25,8 @@ pub use crate::records::{
     Alert, AlertLevel, BackupKind, BackupResult, BackupRun, BackupTask, Container, Disk, EventKind,
     Fan, Finding, FindingKind, Forecast, Health, HistoryPoint, HistoryRange, HistorySeries, Metric,
     Nas, NasConfig, NasEvent, NasProblem, NasState, NetInterface, ProblemKind, ProviderKind,
-    ScrubState, ScrubStatus, Snapshot, StateListener, SystemStatus, Ups, UpsState, Volume,
-    VolumeKind,
+    ScrubState, ScrubStatus, Snapshot, StateListener, SystemStatus, Thresholds, Ups, UpsState,
+    Volume, VolumeKind,
 };
 
 uniffi::setup_scaffolding!();
@@ -80,21 +82,31 @@ pub async fn fetch_fingerprint(base_url: String) -> Result<String, FfiError> {
     on_core(async move { Ok(nas_http::first_contact(&base_url).await?.to_string()) }).await
 }
 
-/// A fully filled snapshot of an invented NAS, with `demo` set.
+/// The thresholds of the core before the app sets its own: disk 50 °C,
+/// volume 80 and 90 %.
+#[uniffi::export]
+pub fn standard_thresholds() -> Thresholds {
+    nas_model::Thresholds::default().into()
+}
+
+/// A fully filled snapshot of an invented NAS, with `demo` set; findings
+/// with the standard thresholds.
 #[uniffi::export]
 pub fn demo_snapshot() -> Snapshot {
-    Snapshot::demo(demo::snapshot())
+    Snapshot::demo(demo::snapshot(), &nas_model::Thresholds::default())
 }
 
 /// The three NAS of the demo data set (#22) at `now` (Unix seconds UTC):
-/// Keller, Büro and Homelab, in this order, each with `demo` set. The same
-/// `now` yields the same snapshots.
+/// Keller, Büro and Homelab, in this order, each with `demo` set and its
+/// findings checked against `thresholds`. The same `now` and thresholds
+/// yield the same snapshots.
 #[uniffi::export]
-pub fn demo_snapshots(now: i64) -> Vec<Snapshot> {
+pub fn demo_snapshots(now: i64, thresholds: Thresholds) -> Vec<Snapshot> {
+    let thresholds = thresholds.into();
     nas_demo::demo(now)
         .snapshots
         .into_iter()
-        .map(Snapshot::demo)
+        .map(|s| Snapshot::demo(s, &thresholds))
         .collect()
 }
 
@@ -148,17 +160,17 @@ mod tests {
     fn demo_snapshots_are_the_three_demo_nas() {
         // 14 November 2026, 14:05 UTC.
         let now = 1_794_665_100;
-        let snapshots = demo_snapshots(now);
+        let snapshots = demo_snapshots(now, standard_thresholds());
         let ids: Vec<&str> = snapshots.iter().map(|s| s.nas.id.as_str()).collect();
         assert_eq!(ids, ["demo-keller", "demo-buero", "demo-homelab"]);
         assert!(snapshots.iter().all(|s| s.demo));
         assert!(snapshots.iter().all(|s| s.observed_at == now));
-        assert_eq!(snapshots, demo_snapshots(now));
+        assert_eq!(snapshots, demo_snapshots(now, standard_thresholds()));
     }
 
     #[test]
     fn demo_snapshots_carry_the_findings() {
-        let snapshots = demo_snapshots(1_794_665_100);
+        let snapshots = demo_snapshots(1_794_665_100, standard_thresholds());
         let texts: Vec<&str> = snapshots[0]
             .findings
             .iter()
@@ -169,6 +181,53 @@ mod tests {
         assert_eq!(snapshots[0].findings[1].level, Health::Warning);
         assert!(snapshots[1].findings.is_empty());
         assert!(snapshots[2].findings.is_empty());
+    }
+
+    #[test]
+    fn demo_snapshots_follow_the_thresholds_given() {
+        let thresholds = Thresholds {
+            disk_temp_warning_c: 55.0,
+            fill_warning_percent: 80.0,
+            fill_critical_percent: 85.0,
+        };
+        let keller = demo_snapshots(1_794_665_100, thresholds).remove(0);
+        let findings: Vec<(&str, Health)> = keller
+            .findings
+            .iter()
+            .map(|f| (f.text.as_str(), f.level))
+            .collect();
+        assert_eq!(findings, [("DataVol1 bei 87 %", Health::Critical)]);
+    }
+
+    #[test]
+    fn standard_thresholds_are_those_of_the_model() {
+        let standard = standard_thresholds();
+        assert_eq!(standard.disk_temp_warning_c, 50.0);
+        assert_eq!(standard.fill_warning_percent, 80.0);
+        assert_eq!(standard.fill_critical_percent, 90.0);
+        assert_eq!(
+            nas_model::Thresholds::from(standard),
+            nas_model::Thresholds::default()
+        );
+    }
+
+    #[test]
+    fn capacity_volumes_count_a_pool_once() {
+        let snapshots = demo_snapshots(1_794_665_100, standard_thresholds());
+        for s in [&snapshots[0], &snapshots[2]] {
+            let model = nas_demo::demo(1_794_665_100)
+                .snapshots
+                .into_iter()
+                .find(|m| m.nas.id == s.nas.id)
+                .expect("model");
+            let expected: Vec<String> = model
+                .capacity_volumes()
+                .into_iter()
+                .map(|v| v.id.clone())
+                .collect();
+            assert!(!expected.is_empty());
+            assert_eq!(s.capacity_volume_ids, expected);
+        }
     }
 
     #[tokio::test]

@@ -484,6 +484,41 @@ impl From<model::Finding> for Finding {
     }
 }
 
+/// Limits from which a value becomes a [`Finding`], as the user set them.
+/// Taken over unchecked; the app checks them before it hands them over.
+#[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
+pub struct Thresholds {
+    /// Disk temperature in degrees Celsius from which a disk is a warning.
+    pub disk_temp_warning_c: f64,
+    /// Fill level in percent from which a volume is a warning.
+    pub fill_warning_percent: f64,
+    /// Fill level in percent from which a volume is critical.
+    pub fill_critical_percent: f64,
+}
+
+impl From<model::Thresholds> for Thresholds {
+    fn from(t: model::Thresholds) -> Self {
+        Self {
+            disk_temp_warning_c: t.disk_temp_warning_c,
+            fill_warning_percent: t.fill_warning_percent,
+            fill_critical_percent: t.fill_critical_percent,
+        }
+    }
+}
+
+impl From<Thresholds> for model::Thresholds {
+    /// The backup limit is not set in the app and stays at its standard of
+    /// two days.
+    fn from(t: Thresholds) -> Self {
+        Self {
+            disk_temp_warning_c: t.disk_temp_warning_c,
+            fill_warning_percent: t.fill_warning_percent,
+            fill_critical_percent: t.fill_critical_percent,
+            ..Self::default()
+        }
+    }
+}
+
 /// State of one NAS from a single run over all endpoints.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct Snapshot {
@@ -501,30 +536,36 @@ pub struct Snapshot {
     /// Worst health the NAS reports itself (see
     /// `nas_model::Snapshot::worst_health`), `None` when nothing is known.
     pub worst_health: Option<Health>,
-    /// What needs attention, critical first, checked against the standard
-    /// thresholds (disk 50 °C, volume 80 and 90 %, backup two days).
+    /// What needs attention, critical first, checked against the thresholds
+    /// the app set with `NasCore::set_thresholds` (standard: disk 50 °C,
+    /// volume 80 and 90 %; backup always two days).
     pub findings: Vec<Finding>,
+    /// Ids of the volumes whose fill level counts, in the order of
+    /// `volumes` (see `nas_model::Snapshot::capacity_volumes`): a pool and
+    /// the volume in it count once.
+    pub capacity_volume_ids: Vec<String>,
     /// True for demo values, which the app must mark as such.
     pub demo: bool,
 }
 
 impl Snapshot {
     /// Record of a snapshot read from a NAS (`demo` false).
-    pub(crate) fn real(snapshot: model::Snapshot) -> Self {
-        Self::convert(snapshot, false)
+    pub(crate) fn real(snapshot: model::Snapshot, thresholds: &model::Thresholds) -> Self {
+        Self::convert(snapshot, thresholds, false)
     }
 
     /// Record of demo values (`demo` true).
-    pub(crate) fn demo(snapshot: model::Snapshot) -> Self {
-        Self::convert(snapshot, true)
+    pub(crate) fn demo(snapshot: model::Snapshot, thresholds: &model::Thresholds) -> Self {
+        Self::convert(snapshot, thresholds, true)
     }
 
-    fn convert(s: model::Snapshot, demo: bool) -> Self {
+    fn convert(s: model::Snapshot, thresholds: &model::Thresholds, demo: bool) -> Self {
         let worst_health = s.worst_health().map(Into::into);
-        let findings = s
-            .findings(&model::Thresholds::default())
+        let findings = s.findings(thresholds).into_iter().map(Into::into).collect();
+        let capacity_volume_ids = s
+            .capacity_volumes()
             .into_iter()
-            .map(Into::into)
+            .map(|v| v.id.clone())
             .collect();
         Self {
             nas: s.nas.into(),
@@ -540,6 +581,7 @@ impl Snapshot {
             interfaces: s.interfaces.into_iter().map(Into::into).collect(),
             worst_health,
             findings,
+            capacity_volume_ids,
             demo,
         }
     }

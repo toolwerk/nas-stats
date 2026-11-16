@@ -7,7 +7,7 @@ struct NasDetailContentTests {
     private let now: Int64 = 1_794_665_100
 
     private func demo(_ id: String) -> Snapshot {
-        demoSnapshots(now: now).first { $0.nas.id == id }!
+        demoSnapshots(now: now, thresholds: standardThresholds()).first { $0.nas.id == id }!
     }
 
     @Test func kellerHasEverySection() {
