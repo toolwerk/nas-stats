@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// Settings of iPhone (tab) and Mac (window of the menu bar) (#21): the
-/// NAS, iCloud Keychain (#113), query interval, thresholds, demo mode and
+/// NAS, iCloud Keychain (#113), query interval, thresholds,
+/// notifications (#39), demo mode and
 /// the privacy note.
 struct SettingsView: View {
     @Environment(NasStore.self) private var store
@@ -51,6 +52,7 @@ struct SettingsView: View {
                 Text("NAS Stats fragt jedes NAS frühestens nach diesem Abstand erneut ab, nie öfter als alle 5 Minuten.")
             }
             thresholdSection
+            NotificationSettingsSection()
             #if os(macOS)
             MenuBarSettingsSection()
             #endif
