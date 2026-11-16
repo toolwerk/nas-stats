@@ -67,7 +67,7 @@ final class EventNotifier {
 
     /// Id of an event and of its notification: the same event keeps its
     /// start, a new one after a recovery gets a new start.
-    static func id(of event: NasEvent) -> String {
+    nonisolated static func id(of event: NasEvent) -> String {
         "\(event.nasId)|\(event.kind)|\(event.subject ?? "")|\(event.startedAt)"
     }
 

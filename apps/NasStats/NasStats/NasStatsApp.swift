@@ -29,6 +29,9 @@ struct NasStatsApp: App {
                 Tab("Verlauf", systemImage: "chart.xyaxis.line") {
                     HistoryView()
                 }
+                Tab("Ereignisse", systemImage: "bell") {
+                    EventsView()
+                }
                 Tab("Einstellungen", systemImage: "gearshape") {
                     SettingsView()
                 }
