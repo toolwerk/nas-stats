@@ -330,6 +330,38 @@ struct NasStoreTests {
         #expect(core.calls.refreshed == [a.account.id.uuidString])
     }
 
+    @Test func aCancelledRefreshReturnsWhileTheRoundRunsOn() async throws {
+        let a = Self.account("Keller")
+        let core = FakeCore(states: [Self.state(a, health: .ok)])
+        core.slowRefresh.withLock { $0 = true }
+        let store = store(MemoryAccountStore([a]), core: core, lastStates: LastStates(fileURL: nil))
+
+        // Like the background task that iOS ends early.
+        let cancelled = Task { @MainActor in
+            await store.refreshAll()
+            return store.entries.first?.snapshot != nil
+        }
+        cancelled.cancel()
+        #expect(await cancelled.value == false)
+
+        await store.refreshAll()
+        #expect(store.entries.first?.snapshot != nil)
+        #expect(core.calls.refreshed == [a.account.id.uuidString])
+    }
+
+    @Test func theStateOfANasNoLongerStoredIsDropped() async throws {
+        let a = Self.account("Keller")
+        let id = a.account.id.uuidString
+        let gone = UUID().uuidString
+        let file = Self.lastStatesFile()
+        defer { try? FileManager.default.removeItem(at: file.fileURL!) }
+        file.save([id: FakeCore.saved(id), gone: FakeCore.saved(gone)])
+
+        let core = FakeCore(restorable: [FakeCore.saved(id): Self.snapshot(id, health: .ok)])
+        _ = store(MemoryAccountStore([a]), core: core, lastStates: file)
+        #expect(file.load() == [id: FakeCore.saved(id)])
+    }
+
     @Test func sortsCriticalWarningOkUnknown() async throws {
         let (a, b, c, d) = (Self.account("Anton"), Self.account("Berta"), Self.account("Cäsar"), Self.account("Dora"))
         let core = FakeCore(states: [

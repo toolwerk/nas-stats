@@ -54,8 +54,10 @@ struct NasCard: View {
                     now: now,
                     diskTempWarningC: entry.thresholds.diskTempWarningC
                 )
-                // Without a connection the values are old; their time shows.
-                if entry.statusLevel == .offline {
+                // Without a connection the values are old; their time shows,
+                // also for a state kept from an earlier launch before the
+                // first query of this one.
+                if entry.statusLevel == .offline || isOld(snapshot) {
                     Text(verbatim: StatusFormat.observed(
                         Date(timeIntervalSince1970: TimeInterval(snapshot.observedAt)), now: now))
                         .font(.caption)
@@ -77,6 +79,11 @@ struct NasCard: View {
         .overlay(shape.strokeBorder(.separator, lineWidth: 0.5))
         .clipShape(shape)
         .contentShape(shape)
+    }
+
+    /// Older than two query intervals of 5 minutes.
+    private func isOld(_ snapshot: Snapshot) -> Bool {
+        now.timeIntervalSince1970 - TimeInterval(snapshot.observedAt) >= 600
     }
 
     private var shape: RoundedRectangle {

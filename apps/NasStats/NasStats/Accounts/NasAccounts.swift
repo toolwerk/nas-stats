@@ -14,7 +14,8 @@ extension AccountKeychain: AccountStore {}
 
 /// The NAS of the user: loaded from the keychain and registered with the
 /// core at start, because the core keeps NAS only in memory. `NasStore`
-/// queries them and holds their state.
+/// queries them, holds their state and hands the core the last snapshot
+/// of an earlier launch (`LastStates`).
 @MainActor
 @Observable
 final class NasAccounts {

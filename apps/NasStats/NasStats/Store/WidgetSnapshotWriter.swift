@@ -21,9 +21,9 @@ extension WidgetSnapshot {
     }
 
     /// The snapshot with the last known state of every NAS that has none
-    /// yet: the core keeps its states only in memory, so after a launch the
-    /// NAS stay without a state until their interval has passed, a blocked
-    /// NAS for good. Their file entry would otherwise lose the last state,
+    /// yet: after a launch a NAS without a saved last state (`LastStates`)
+    /// stays without one until its interval has passed, a blocked NAS for
+    /// good. Their file entry would otherwise lose the last state,
     /// and the widget could never show its age. Name, vendor, error and a
     /// known state come from the new entry; demo and live data never mix.
     func carryingOver(from previous: WidgetSnapshot?) -> WidgetSnapshot {

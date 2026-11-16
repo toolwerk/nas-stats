@@ -119,9 +119,15 @@ final class NasStore {
         self.thresholds = AlertThresholds.load(from: defaults)
         self.queryIntervalMinutes = Self.storedInterval(in: defaults)
         // The last state of an earlier launch shows until the first answer;
-        // one the core refuses (other format after an update) is dropped.
+        // one the core refuses (other format after an update) is dropped,
+        // as is one of a NAS no longer stored (e.g. removed on another
+        // device). An unreadable keychain drops nothing.
         var saved = lastStates.load()
         let before = saved
+        if accounts.loadError == nil {
+            let known = Set(accounts.accounts.map(\.id.uuidString))
+            saved = saved.filter { known.contains($0.key) }
+        }
         for account in accounts.accounts where accounts.isRegistered(account.id) {
             let id = account.id.uuidString
             guard let json = saved[id] else { continue }
@@ -144,15 +150,16 @@ final class NasStore {
     /// a poll round every 5 minutes (each NAS at its `queryIntervalMinutes`).
     /// Every new state goes into the widget snapshot of the App Group (#23).
     static func live() -> NasStore {
+        let isPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
         let store = NasStore(
             accounts: NasAccounts(),
             defaults: UserDefaults(suiteName: AppGroup.id) ?? .standard,
             demoSource: { demoSnapshots(now: $0) },
             pollInterval: .seconds(300),
-            lastStates: LastStates(fileURL: LastStates.liveURL)
+            lastStates: LastStates(fileURL: isPreview ? nil : LastStates.liveURL)
         )
-        // Previews never touch the file of the real app.
-        guard ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] != "1" else {
+        // Previews never touch the files of the real app.
+        guard !isPreview else {
             return store
         }
         // Without a container the writer does nothing.
@@ -204,16 +211,31 @@ final class NasStore {
     func refreshAll() async {
         guard !demoMode else { return }
         if let round {
-            await round.value
+            await Self.wait(for: round)
             return
         }
         let ids = queryable()
-        let task = Task { await self.query(ids) }
-        round = task
-        await task.value
-        if round == task {
-            round = nil
+        // Runs on the main actor after this call, so `round` is set first.
+        round = Task {
+            await self.query(ids)
+            self.round = nil
         }
+        if let round {
+            await Self.wait(for: round)
+        }
+    }
+
+    /// Waits for `task`, but returns at once when the calling task is
+    /// cancelled (e.g. the background task when iOS ends it); `task`
+    /// itself runs on.
+    private static func wait(for task: Task<Void, Never>) async {
+        let finished = AsyncStream<Void> { continuation in
+            Task {
+                await task.value
+                continuation.finish()
+            }
+        }
+        for await _ in finished {}
     }
 
     // MARK: - Changing the list
