@@ -136,9 +136,9 @@ struct CollectorSettingsView: View {
         let assignments = collector.assignments
         return Section {
             if collector.nas.isEmpty {
-                Text(collector.state.lastSuccessAt == nil
-                    ? "Noch nicht abgeglichen."
-                    : "Der Container fragt kein NAS ab.")
+                Text(collector.listed
+                    ? "Der Container fragt kein NAS ab."
+                    : "Noch nicht abgeglichen.")
                     .foregroundStyle(.secondary)
             }
             ForEach(collector.nas, id: \.id) { nas in
@@ -230,6 +230,7 @@ struct CollectorSettingsView: View {
 enum CollectorStatus {
     static func color(of collector: CollectorSync) -> Color {
         if collector.error != nil { return .red }
+        if !collector.nasErrors.isEmpty { return .orange }
         return collector.state.lastSuccessAt == nil ? .gray : .green
     }
 
@@ -239,7 +240,9 @@ enum CollectorStatus {
         guard let last = collector.state.lastSuccessAt else {
             return String(localized: "noch nicht abgeglichen")
         }
-        return collectorLastSyncText(Date(timeIntervalSince1970: TimeInterval(last)))
+        let text = collectorLastSyncText(Date(timeIntervalSince1970: TimeInterval(last)))
+        let failed = collector.nasErrors.count
+        return failed == 0 ? text : String(localized: "\(text), \(failed) NAS mit Fehler")
     }
 }
 

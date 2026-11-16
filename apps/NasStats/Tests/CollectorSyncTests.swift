@@ -233,6 +233,44 @@ struct CollectorSyncTests {
         #expect(sync.state.lastSuccessAt == clock.now)
     }
 
+    @Test func aNewPairingOfAnotherDeviceLiftsTheStop() async throws {
+        fake.failure.withLock { $0 = .LoginFailed }
+        let store = MemoryCollectorStore(Self.collector())
+        let sync = sync(store, accounts: [Self.account("Keller")])
+        await sync.syncIfDue(interval: 300)
+        #expect(sync.state.stopped != nil)
+
+        // The stop lasts across a launch while the pairing is the same.
+        #expect(self.sync(store, accounts: []).state.stopped != nil)
+
+        // Paired again on the Mac; the entry comes over iCloud Keychain.
+        var renewed = Self.collector()
+        renewed.token = "neuer-schluessel"
+        try store.save(renewed)
+        #expect(self.sync(store, accounts: []).state.stopped == nil)
+        fake.failure.withLock { $0 = nil }
+        clock.advance(minutes: 5)
+        await sync.syncIfDue(interval: 300)
+
+        #expect(fake.calls.withLock { $0 } == 2)
+        #expect(sync.paired?.token == "neuer-schluessel")
+        #expect(sync.error == nil)
+        #expect(sync.state.stopped == nil)
+    }
+
+    @Test func aPairingRemovedOnAnotherDeviceGoesHereToo() async throws {
+        let store = MemoryCollectorStore(Self.collector())
+        let sync = sync(store, accounts: [Self.account("Keller")])
+        await sync.syncIfDue(interval: 300)
+
+        try store.delete()
+        clock.advance(minutes: 5)
+        await sync.syncIfDue(interval: 300)
+
+        #expect(sync.paired == nil)
+        #expect(fake.calls.withLock { $0 } == 1)
+    }
+
     // MARK: - Pairing
 
     @Test func aFailedPairingStoresNothing() async throws {

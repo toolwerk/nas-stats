@@ -530,14 +530,25 @@ final class NasStore {
             baseUrl: baseUrl, fingerprint: fingerprint, token: token,
             syncsViaICloud: sharesAccessViaICloud
         )
-        collectorTask = Task { await collector.sync() }
+        startCollectorTask { await $0.sync() }
     }
 
     /// Takes a NAS of the collector over into a NAS of the app (`nil`: not
     /// at all) and syncs at once, without waiting for it.
     func assignCollectorNas(_ collectorNasId: String, to appNasId: UUID?) throws {
         try collector.assign(collectorNasId, to: appNasId)
-        collectorTask = Task { await collector.sync() }
+        startCollectorTask { await $0.sync() }
+    }
+
+    /// Runs `work` after the collector task before it, so `collectorTask`
+    /// always ends with every sync started so far.
+    private func startCollectorTask(_ work: @escaping @MainActor (CollectorSync) async -> Set<String>) {
+        let previous = collectorTask
+        let collector = collector
+        collectorTask = Task {
+            await previous?.value
+            _ = await work(collector)
+        }
     }
 
     /// "Erneut versuchen": starts a blocked NAS again with its stored
@@ -692,9 +703,7 @@ final class NasStore {
     private func syncCollector() {
         guard !demoMode else { return }
         let interval = queryIntervalSeconds
-        collectorTask = Task {
-            await collector.syncIfDue(interval: interval)
-        }
+        startCollectorTask { await $0.syncIfDue(interval: interval) }
     }
 
     /// History of the collector came into the archive: forecasts and the

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Observation
 import os
@@ -30,6 +31,9 @@ final class CollectorSync {
         /// Why the collector refused us (key, certificate); no automatic
         /// sync until the user pairs again or syncs by hand.
         var stopped: String?
+        /// Which pairing was stopped (`CollectorSync.target`); a stop of
+        /// another pairing does not count.
+        var stoppedFor: String?
         /// Per NAS of the app (uuid string): from which NAS of the collector
         /// it took over and up to when.
         var progress: [String: Progress] = [:]
@@ -46,6 +50,8 @@ final class CollectorSync {
     private(set) var paired: StoredCollector?
     /// The NAS of the collector at the last sync.
     private(set) var nas: [CollectorNas] = []
+    /// `nas` holds the list of the collector of this launch.
+    private(set) var listed = false
     /// Error of the collector at the last sync, or why it stopped.
     private(set) var error: String?
     /// Error of the import per NAS of the collector at the last sync.
@@ -82,6 +88,7 @@ final class CollectorSync {
         self.state = defaults.data(forKey: Self.stateKey)
             .flatMap { try? JSONDecoder().decode(SyncState.self, from: $0) } ?? SyncState()
         self.paired = Self.load(from: store)
+        liftStaleStop()
         self.error = state.stopped
     }
 
@@ -120,10 +127,7 @@ final class CollectorSync {
     /// at least `interval` seconds ago (or in the future).
     @discardableResult
     func syncIfDue(interval: Int64) async -> Set<String> {
-        if paired == nil {
-            // Paired on another device meanwhile (iCloud Keychain).
-            paired = Self.load(from: store)
-        }
+        reloadFromStore()
         guard paired != nil, state.stopped == nil, !running else { return [] }
         let now = clock()
         if let last = state.lastSyncAt, last <= now, now - last < interval {
@@ -171,6 +175,7 @@ final class CollectorSync {
             switch error as? FfiError {
             case .LoginFailed?, .CertificateChanged?:
                 state.stopped = text
+                state.stoppedFor = Self.target(collector)
                 saveState()
             default:
                 break
@@ -180,8 +185,10 @@ final class CollectorSync {
         }
         guard Self.sameTarget(paired, collector) else { return [] }
         nas = list
+        listed = true
         error = nil
         state.stopped = nil
+        state.stoppedFor = nil
         saveState()
 
         var imported = Set<String>()
@@ -202,6 +209,8 @@ final class CollectorSync {
                     since: since
                 )
                 guard Self.sameTarget(paired, collector) else { return imported }
+                // Removed meanwhile: no progress for a NAS that is gone.
+                guard accounts.isRegistered(assignment.appNasId) else { continue }
                 state.progress[key] = Progress(collectorNasId: collectorNasId, until: result.until)
                 saveState()
                 if result.samples > 0 || result.hourly > 0 || result.daily > 0 || result.backupRuns > 0 {
@@ -242,8 +251,10 @@ final class CollectorSync {
         if !sameAddress {
             state.progress = [:]
             nas = []
+            listed = false
         }
         state.stopped = nil
+        state.stoppedFor = nil
         error = nil
         nasErrors = [:]
         saveState()
@@ -271,6 +282,7 @@ final class CollectorSync {
         try store.delete()
         paired = nil
         nas = []
+        listed = false
         error = nil
         nasErrors = [:]
         state = SyncState()
@@ -307,6 +319,55 @@ final class CollectorSync {
     }
 
     // MARK: - Internals
+
+    /// Takes over what another device changed meanwhile (iCloud Keychain):
+    /// a new pairing, other choices, or the removal. An entry that cannot
+    /// be read changes nothing.
+    private func reloadFromStore() {
+        let stored: StoredCollector?
+        do {
+            stored = try store.load()
+        } catch {
+            Self.log.error("Collector not read: \(String(describing: error), privacy: .public)")
+            return
+        }
+        guard stored != paired else { return }
+        if let stored, let paired, Self.sameTarget(stored, paired) {
+            // Only the choices changed.
+            self.paired = stored
+            return
+        }
+        if stored?.baseUrl != paired?.baseUrl {
+            state.progress = [:]
+            nas = []
+            listed = false
+        }
+        paired = stored
+        nasErrors = [:]
+        liftStaleStop()
+        error = state.stopped
+        if stored == nil {
+            state = SyncState()
+            defaults.removeObject(forKey: Self.stateKey)
+        }
+    }
+
+    /// A stop holds only for the pairing it was made for; after a new key
+    /// or certificate the automatic sync runs again.
+    private func liftStaleStop() {
+        guard state.stopped != nil else { return }
+        if let paired, state.stoppedFor == Self.target(paired) { return }
+        state.stopped = nil
+        state.stoppedFor = nil
+        saveState()
+    }
+
+    /// Hash of address, certificate and key of a pairing; the key itself
+    /// never goes into the defaults.
+    private static func target(_ collector: StoredCollector) -> String {
+        let text = [collector.baseUrl, collector.fingerprint, collector.token].joined(separator: "\n")
+        return SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
 
     /// Whether `current` is still the collector a sync started with:
     /// another choice of the user does not count, another pairing does.
