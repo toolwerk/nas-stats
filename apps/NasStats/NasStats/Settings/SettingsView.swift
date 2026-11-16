@@ -56,7 +56,7 @@ struct SettingsView: View {
                 Text("Zeigt drei erfundene NAS. Die Werte sind erfunden und stammen von keinem echten Gerät.")
             }
             Section {
-                Text("Keine Telemetrie. Die Daten bleiben auf dem Gerät. Zugangsdaten liegen im Schlüsselbund, über den iCloud-Schlüsselbund nur, wenn Sie das beim Hinzufügen wählen.")
+                Text("Keine Telemetrie. Die Daten bleiben auf dem Gerät. Zugangsdaten liegen im Schlüsselbund, über den iCloud-Schlüsselbund nur, wenn Sie das beim Hinzufügen oder später in den Einstellungen des NAS wählen.")
                     .font(.footnote)
                 LabeledContent("Core") {
                     Text(verbatim: coreVersion())
