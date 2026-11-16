@@ -82,7 +82,21 @@ struct OverviewTests {
         #expect(timeout.health == .warning)
         timeout.blocked = true
         #expect(timeout.statusLevel == .critical)
-        #expect(timeout.problemLine == "NAS antwortet nicht")
+        #expect(timeout.problemLine == "Nicht erreichbar")
+    }
+
+    @Test func aNasThatDoesNotAnswerIsNotReachable() {
+        var e = entry("a")
+        e.problem = NasProblem(
+            kind: .unreachable, message: "error sending request for url", stopsPolling: false,
+            oldFingerprint: nil, newFingerprint: nil, httpStatus: nil
+        )
+        #expect(e.problemLine == "Nicht erreichbar")
+        e.problem = NasProblem(
+            kind: .http, message: "HTTP 500", stopsPolling: false,
+            oldFingerprint: nil, newFingerprint: nil, httpStatus: 500
+        )
+        #expect(e.problemLine == "HTTP 500")
     }
 
     @Test func aCriticalNasStaysCriticalWhenItStopsAnswering() {

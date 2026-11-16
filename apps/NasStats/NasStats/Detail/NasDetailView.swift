@@ -89,10 +89,20 @@ struct NasDetailView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            if let error = entry.localError ?? entry.problem?.message ?? entry.queryError {
+            if let error = entry.problemLine {
+                let offline = entry.statusLevel == .offline
                 Text(verbatim: error)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(offline ? .secondary : Color.red)
+                #if os(iOS)
+                if offline {
+                    // iOS reports a refused "Lokales Netzwerk" like a NAS
+                    // that does not answer.
+                    Text("Im Heimnetz? Prüfen Sie in den iOS-Einstellungen unter Datenschutz & Sicherheit › Lokales Netzwerk, ob NAS Stats zugreifen darf.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                #endif
             }
         }
         .padding(.vertical, 4)

@@ -54,6 +54,13 @@ struct NasCard: View {
                     now: now,
                     diskTempWarningC: entry.thresholds.diskTempWarningC
                 )
+                // Without a connection the values are old; their time shows.
+                if entry.statusLevel == .offline {
+                    Text(verbatim: StatusFormat.observed(
+                        Date(timeIntervalSince1970: TimeInterval(snapshot.observedAt)), now: now))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .padding(14)
