@@ -298,7 +298,8 @@ extension WidgetSnapshotCarryOverTests {
         #expect(demo.timeline(for: demo.nas.first, now: now).dates == [now])
         #expect(demo.timeline(for: demo.nas.first, now: now).reloadAfter == nil)
         #expect(snapshot([]).timeline(for: nil, now: now).reloadAfter == nil)
-        #expect({ let s = snapshot([nas("a", status: .unknown, observedMinutesAgo: nil)]); return s.timeline(for: s.nas.first, now: now) }().reloadAfter == nil)
+        let unknown = snapshot([nas("a", status: .unknown, observedMinutesAgo: nil)])
+        #expect(unknown.timeline(for: unknown.nas.first, now: now).reloadAfter == nil)
     }
 }
 
