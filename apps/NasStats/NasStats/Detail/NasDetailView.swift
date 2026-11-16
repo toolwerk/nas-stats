@@ -309,6 +309,9 @@ private struct NasDetailPreview: View {
     @State private var store: NasStore = {
         let defaults = UserDefaults(suiteName: "preview-detail") ?? .standard
         defaults.set(true, forKey: NasStore.demoModeKey)
+        // The preview reads the real keychain; a stored setting keeps the
+        // first move to iCloud Keychain (#113) from touching it.
+        defaults.set(false, forKey: NasStore.sharesAccessViaICloudKey)
         return NasStore(
             accounts: NasAccounts(),
             defaults: defaults,

@@ -156,6 +156,8 @@ final class MemoryAccountStore: AccountStore {
     private let items = Mutex<[UUID: StoredAccount]>([:])
     /// `save` throws while set.
     let refuseSave = Mutex(false)
+    /// `loadAll` throws while set.
+    let refuseLoad = Mutex(false)
 
     struct Refused: Error {}
 
@@ -168,7 +170,10 @@ final class MemoryAccountStore: AccountStore {
     }
 
     func loadAll() throws -> [StoredAccount] {
-        items.withLock { Array($0.values) }
+        if refuseLoad.withLock({ $0 }) {
+            throw Refused()
+        }
+        return items.withLock { Array($0.values) }
     }
 
     func save(_ stored: StoredAccount) throws {
@@ -203,6 +208,9 @@ struct NasStoreTests {
 
     init() throws {
         defaults = try #require(UserDefaults(suiteName: "nasstats-tests-\(UUID().uuidString)"))
+        // Without a stored setting, the store moves every NAS to iCloud
+        // Keychain at its first start (#113); the tests of that remove it.
+        defaults.set(false, forKey: NasStore.sharesAccessViaICloudKey)
     }
 
     static func account(_ name: String, provider: String = NasAccount.qnapKey) -> StoredAccount {
@@ -850,39 +858,102 @@ struct NasStoreTests {
         }
     }
 
-    @Test func switchingICloudMovesTheEntryBothWays() async throws {
-        let a = Self.account("Keller")
-        let keychain = MemoryAccountStore([a])
+    @Test func theICloudSettingMovesEveryNasBothWays() async throws {
+        var a = Self.account("Keller")
+        a.account.syncsViaICloud = true
+        let b = Self.account("Büro")
+        let keychain = MemoryAccountStore([a, b])
         let core = FakeCore()
         let store = await started(keychain, core: core)
         let calls = core.calls
-        let id = a.account.id
 
-        for syncs in [true, false] {
-            try store.setSyncsViaICloud(id: id, to: syncs)
-            let stored = try #require(try keychain.loadAll().first)
-            #expect(stored.account.syncsViaICloud == syncs)
-            #expect(stored.password == "demo")
-            #expect(store.accounts.accounts.first?.syncsViaICloud == syncs)
+        for shares in [false, true] {
+            #expect(try store.setSharesAccessViaICloud(shares) == 0)
+            #expect(store.sharesAccessViaICloud == shares)
+            #expect(defaults.object(forKey: NasStore.sharesAccessViaICloudKey) as? Bool == shares)
+            let stored = try keychain.loadAll()
+            #expect(stored.count == 2)
+            #expect(stored.allSatisfy { $0.account.syncsViaICloud == shares })
+            #expect(stored.allSatisfy { $0.password == "demo" })
+            #expect(store.accounts.accounts.allSatisfy { $0.syncsViaICloud == shares })
             #expect(core.calls.added == calls.added)
             #expect(core.calls.updated == calls.updated)
             #expect(core.calls.refreshed == calls.refreshed)
         }
     }
 
-    @Test func aRefusedICloudSwitchKeepsTheSetting() async throws {
+    @Test func aRefusedICloudSwitchKeepsTheEntriesAndSavesTheSetting() async throws {
+        let a = Self.account("Keller")
+        let b = Self.account("Büro")
+        let keychain = MemoryAccountStore([a, b])
+        let store = await started(keychain, core: FakeCore())
+        keychain.refuseSave.withLock { $0 = true }
+
+        #expect(try store.setSharesAccessViaICloud(true) == 2)
+        #expect(try keychain.loadAll().allSatisfy { !$0.account.syncsViaICloud })
+        #expect(store.accounts.accounts.allSatisfy { !$0.syncsViaICloud })
+        #expect(store.sharesAccessViaICloud)
+        #expect(defaults.object(forKey: NasStore.sharesAccessViaICloudKey) as? Bool == true)
+    }
+
+    @Test func theFirstStartSharesTheNasKeptOnThisDevice() async throws {
+        let a = Self.account("Keller")
+        let keychain = MemoryAccountStore([a])
+        defaults.removeObject(forKey: NasStore.sharesAccessViaICloudKey)
+        let store = await started(keychain, core: FakeCore())
+
+        #expect(store.sharesAccessViaICloud)
+        #expect(defaults.object(forKey: NasStore.sharesAccessViaICloudKey) as? Bool == true)
+        #expect(try keychain.loadAll().first?.account.syncsViaICloud == true)
+        #expect(try keychain.loadAll().first?.password == "demo")
+        #expect(store.accounts.accounts.first?.syncsViaICloud == true)
+    }
+
+    @Test func anUnreadableKeychainLeavesTheICloudSettingForTheNextStart() async throws {
+        let a = Self.account("Keller")
+        let keychain = MemoryAccountStore([a])
+        keychain.refuseLoad.withLock { $0 = true }
+        defaults.removeObject(forKey: NasStore.sharesAccessViaICloudKey)
+        let store = await started(keychain, core: FakeCore())
+
+        #expect(store.loadError != nil)
+        #expect(defaults.object(forKey: NasStore.sharesAccessViaICloudKey) == nil)
+        #expect(throws: FfiError.InvalidInput(detail: "Die gespeicherten NAS ließen sich nicht aus dem Schlüsselbund lesen.")) {
+            try store.setSharesAccessViaICloud(false)
+        }
+        #expect(store.sharesAccessViaICloud)
+        #expect(defaults.object(forKey: NasStore.sharesAccessViaICloudKey) == nil)
+
+        // The next start with a readable keychain moves the NAS.
+        keychain.refuseLoad.withLock { $0 = false }
+        let next = await started(keychain, core: FakeCore())
+        #expect(next.loadError == nil)
+        #expect(defaults.object(forKey: NasStore.sharesAccessViaICloudKey) as? Bool == true)
+        #expect(try keychain.loadAll().first?.account.syncsViaICloud == true)
+    }
+
+    @Test func aStoredOffKeepsTheNasOnThisDevice() async throws {
         let a = Self.account("Keller")
         let keychain = MemoryAccountStore([a])
         let store = await started(keychain, core: FakeCore())
-        keychain.refuseSave.withLock { $0 = true }
-        #expect(throws: MemoryAccountStore.Refused.self) {
-            try store.setSyncsViaICloud(id: a.account.id, to: true)
-        }
+
+        #expect(!store.sharesAccessViaICloud)
         #expect(try keychain.loadAll().first?.account.syncsViaICloud == false)
         #expect(store.accounts.accounts.first?.syncsViaICloud == false)
-        #expect(throws: FfiError.self) {
-            try store.setSyncsViaICloud(id: UUID(), to: true)
-        }
+    }
+
+    @Test(arguments: [true, false])
+    func addFollowsTheICloudSetting(shares: Bool) async throws {
+        defaults.set(shares, forKey: NasStore.sharesAccessViaICloudKey)
+        let keychain = MemoryAccountStore()
+        let store = await started(keychain, core: FakeCore())
+        var new = Self.account("Keller")
+        new.account.syncsViaICloud = !shares
+
+        try await store.add(new)
+
+        #expect(try keychain.loadAll().first?.account.syncsViaICloud == shares)
+        #expect(store.accounts.accounts.first?.syncsViaICloud == shares)
     }
 
     @Test func resumeStartsABlockedNasWithTheStoredAccess() async throws {
