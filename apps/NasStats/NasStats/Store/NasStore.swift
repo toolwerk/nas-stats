@@ -332,6 +332,7 @@ final class NasStore {
         defer {
             if planning {
                 accounts.core.startPlanner(listener: listener)
+                catchUp()
             }
         }
         try accounts.add(stored)
@@ -500,6 +501,17 @@ final class NasStore {
         }
         saveLog()
         rebuild()
+    }
+
+    /// Takes in every query the planner finished while it had no listener
+    /// (`add` holds it): a state whose last query is newer than the log.
+    private func catchUp() {
+        for state in accounts.core.states() {
+            guard let id = UUID(uuidString: state.nasId),
+                  let last = state.lastAttemptAt, last > (log.lastAttempts[state.nasId] ?? .min)
+            else { continue }
+            record(id, state: state, error: nil)
+        }
     }
 
     /// A state of the planner; only NAS of the store count.

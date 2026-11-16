@@ -37,6 +37,8 @@ final class FakeCore: NasCoreProtocol {
     private let presets: Mutex<[String: NasState]>
     private let registered = Mutex<[String: NasState]>([:])
     private let log = Mutex(Calls())
+    /// Runs inside `addNas`, e.g. a query of the planner finishing then.
+    let onAdd = Mutex<(@Sendable () -> Void)?>(nil)
     /// `addNas` throws `InvalidInput` while set.
     let refuseAdd = Mutex(false)
     /// `updateCredentials` throws `UnknownNas` while set.
@@ -68,6 +70,9 @@ final class FakeCore: NasCoreProtocol {
         log.withLock {
             $0.added.append(config.id)
             $0.addedFingerprints.append(config.fingerprint)
+        }
+        if let hook = onAdd.withLock({ $0 }) {
+            hook()
         }
         if refuseAdd.withLock({ $0 }) {
             throw FfiError.InvalidInput(detail: "kaputt")
@@ -1168,5 +1173,25 @@ struct NasStoreTests {
         #expect(core.calls.plannerStops == 1)
         #expect(core.calls.plannerStarts == 2)
         #expect(core.listener.withLock { $0 } != nil)
+    }
+
+    @Test func aQueryOfThePlannerDuringAnAddIsNotLost() async throws {
+        let a = Self.account("Keller")
+        let id = a.account.id.uuidString
+        let core = FakeCore()
+        let store = makeStore(MemoryAccountStore([a]), core: core)
+        store.start()
+        var finished = Self.state(a, health: .ok)
+        finished.lastAttemptAt = clock.now
+        // The planner has no listener while the new NAS is registered.
+        core.onAdd.withLock { [finished] in $0 = { core.plannerQueried(finished) } }
+        try await store.add(Self.account("Neu"))
+        let entry = try #require(store.entries.first { $0.id == id })
+        #expect(entry.snapshot != nil)
+        #expect(entry.lastAttemptAt == clock.now)
+        // The next launch knows the query, so it does not query again.
+        let data = try #require(defaults.data(forKey: NasStore.queryLogKey))
+        let log = try JSONDecoder().decode(NasStore.QueryLog.self, from: data)
+        #expect(log.lastAttempts[id] == clock.now)
     }
 }
