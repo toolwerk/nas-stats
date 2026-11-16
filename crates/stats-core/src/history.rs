@@ -11,7 +11,9 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use nas_model::{BackupResult, BackupRun, Health, Metric, ProviderKind, Sample, Snapshot};
+use nas_model::{
+    BackupResult, BackupRun, Event, EventKind, Health, Metric, ProviderKind, Sample, Snapshot,
+};
 use rusqlite::{Connection, Transaction, params};
 
 use crate::forecast::{Forecast, forecast, window_start};
@@ -207,6 +209,38 @@ pub struct EventRecord {
     pub started_at: i64,
     /// End, Unix seconds UTC; `None` while the event is open.
     pub ended_at: Option<i64>,
+}
+
+impl From<&Event> for EventRecord {
+    fn from(event: &Event) -> Self {
+        Self {
+            nas_id: event.nas_id.clone(),
+            kind: event.kind.as_str().to_owned(),
+            subject: event.subject.clone(),
+            level: event.level,
+            text: event.text.clone(),
+            started_at: event.started_at,
+            ended_at: event.ended_at,
+        }
+    }
+}
+
+impl EventRecord {
+    /// The event of the detection; a kind this build does not know is
+    /// [`HistoryError::Value`].
+    pub fn to_event(&self) -> Result<Event> {
+        let kind = EventKind::from_name(&self.kind)
+            .ok_or_else(|| HistoryError::Value(format!("event kind {:?}", self.kind)))?;
+        Ok(Event {
+            nas_id: self.nas_id.clone(),
+            kind,
+            subject: self.subject.clone(),
+            level: self.level,
+            text: self.text.clone(),
+            started_at: self.started_at,
+            ended_at: self.ended_at,
+        })
+    }
 }
 
 /// History archive of all NAS in one SQLite database.
@@ -445,6 +479,43 @@ impl HistoryStore {
                 text,
                 started_at,
                 ended_at: None,
+            });
+        }
+        Ok(events)
+    }
+
+    /// Events of one NAS (`None`: of all NAS) that were open at some time
+    /// in `[from, to]`: started at or before `to` and still open or ended at
+    /// or after `from`. Newest start first, then by NAS, kind and subject.
+    pub fn events(&self, nas_id: Option<&str>, from: i64, to: i64) -> Result<Vec<EventRecord>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT nas_id, kind, subject, started_at, ended_at, level, text FROM events
+             WHERE (?1 IS NULL OR nas_id = ?1)
+               AND started_at <= ?3 AND (ended_at IS NULL OR ended_at >= ?2)
+             ORDER BY started_at DESC, nas_id, kind, subject",
+        )?;
+        let rows = stmt.query_map(params![nas_id, from, to], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?;
+        let mut events = Vec::new();
+        for row in rows {
+            let (nas_id, kind, subject, started_at, ended_at, level, text) = row?;
+            events.push(EventRecord {
+                nas_id,
+                kind,
+                subject: (!subject.is_empty()).then_some(subject),
+                level: health_from(&level)?,
+                text,
+                started_at,
+                ended_at,
             });
         }
         Ok(events)
@@ -1429,6 +1500,64 @@ mod tests {
             count(&store, "SELECT COUNT(*) FROM events WHERE nas_id = 'nas-1'"),
             3
         );
+    }
+
+    #[test]
+    fn events_in_a_range_of_one_or_all_nas() {
+        let mut store = HistoryStore::in_memory().expect("store opens");
+        // Ended before the range.
+        let before = event("nas-1", Some("disk-1"), T0 - 2 * DAY, Some(T0 - DAY - 1));
+        // Ended on the first second of the range.
+        let edge = event("nas-1", Some("disk-2"), T0 - 2 * DAY, Some(T0 - DAY));
+        // Still open, started long before.
+        let open = event("nas-1", Some("disk-3"), T0 - 10 * DAY, None);
+        // Started on the last second of the range.
+        let last = event("nas-2", None, T0, None);
+        // Started after the range.
+        let after = event("nas-1", Some("disk-4"), T0 + 1, None);
+        // Same start, other NAS: sorted by NAS.
+        let twin = event("nas-0", Some("disk-1"), T0, Some(T0 + HOUR));
+        store
+            .write_events(&[
+                before,
+                edge.clone(),
+                open.clone(),
+                last.clone(),
+                after,
+                twin.clone(),
+            ])
+            .expect("events are written");
+
+        assert_eq!(
+            store.events(None, T0 - DAY, T0).expect("events"),
+            vec![twin, last, edge.clone(), open.clone()]
+        );
+        assert_eq!(
+            store.events(Some("nas-1"), T0 - DAY, T0).expect("events"),
+            vec![edge, open]
+        );
+        assert!(
+            store
+                .events(Some("nas-9"), T0 - DAY, T0)
+                .expect("events")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn event_records_and_events_convert_both_ways() {
+        let record = event("nas-1", Some("disk-1"), T0, Some(T0 + HOUR));
+        let event = record.to_event().expect("known kind");
+        assert_eq!(event.kind, EventKind::DiskTemperature);
+        assert_eq!(event.subject.as_deref(), Some("disk-1"));
+        assert_eq!(event.ended_at, Some(T0 + HOUR));
+        assert_eq!(EventRecord::from(&event), record);
+
+        let unknown = EventRecord {
+            kind: "later".into(),
+            ..record
+        };
+        assert!(matches!(unknown.to_event(), Err(HistoryError::Value(_))));
     }
 
     #[test]

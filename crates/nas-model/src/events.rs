@@ -52,6 +52,44 @@ pub enum EventKind {
     Unreachable,
 }
 
+impl EventKind {
+    /// Every kind, in the order of the declaration.
+    pub const ALL: [EventKind; 10] = [
+        EventKind::Alert,
+        EventKind::DiskHealth,
+        EventKind::DiskTemperature,
+        EventKind::VolumeHealth,
+        EventKind::VolumeFill,
+        EventKind::FanHealth,
+        EventKind::UpsOnBattery,
+        EventKind::BackupFailed,
+        EventKind::BackupOverdue,
+        EventKind::Unreachable,
+    ];
+
+    /// Name as stored and serialized, e.g. `disk_temperature`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EventKind::Alert => "alert",
+            EventKind::DiskHealth => "disk_health",
+            EventKind::DiskTemperature => "disk_temperature",
+            EventKind::VolumeHealth => "volume_health",
+            EventKind::VolumeFill => "volume_fill",
+            EventKind::FanHealth => "fan_health",
+            EventKind::UpsOnBattery => "ups_on_battery",
+            EventKind::BackupFailed => "backup_failed",
+            EventKind::BackupOverdue => "backup_overdue",
+            EventKind::Unreachable => "unreachable",
+        }
+    }
+
+    /// The kind with this name ([`EventKind::as_str`]); `None` for an
+    /// unknown name.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == name)
+    }
+}
+
 impl From<FindingKind> for EventKind {
     fn from(kind: FindingKind) -> Self {
         match kind {
@@ -300,6 +338,17 @@ mod tests {
 
     const T0: i64 = 1_700_000_000;
     const STEP: i64 = 300;
+
+    #[test]
+    fn as_str_matches_serde_name() {
+        for kind in EventKind::ALL {
+            let json = serde_json::to_string(&kind).expect("kind serializes");
+            assert_eq!(json, format!("\"{}\"", kind.as_str()));
+            assert_eq!(EventKind::from_name(kind.as_str()), Some(kind));
+        }
+        assert_eq!(EventKind::from_name("disk.temp"), None);
+        assert_eq!(EventKind::from_name(""), None);
+    }
 
     /// Puts a state into a snapshot.
     type Change = fn(&mut Snapshot);
