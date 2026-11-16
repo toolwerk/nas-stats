@@ -32,6 +32,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use nas_http::{Fingerprint, NasClient};
@@ -161,20 +162,45 @@ struct Entry {
     provider: model::ProviderKind,
     /// Held for a whole query, so a logout or new credentials wait for it.
     poll: tokio::sync::Mutex<()>,
+    /// Goes up when the entry is removed or replaced or gets new
+    /// credentials; a query started before sends nothing.
+    epoch: AtomicU64,
 }
 
-/// An entry as the planner sees it.
-struct Polled(Arc<Entry>);
+impl Entry {
+    /// Ends the queries started so far; they send nothing any more.
+    fn retire(&self) -> u64 {
+        self.epoch.fetch_add(1, Ordering::SeqCst) + 1
+    }
+}
+
+/// An entry as the planner sees it, at one epoch.
+struct Polled {
+    entry: Arc<Entry>,
+    epoch: u64,
+}
+
+impl Polled {
+    fn current(entry: Arc<Entry>) -> Arc<Self> {
+        let epoch = entry.epoch.load(Ordering::SeqCst);
+        Arc::new(Self { entry, epoch })
+    }
+}
 
 impl Provider for Polled {
     fn kind(&self) -> model::ProviderKind {
-        self.0.provider
+        self.entry.provider
     }
 
     fn snapshot(&self) -> BoxFuture<'_, Result<model::Snapshot, ProviderError>> {
         Box::pin(async move {
-            let _poll = self.0.poll.lock().await;
-            self.0.backend.snapshot().await
+            let _poll = self.entry.poll.lock().await;
+            // Removed, replaced or new credentials while the query waited:
+            // the planner discards its result, so it sends no login.
+            if self.entry.epoch.load(Ordering::SeqCst) != self.epoch {
+                return Err(ProviderError::Unreachable("Abfrage abgelöst".into()));
+            }
+            self.entry.backend.snapshot().await
         })
     }
 }
@@ -203,21 +229,30 @@ impl PollSink for Sink {
 }
 
 /// Writes one finished query: after a success the snapshot and the events
-/// it opens, raises or closes; after an error an "unreachable" event when
-/// the last snapshot is 15 minutes old. Without any snapshot nothing.
+/// it opens, raises or closes; after no answer (unreachable, time-out) an
+/// "unreachable" event when the last snapshot is 15 minutes old. Without
+/// any snapshot nothing.
 fn archive(store: &mut HistoryStore, state: &PollState, now: i64) -> Result<(), HistoryError> {
     let Some(snapshot) = &state.snapshot else {
         return Ok(());
     };
-    let changes = if state.error.is_none() {
-        store.write_snapshot(snapshot, now)?;
-        let open = open_events(store, &state.nas_id)?;
-        model::detect_events(&open, snapshot, &model::Thresholds::default())
-    } else {
+    let changes = if let Some(error) = &state.error {
+        // Only a NAS that gave no answer is unreachable; a refused login or
+        // an odd answer still came from it.
+        if !matches!(
+            error,
+            ProviderError::Unreachable(_) | ProviderError::Timeout
+        ) {
+            return Ok(());
+        }
         let open = open_events(store, &state.nas_id)?;
         model::detect_unreachable(&open, &snapshot.nas, Some(snapshot.observed_at), now)
             .into_iter()
             .collect()
+    } else {
+        store.write_snapshot(snapshot, now)?;
+        let open = open_events(store, &state.nas_id)?;
+        model::detect_events(&open, snapshot, &model::Thresholds::default())
     };
     let records: Vec<EventRecord> = changes
         .iter()
@@ -324,13 +359,15 @@ impl NasCore {
             backend,
             provider,
             poll: tokio::sync::Mutex::new(()),
+            epoch: AtomicU64::new(0),
         });
         let mut entries = lock(&self.entries);
         let replaced = entries.insert(nas_id.clone(), Arc::clone(&entry));
         self.planner
-            .add(&nas_id, Arc::new(Polled(entry)), None, false);
+            .add(&nas_id, Polled::current(entry), None, false);
         drop(entries);
         if let Some(old) = replaced {
+            old.retire();
             runtime().spawn(async move {
                 let _poll = old.poll.lock().await;
                 let _ = old.backend.logout().await;
@@ -471,6 +508,7 @@ impl NasCore {
             // nothing is written back after the delete. A new entry with
             // the same id waits for the lock and starts empty.
             self.planner.remove(&nas_id);
+            entry.retire();
             if let Some(mut store) = self.archive() {
                 let _ = store.delete_nas(&nas_id);
             }
@@ -506,11 +544,14 @@ impl NasCore {
                     continue;
                 }
                 entry.backend.set_credentials(user, password).await;
+                // A query that waited for the lock would send the new
+                // credentials a second time right after the next one.
+                entry.retire();
                 let entries = lock(&self.entries);
                 // Replaced meanwhile: the new entry starts fresh anyway.
                 if Self::is_current(&entries, &nas_id, &entry) {
                     self.planner
-                        .add(&nas_id, Arc::new(Polled(Arc::clone(&entry))), None, false);
+                        .add(&nas_id, Polled::current(Arc::clone(&entry)), None, false);
                 }
                 return Ok(());
             }
@@ -551,7 +592,7 @@ impl NasCore {
             .cloned()
             .ok_or_else(|| FfiError::UnknownNas { id: nas_id.clone() })?;
         self.planner
-            .add(&nas_id, Arc::new(Polled(entry)), last_attempt_at, blocked);
+            .add(&nas_id, Polled::current(entry), last_attempt_at, blocked);
         Ok(())
     }
 
@@ -575,13 +616,14 @@ impl NasCore {
     }
 
     /// Stops the planner and drops the listener. A query in flight still
-    /// ends and is archived, without a callback. [`NasCore::start_planner`]
+    /// ends and is archived; a callback already under way may still reach
+    /// the old listener, later ones do not. [`NasCore::start_planner`]
     /// starts it again.
     pub fn stop_planner(&self) {
+        *lock(&self.sink.listener) = None;
         if let Some(run) = lock(&self.run).take() {
             run.abort();
         }
-        *lock(&self.sink.listener) = None;
     }
 
     /// Interval between automatic queries of the planner, in seconds; less
@@ -621,11 +663,13 @@ impl NasCore {
         let Some(store) = self.archive() else {
             return Ok(Vec::new());
         };
-        store
+        Ok(store
             .events(nas_id.as_deref(), from, to)?
             .iter()
-            .map(|record| Ok(NasEvent::from(record.to_event()?)))
-            .collect()
+            // Kinds of a newer build are left out, as for the detection.
+            .filter_map(|record| record.to_event().ok())
+            .map(NasEvent::from)
+            .collect())
     }
 
     /// Forecast "full in X days" of a volume from its daily values of the
@@ -1941,5 +1985,48 @@ mod tests {
         assert_eq!(snapshot.nas.id, state.nas_id);
         assert!(snapshot.observed_at >= DEMO_NOW);
         core.stop_planner();
+    }
+
+    #[tokio::test]
+    async fn a_query_of_a_retired_entry_sends_nothing() {
+        let backend = FakeBackend::answering(vec![Ok(model_snapshot(10.0))]);
+        let entry = Arc::new(Entry {
+            backend: backend.clone(),
+            provider: model::ProviderKind::Qnap,
+            poll: tokio::sync::Mutex::new(()),
+            epoch: AtomicU64::new(0),
+        });
+        let polled = Polled::current(Arc::clone(&entry));
+        entry.retire();
+        assert!(matches!(
+            Provider::snapshot(polled.as_ref()).await,
+            Err(ProviderError::Unreachable(_))
+        ));
+        assert_eq!(backend.queries(), 0);
+        let fresh = Polled::current(entry);
+        assert!(Provider::snapshot(fresh.as_ref()).await.is_ok());
+        assert_eq!(backend.queries(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_refused_login_is_no_unreachable_nas() {
+        let backend = FakeBackend::answering(vec![
+            Ok(model_snapshot(10.0)),
+            Err(ProviderError::LoginFailed),
+        ]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        h.core.clone().refresh("nas-1".into()).await.expect("first");
+        h.set_time(T0 + 4 * MIN_INTERVAL_SECS);
+        let state = h
+            .core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("refused");
+        assert!(state.blocked);
+        assert!(h.core.events(None, 0, i64::MAX).expect("events").is_empty());
     }
 }
