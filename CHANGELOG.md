@@ -8,6 +8,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `stats-core` crate: polling planner that queries each NAS at most every 5 minutes (a longer interval may be set), keeps the last snapshot with error time and error on failures, retries after a network error only at the regular time, blocks a NAS after a rejected login, second factor or changed certificate until it is unblocked, and allows a manual refresh 30 s after the last query. It takes the last query time and the block the app remembers, hands every finished query to a `PollSink` and runs on tokio; tested with paused time and a fake provider. The apps are not connected yet (#60) (#11).
 - `nas-demo` crate: deterministic demo data as in the mockup (Keller with QNAP TS-464, Büro with Synology DS923+, Homelab with TrueNAS CE 25.10), with 90 days of daily history from a fixed seed and daily backup runs. All times follow the given `now`; ids start with `demo-`, base URLs end in `.demo.invalid`. The DataVol1 history yields "full in 143 days" from a regression over the last 30 days (#22).
 - `nas-http` crate: HTTPS layer for all providers with certificate pinning after the first contact (SHA-256 fingerprint), `CertificateChanged` with old and new fingerprint, 20 s time limit, no retries, no redirects, HTTPS only.
 - `ProviderError::Unreachable` carries a detail for the log (#3).
