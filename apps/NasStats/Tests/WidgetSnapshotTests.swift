@@ -281,23 +281,48 @@ extension WidgetSnapshotCarryOverTests {
         var nas = nas("a", status: .ok, observedMinutesAgo: 5)
         nas.observedAt = morning.addingTimeInterval(-300)
         let fresh = snapshot([nas])
-        let plan = fresh.timeline(now: morning, calendar: berlin)
+        let plan = fresh.timeline(for: fresh.nas.first, now: morning, calendar: berlin)
         #expect(plan.dates == [morning, morning.addingTimeInterval(25 * 60 + 1)])
         let midnight = try #require(berlin.date(from: DateComponents(year: 2026, month: 11, day: 17)))
         #expect(plan.reloadAfter == midnight)
 
         // Already old: only now, asked again after the next midnight.
         let late = morning.addingTimeInterval(3600)
-        #expect(fresh.timeline(now: late, calendar: berlin).dates == [late])
-        #expect(fresh.timeline(now: late, calendar: berlin).reloadAfter == midnight)
+        #expect(fresh.timeline(for: fresh.nas.first, now: late, calendar: berlin).dates == [late])
+        #expect(fresh.timeline(for: fresh.nas.first, now: late, calendar: berlin).reloadAfter == midnight)
     }
 
     @Test func demoAndEmptySnapshotsOnlyReloadByTheApp() {
         var demo = snapshot([nas("a", status: .ok, observedMinutesAgo: 5)])
         demo.demo = true
-        #expect(demo.timeline(now: now).dates == [now])
-        #expect(demo.timeline(now: now).reloadAfter == nil)
-        #expect(snapshot([]).timeline(now: now).reloadAfter == nil)
-        #expect(snapshot([nas("a", status: .unknown, observedMinutesAgo: nil)]).timeline(now: now).reloadAfter == nil)
+        #expect(demo.timeline(for: demo.nas.first, now: now).dates == [now])
+        #expect(demo.timeline(for: demo.nas.first, now: now).reloadAfter == nil)
+        #expect(snapshot([]).timeline(for: nil, now: now).reloadAfter == nil)
+        #expect({ let s = snapshot([nas("a", status: .unknown, observedMinutesAgo: nil)]); return s.timeline(for: s.nas.first, now: now) }().reloadAfter == nil)
+    }
+}
+
+extension WidgetSnapshotCarryOverTests {
+    @Test func theSelectionFallsBackToTheWorstNas() {
+        let both = snapshot([nas("b", status: .critical, observedMinutesAgo: 1), nas("a", status: .ok, observedMinutesAgo: 1)])
+        #expect(both.selected(nil)?.id == "b")
+        #expect(both.selected(WidgetSnapshot.automaticId)?.id == "b")
+        #expect(both.selected("gone")?.id == "b")
+        #expect(both.selected("a")?.id == "a")
+        #expect(snapshot([]).selected("a") == nil)
+    }
+
+    @Test func theTimelineFollowsTheShownNas() throws {
+        let withoutState = nas("a", status: .ok, observedMinutesAgo: nil)
+        let recent = nas("b", status: .ok, observedMinutesAgo: 5)
+        let both = snapshot([withoutState, recent])
+        let plan = both.timeline(for: recent, now: now, calendar: berlin)
+        #expect(plan.dates == [now, try #require(both.staleDate(recent))])
+        #expect(plan.reloadAfter != nil)
+        let first = both.timeline(for: withoutState, now: now, calendar: berlin)
+        #expect(first.dates == [now])
+        #expect(first.reloadAfter == nil)
+        #expect(both.timeline(for: nil, now: now, calendar: berlin).dates == [now])
+        #expect(both.timeline(for: nil, now: now, calendar: berlin).reloadAfter == nil)
     }
 }

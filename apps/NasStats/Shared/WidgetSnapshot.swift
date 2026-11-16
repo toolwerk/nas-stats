@@ -44,14 +44,32 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
         return observedAt.addingTimeInterval(TimeInterval(staleAfterSeconds) + 1)
     }
 
+    /// Id of the choice „Automatisch“ in the widget settings (#26). NAS ids
+    /// are UUIDs, so it never clashes with one.
+    static let automaticId = "automatic"
+
+    /// The NAS a widget shows for its setting `id`: the one with the worst
+    /// state (the first) for „Automatisch“, no setting or a NAS that is not
+    /// in the snapshot (deleted); otherwise the chosen one. The choice itself
+    /// stays stored, a widget cannot change its own setting. `nil` without a
+    /// NAS.
+    func selected(_ id: String?) -> WidgetNas? {
+        guard let id, id != Self.automaticId,
+              let chosen = nas.first(where: { $0.id == id })
+        else { return nas.first }
+        return chosen
+    }
+
     /// Plan of the widget timeline at `now`: the dates of its entries and
     /// when WidgetKit should ask again. Always an entry for `now`; while the
-    /// state of the shown (first) NAS is still current, one for the moment
+    /// state of the shown NAS `shown` is still current, one for the moment
     /// it gets old, so the widget turns grey without the app. A state that
     /// can get old is asked again after the midnight that follows, so an
     /// old „Stand“ gains its date; otherwise only the app reloads (`nil`).
-    func timeline(now: Date, calendar: Calendar = .current) -> (dates: [Date], reloadAfter: Date?) {
-        guard let first = nas.first, let staleDate = staleDate(first) else {
+    func timeline(
+        for shown: WidgetNas?, now: Date, calendar: Calendar = .current
+    ) -> (dates: [Date], reloadAfter: Date?) {
+        guard let shown, let staleDate = staleDate(shown) else {
             return ([now], nil)
         }
         let dates = staleDate > now ? [now, staleDate] : [now]
