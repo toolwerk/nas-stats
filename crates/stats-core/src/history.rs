@@ -1010,14 +1010,21 @@ impl HistoryStore {
                     )
                     .optional()
             };
-            // An own event of the same problem with another start that
-            // overlaps it (both devices saw it begin) stands for it: the
-            // other one is not added beside it, its end closes the own one.
-            let mut own_overlapping = tx.prepare_cached(
+            // An own open event of the same problem with another start that
+            // began before the other one ended (both devices saw it begin)
+            // stands for it: the other one is not added beside it, its end
+            // closes the own one. Sent again after that, it finds the own
+            // one ended at its end and stays out as well.
+            let mut own_open = tx.prepare_cached(
                 "SELECT started_at FROM events
                  WHERE nas_id = ?1 AND kind = ?2 AND subject = ?3 AND started_at <> ?4
-                   AND started_at <= ?5 AND (ended_at IS NULL OR ended_at >= ?4)
+                   AND started_at <= ?5 AND ended_at IS NULL
                  ORDER BY started_at LIMIT 1",
+            )?;
+            let mut closed_by_it = tx.prepare_cached(
+                "SELECT 1 FROM events
+                 WHERE nas_id = ?1 AND kind = ?2 AND subject = ?3 AND started_at <> ?4
+                   AND started_at <= ?5 AND ended_at = ?5",
             )?;
             let mut close = tx.prepare_cached(
                 "UPDATE events SET ended_at = ?5
@@ -1026,28 +1033,34 @@ impl HistoryStore {
             )?;
             for event in &events {
                 let subject = event.subject.as_deref().unwrap_or("");
-                let own: Option<i64> = own_overlapping
-                    .query_row(
-                        params![
+                if read(event)?.is_none() {
+                    let end = event.ended_at.unwrap_or(i64::MAX);
+                    let own: Option<i64> = own_open
+                        .query_row(
+                            params![nas_id, event.kind, subject, event.started_at, end],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+                    if let Some(own) = own {
+                        if let Some(end) = event.ended_at.filter(|&end| end >= own) {
+                            count.events += u32::try_from(
+                                close.execute(params![nas_id, event.kind, subject, own, end])?,
+                            )
+                            .unwrap_or(0);
+                        }
+                        continue;
+                    }
+                    if event.ended_at.is_some()
+                        && closed_by_it.exists(params![
                             nas_id,
                             event.kind,
                             subject,
                             event.started_at,
-                            event.ended_at.unwrap_or(i64::MAX)
-                        ],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
-                if read(event)?.is_none()
-                    && let Some(own) = own
-                {
-                    if let Some(end) = event.ended_at.filter(|&end| end >= own) {
-                        count.events += u32::try_from(
-                            close.execute(params![nas_id, event.kind, subject, own, end])?,
-                        )
-                        .unwrap_or(0);
+                            end
+                        ])?
+                    {
+                        continue;
                     }
-                    continue;
                 }
                 let before = read(event)?;
                 upsert_events(&tx, std::slice::from_ref(event))?;
@@ -2855,5 +2868,59 @@ mod tests {
         let open = store.open_events("nas-1").expect("open");
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].kind, "disk_temperature");
+    }
+
+    #[test]
+    fn a_new_problem_after_an_ended_one_is_its_own_event() {
+        let now = T0 + DAY;
+        let mut phone = HistoryStore::in_memory().expect("store opens");
+        let unreachable = |started_at: i64, ended_at: Option<i64>| ExportEvent {
+            kind: "unreachable".into(),
+            subject: String::new(),
+            started_at,
+            ended_at,
+            level: "critical".into(),
+            text: "Keller nicht erreichbar".into(),
+        };
+        // The second outage begins where the first one ended.
+        let mut export = empty_export();
+        export.events = vec![
+            unreachable(T0, Some(T0 + HOUR)),
+            unreachable(T0 + HOUR, None),
+        ];
+        phone.import(&export, "nas-1", now).expect("import");
+        let events = phone.events(Some("nas-1"), T0, now).expect("events");
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].ended_at, None);
+
+        // An own ended event does not hide an open one of the Mac; an own
+        // open one takes its end.
+        let mut phone = HistoryStore::in_memory().expect("store opens");
+        phone
+            .write_events(&[
+                event("nas-1", Some("disk-1"), T0 + 60, Some(T0 + 600)),
+                event("nas-1", Some("disk-1"), T0 + 900, None),
+            ])
+            .expect("own");
+        let row = |ended_at: Option<i64>| ExportEvent {
+            kind: "disk_temperature".into(),
+            subject: "disk-1".into(),
+            started_at: T0,
+            ended_at,
+            level: "warning".into(),
+            text: "Platte 1 bei 50 °C".into(),
+        };
+        export.events = vec![row(None)];
+        phone.import(&export, "nas-1", now).expect("open");
+        assert_eq!(
+            phone.events(Some("nas-1"), T0, now).expect("events").len(),
+            2
+        );
+        export.events = vec![row(Some(T0 + HOUR))];
+        phone.import(&export, "nas-1", now).expect("ended");
+        let events = phone.events(Some("nas-1"), T0, now).expect("events");
+        assert_eq!(events.len(), 2);
+        assert!(events.iter().all(|e| e.ended_at.is_some()));
+        assert_eq!(events[0].ended_at, Some(T0 + HOUR));
     }
 }
