@@ -509,11 +509,12 @@ impl HistoryStore {
 
     /// Ends an open „unreachable“ event of a NAS at `at`, when a snapshot
     /// read at `at` by another device (#37) shows the NAS answered; one
-    /// started after `at` stays. `true` when one ended.
+    /// that started at `at` or later stays (it began at that very snapshot,
+    /// which may come again). `true` when one ended.
     pub fn close_unreachable(&mut self, nas_id: &str, at: i64) -> Result<bool> {
         let changed = self.conn.execute(
             "UPDATE events SET ended_at = ?3
-             WHERE nas_id = ?1 AND kind = ?2 AND ended_at IS NULL AND started_at <= ?3",
+             WHERE nas_id = ?1 AND kind = ?2 AND ended_at IS NULL AND started_at < ?3",
             params![nas_id, EventKind::Unreachable.as_str(), at],
         )?;
         Ok(changed > 0)
@@ -2864,6 +2865,8 @@ mod tests {
             .write_events(&[unreachable(T0), event("nas-1", Some("disk-1"), T0, None)])
             .expect("events");
         assert!(!store.close_unreachable("nas-1", T0 - 1).expect("too early"));
+        // The snapshot the outage began at, sent again, does not end it.
+        assert!(!store.close_unreachable("nas-1", T0).expect("same time"));
         assert!(store.close_unreachable("nas-1", T0 + 900).expect("close"));
         let open = store.open_events("nas-1").expect("open");
         assert_eq!(open.len(), 1);
