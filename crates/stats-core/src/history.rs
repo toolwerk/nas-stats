@@ -560,6 +560,19 @@ impl HistoryStore {
         })
     }
 
+    /// Name and model of a NAS as it reported them last; `None` for an
+    /// unknown NAS.
+    pub fn name_and_model(&self, nas_id: &str) -> Result<Option<(Option<String>, Option<String>)>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT name, model FROM nas WHERE id = ?1")?;
+        let mut rows = stmt.query(params![nas_id])?;
+        Ok(match rows.next()? {
+            Some(row) => Some((row.get(0)?, row.get(1)?)),
+            None => None,
+        })
+    }
+
     /// The history of a NAS since `since` (`None`: all of it) for the
     /// collector (#46), until `now`. Each time span comes in the finest
     /// resolution that is complete there:
@@ -577,6 +590,9 @@ impl HistoryStore {
     /// An unknown NAS gives an empty export.
     pub fn export(&self, nas_id: &str, since: Option<i64>, now: i64) -> Result<Export> {
         let since = since.unwrap_or(0);
+        // One read snapshot: a write in between prunes raw samples and would
+        // move the first full hour under the queries.
+        let tx = self.conn.unchecked_transaction()?;
         let first = |sql: &str| -> Result<Option<i64>> {
             Ok(self
                 .conn
@@ -649,6 +665,8 @@ impl HistoryStore {
             })
         })?;
         let backup_runs = rows.collect::<rusqlite::Result<_>>()?;
+        drop(stmt);
+        tx.commit()?;
 
         Ok(Export {
             version: EXPORT_VERSION,
@@ -2130,6 +2148,11 @@ mod tests {
             store.last_seen("nas-1").expect("last seen"),
             Some(T0 + HOUR)
         );
+        assert_eq!(
+            store.name_and_model("nas-1").expect("name"),
+            Some((Some("Testgerät".into()), Some("TS-000".into())))
+        );
+        assert_eq!(store.name_and_model("nas-2").expect("name"), None);
     }
 
     #[test]
