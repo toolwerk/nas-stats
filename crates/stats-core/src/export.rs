@@ -10,6 +10,7 @@
 //! [`crate::HistoryStore::export`] writes it, [`crate::HistoryStore::import`]
 //! reads it into the archive of the app.
 
+use nas_model::ProviderKind;
 use serde::{Deserialize, Serialize};
 
 /// Version of the export this build writes and reads.
@@ -33,6 +34,26 @@ pub struct Export {
     pub daily: Vec<ExportBucket>,
     /// Backup runs.
     pub backup_runs: Vec<ExportBackupRun>,
+}
+
+/// One NAS of the collector as `GET /v1/nas` lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CollectorNas {
+    /// Id of the NAS in the configuration of the collector.
+    pub id: String,
+    pub provider: ProviderKind,
+    /// Name and model as the NAS reported them last; `None` before.
+    pub name: Option<String>,
+    pub model: Option<String>,
+    pub base_url: String,
+    /// Fingerprint of the certificate of the NAS, `AB:CD:…`.
+    pub fingerprint: String,
+    /// Time of the newest snapshot in the archive, Unix seconds UTC.
+    pub last_seen: Option<i64>,
+    /// No more queries after a rejected login, until the access changes.
+    pub blocked: bool,
+    /// Error of the last query, as text.
+    pub error: Option<String>,
 }
 
 /// One raw sample.
