@@ -1,13 +1,16 @@
 //! Swift face of the NAS Stats core, via UniFFI.
 //!
 //! Keeps its own records (`records.rs`) so `nas-model` stays free of FFI
-//! attributes. [`NasCore`] holds the registered NAS, queries them and keeps
-//! their last state and error. Free calls: [`core_version`],
-//! [`fetch_fingerprint`], [`demo_snapshot`] and [`demo_snapshots`].
+//! attributes. [`NasCore`] holds the registered NAS, queries them through
+//! the planner of `stats-core`, keeps their last state and error, archives
+//! every query and hands out history, events, backup runs and the forecast.
+//! Started with [`NasCore::start_planner`], it queries on its own and calls
+//! a [`StateListener`] of the app after every query. Free calls:
+//! [`core_version`], [`fetch_fingerprint`], [`demo_snapshot`] and
+//! [`demo_snapshots`].
 //!
 //! Every network call runs on one tokio runtime of the core ([`runtime`]);
-//! the apps only await the result. History, forecast, events, the planner
-//! and a callback to Swift follow with #60.
+//! the apps only await the result.
 
 mod core;
 mod demo;
@@ -17,9 +20,10 @@ mod records;
 pub use crate::core::{MIN_INTERVAL_SECS, NasCore};
 pub use crate::error::FfiError;
 pub use crate::records::{
-    Alert, AlertLevel, BackupKind, BackupResult, BackupTask, Container, Disk, Fan, Finding,
-    FindingKind, Health, Nas, NasConfig, NasProblem, NasState, NetInterface, ProblemKind,
-    ProviderKind, ScrubState, ScrubStatus, Snapshot, SystemStatus, Ups, UpsState, Volume,
+    Alert, AlertLevel, BackupKind, BackupResult, BackupRun, BackupTask, Container, Disk, EventKind,
+    Fan, Finding, FindingKind, Forecast, Health, HistoryPoint, HistoryRange, HistorySeries, Metric,
+    Nas, NasConfig, NasEvent, NasProblem, NasState, NetInterface, ProblemKind, ProviderKind,
+    ScrubState, ScrubStatus, Snapshot, StateListener, SystemStatus, Ups, UpsState, Volume,
     VolumeKind,
 };
 
