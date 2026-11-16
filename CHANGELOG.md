@@ -6,6 +6,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `stats-ffi`: the core computes the findings with the thresholds the app sets (`NasCore::set_thresholds`, `demo_snapshots(now, thresholds)`, `standard_thresholds`) and recomputes them from the snapshot as read, so a changed threshold shows at once without a query. Snapshots name the volumes whose fill level counts (`capacity_volume_ids`). The apps take the findings of the core unchanged and no longer check fill level and disk temperature themselves (#85).
+
 ### Added
 
 - Widgets: the NAS widget has a setting „NAS“ (App Intent): „Automatisch“ (the default) shows the NAS with the worst state, a fixed NAS shows exactly that one, in demo mode marked „Demo“ in the list. A NAS that is not in the app any more shows the worst NAS and keeps the stored choice. The grey „Stand“ note follows the shown NAS. The volume choice for the fill level widget follows with #38 (#26).
