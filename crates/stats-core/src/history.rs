@@ -14,6 +14,8 @@ use std::path::Path;
 use nas_model::{BackupResult, BackupRun, Health, Metric, ProviderKind, Sample, Snapshot};
 use rusqlite::{Connection, Transaction, params};
 
+use crate::forecast::{Forecast, forecast, window_start};
+
 /// Version of the schema this build writes and reads.
 pub const SCHEMA_VERSION: i64 = 1;
 
@@ -355,6 +357,34 @@ impl HistoryStore {
             }
         }
         Ok(series)
+    }
+
+    /// Forecast "full in X days" for one volume from its daily values of the
+    /// last 30 days (see [`crate::forecast`]). `Ok(None)` means no trend, or
+    /// an unknown NAS or volume, or no known size.
+    pub fn forecast(&self, nas_id: &str, volume_id: &str, now: i64) -> Result<Option<Forecast>> {
+        let from = window_start(now);
+        let key = Some(volume_id);
+        let totals = self.points(
+            nas_id,
+            Metric::VolumeTotal,
+            key,
+            Resolution::Daily,
+            from,
+            now,
+        )?;
+        let Some(total) = totals.last() else {
+            return Ok(None);
+        };
+        let used = self.points(
+            nas_id,
+            Metric::VolumeUsed,
+            key,
+            Resolution::Daily,
+            from,
+            now,
+        )?;
+        Ok(forecast(&used, total.mean, now))
     }
 
     /// Stores opened, raised and closed events. A known event (same NAS,

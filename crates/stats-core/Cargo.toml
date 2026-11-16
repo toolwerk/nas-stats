@@ -1,6 +1,6 @@
 [package]
 name = "stats-core"
-description = "Statistics core of NAS Stats: history in SQLite with hourly and daily rollups, events and backup runs, and the polling planner that queries each NAS at most every 5 minutes, stops after a rejected login and allows a manual refresh 30 s after the last query."
+description = "Statistics core of NAS Stats: history in SQLite with hourly and daily rollups, events and backup runs, the forecast \"full in X days\" from a regression over the last 30 days, and the polling planner that queries each NAS at most every 5 minutes, stops after a rejected login and allows a manual refresh 30 s after the last query."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,6 +13,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 
 [dev-dependencies]
+nas-demo = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 
