@@ -20,7 +20,7 @@ GitHub: `toolwerk/nas-stats` (privat).
 - Jede Parser-Änderung bekommt einen Fixture-Test mit anonymisierter Antwort (Seriennummern, Hostnamen, IPs, Freigabenamen ändern). Nie echte Zugangsdaten oder Gerätetokens einchecken.
 - Zeiten sind Unix-Sekunden in UTC, Größen in Bytes, Temperaturen in Grad Celsius.
 - Nur lesend zugreifen. Keine Befehle ans NAS (kein Neustart, kein Backup-Start), keine Konfigurationsänderung.
-- Abfragen sparsam: höchstens alle 5 Minuten je NAS, letzter Stand bleibt bei Fehlern stehen. Login-Fehler nicht wiederholen, sonst sperrt DSM die IP.
+- Abfragen sparsam: höchstens alle 5 Minuten je NAS, manuelles Aktualisieren frühestens 30 Sekunden nach der letzten Abfrage, letzter Stand bleibt bei Fehlern stehen. Login-Fehler nicht wiederholen, sonst sperrt DSM die IP.
 - Demo-Werte sind als solche gekennzeichnet. Für Screenshots nie echte NAS-Daten verwenden.
 
 ## Besonderheiten
