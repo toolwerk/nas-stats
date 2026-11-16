@@ -240,8 +240,9 @@ impl HistoryStore {
         Ok(())
     }
 
-    /// Stores backup runs. A known run gets the new result; end and message
-    /// stay when the new run does not know them.
+    /// Stores backup runs. A known run gets the new result, except that a
+    /// finished run does not go back to running; end and message stay when
+    /// the new run does not know them.
     pub fn write_backup_runs(&mut self, nas_id: &str, runs: &[BackupRun]) -> Result<()> {
         let tx = self.conn.transaction()?;
         upsert_runs(&tx, nas_id, runs)?;
@@ -516,7 +517,7 @@ fn upsert_runs(tx: &Transaction, nas_id: &str, runs: &[BackupRun]) -> Result<()>
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT (nas_id, task_id, started_at) DO UPDATE SET
              result = CASE
-                 WHEN excluded.result = 'running' AND backup_runs.finished_at IS NOT NULL
+                 WHEN excluded.result = 'running' AND backup_runs.result <> 'running'
                  THEN backup_runs.result
                  ELSE excluded.result
              END,
@@ -1104,6 +1105,35 @@ mod tests {
                 .expect("runs are read");
             assert_eq!(runs, vec![done.clone()], "{result:?}");
         }
+    }
+
+    #[test]
+    fn stale_running_snapshot_keeps_ok_without_end() {
+        let mut store = HistoryStore::in_memory().expect("store opens");
+        let mut snap = snapshot("nas-1", T0, 0);
+        snap.backups = vec![BackupTask {
+            id: "b1".into(),
+            name: "Nachts".into(),
+            kind: BackupKind::Hbs3,
+            last_run: Some(T0 - HOUR),
+            last_result: Some(BackupResult::Running),
+            next_run: None,
+        }];
+        for result in [
+            BackupResult::Running,
+            BackupResult::Ok,
+            BackupResult::Running,
+        ] {
+            snap.backups[0].last_result = Some(result);
+            store
+                .write_snapshot(&snap, T0)
+                .expect("snapshot is written");
+        }
+        let runs = store
+            .backup_runs("nas-1", T0 - DAY, T0)
+            .expect("runs are read");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].result, BackupResult::Ok);
     }
 
     #[test]
