@@ -31,7 +31,7 @@ func draw(size: Int, macOS: Bool) -> CGImage? {
                               bitmapInfo: alpha.rawValue) else { return nil }
     let rect = CGRect(x: 0, y: 0, width: s, height: s)
     if macOS {
-        ctx.addPath(rounded(rect.insetBy(dx: s * 0.05, dy: s * 0.05), s * 0.2))
+        ctx.addPath(rounded(rect.insetBy(dx: s * 0.1, dy: s * 0.1), s * 0.18))
         ctx.clip()
     }
     // Ground: near-black with a faint blue cast, lighter towards the top.
