@@ -6,7 +6,6 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(NasStore.self) private var store
     @State private var confirmingStopSharing = false
-    @State private var switchingSharing = false
     /// Why the last switch of the iCloud setting did not fully work; stays
     /// until the next switch.
     @State private var sharingError: String?
@@ -128,7 +127,6 @@ struct SettingsView: View {
                     }
                 }
             ))
-            .disabled(switchingSharing)
             .confirmationDialog(
                 "Zugänge nicht mehr teilen?",
                 isPresented: $confirmingStopSharing,
@@ -155,8 +153,6 @@ struct SettingsView: View {
     }
 
     private func setSharing(_ shares: Bool) {
-        switchingSharing = true
-        defer { switchingSharing = false }
         do {
             let failed = try store.setSharesAccessViaICloud(shares)
             sharingError = failed > 0 ? String(localized: "Nicht umgestellt: \(failed) NAS.") : nil
