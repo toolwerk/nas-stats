@@ -326,4 +326,32 @@ extension WidgetSnapshotCarryOverTests {
         #expect(both.timeline(for: nil, now: now, calendar: berlin).dates == [now])
         #expect(both.timeline(for: nil, now: now, calendar: berlin).reloadAfter == nil)
     }
+
+    @Test func theTimelineOfSeveralNasTurnsGreyAtEachMomentAndAsksAfterTheLastMidnight() throws {
+        let early = nas("a", status: .ok, observedMinutesAgo: 5)
+        let later = nas("b", status: .ok, observedMinutesAgo: 1)
+        let withoutState = nas("c", status: .ok, observedMinutesAgo: nil)
+        let all = snapshot([later, withoutState, early])
+        let plan = all.timeline(for: [later, withoutState, early], now: now, calendar: berlin)
+        let staleEarly = try #require(all.staleDate(early))
+        let staleLater = try #require(all.staleDate(later))
+        #expect(plan.dates == [now, staleEarly, staleLater])
+        let midnight = berlin.date(byAdding: .day, value: 1, to: berlin.startOfDay(for: staleLater))
+        #expect(plan.reloadAfter == midnight)
+
+        // Two NAS that turn old together give one entry.
+        let twin = nas("d", status: .ok, observedMinutesAgo: 5)
+        #expect(all.timeline(for: [early, twin], now: now, calendar: berlin).dates == [now, staleEarly])
+
+        // Demo values and no NAS: only the app reloads.
+        let none = all.timeline(for: [WidgetNas](), now: now, calendar: berlin)
+        #expect(none.dates == [now])
+        #expect(none.reloadAfter == nil)
+        var demo = all
+        demo.demo = true
+        let demoPlan = demo.timeline(for: [early, later], now: now, calendar: berlin)
+        #expect(demoPlan.dates == [now])
+        #expect(demoPlan.reloadAfter == nil)
+    }
 }
+

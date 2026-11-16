@@ -14,10 +14,10 @@ struct WidgetContentTests {
 
     func nas(
         finding: String? = nil, problem: String? = nil, volumes: [WidgetVolume] = [],
-        observedAgo: TimeInterval? = 60
+        observedAgo: TimeInterval? = 60, status: StatusLevel = .ok
     ) -> WidgetNas {
         WidgetNas(
-            id: "a", name: "Keller", model: nil, vendor: nil, status: .ok,
+            id: "a", name: "Keller", model: nil, vendor: nil, status: status,
             firstFinding: finding, firstFindingLevel: finding == nil ? nil : .critical,
             findingCount: finding == nil ? 0 : 1, problemLine: problem, volumes: volumes,
             hottestDiskC: nil, cpuPercent: nil, memoryPercent: nil, lastBackupAt: nil,
@@ -110,4 +110,152 @@ struct WidgetContentTests {
         let n = nas(problem: "Noch keine Abfrage", observedAgo: nil)
         #expect(lines(n).map(\.style) == [.problem])
     }
+
+    // MARK: Lock screen (#25)
+
+    func lockLines(_ nas: WidgetNas, demo: Bool = false) -> [String] {
+        nas.lockLines(in: snapshot(nas, demo: demo), now: now, locale: locale, timeZone: zone)
+    }
+
+    @Test func theInlineLineNamesNasPercentAndState() {
+        let n = nas(volumes: [volume("a", 87)], status: .warning)
+        #expect(n.lockInline(demo: false) == "Keller · 87 % · Warnung")
+        #expect(n.lockTitle == "Keller · Warnung")
+    }
+
+    @Test func theInlineLineRoundsDownAndMarksDemoValues() {
+        let n = nas(volumes: [volume("a", 87.9)], status: .warning)
+        #expect(n.lockPercent == 87)
+        #expect(n.lockInline(demo: true) == "DEMO · Keller · 87 % · Warnung")
+    }
+
+    @Test func anUnreachableNasOrOneWithoutVolumesShowsNoPercent() {
+        let offline = nas(volumes: [volume("a", 87)], status: .offline)
+        #expect(offline.lockPercent == nil)
+        #expect(offline.lockInline(demo: false) == "Keller · Nicht erreichbar")
+        let none = nas()
+        #expect(none.lockPercent == nil)
+        #expect(none.lockInline(demo: false) == "Keller · Gesund")
+    }
+
+    @Test func theRectangularLinesNameTheWarningAndTheFullestVolumeWithForecast() {
+        let n = nas(
+            finding: "Platte 3 bei 52 °C",
+            volumes: [volume("Archiv", 64), volume("DataVol1", 87, forecast: .full(days: 143, date: nil))],
+            status: .warning)
+        #expect(lockLines(n) == ["Platte 3 bei 52 °C", "DataVol1 87 % · voll in 143 Tagen"])
+    }
+
+    @Test func anOldStateReplacesTheForecastInTheRectangularLines() {
+        let n = nas(
+            finding: "Platte 3 bei 52 °C",
+            volumes: [volume("a", 87, forecast: .full(days: 143, date: nil))], observedAgo: 3 * 3600,
+            status: .warning)
+        let result = lockLines(n)
+        #expect(result.count == 2)
+        #expect(result[1].hasPrefix("a 87 % · Stand "))
+        #expect(!result[1].contains("voll in"))
+    }
+
+    @Test func anUnreachableNasShowsOnlyStandInTheRectangularLines() {
+        let n = nas(
+            problem: "Nicht erreichbar", volumes: [volume("a", 87)], observedAgo: 3 * 3600,
+            status: .offline)
+        let result = lockLines(n)
+        #expect(result.count == 1)
+        #expect(result[0].hasPrefix("Stand "))
+    }
+
+    @Test func demoValuesNeverShowStandInTheRectangularLines() {
+        let n = nas(volumes: [volume("a", 87)], observedAgo: 3 * 3600, status: .warning)
+        #expect(lockLines(n, demo: true) == ["a 87 %"])
+    }
+
+    // MARK: Widgets „Füllstand“ und „Alle NAS“ (#38)
+
+    func sized(_ name: String, _ percent: Double?, used: UInt64?, total: UInt64?) -> WidgetVolume {
+        WidgetVolume(
+            id: name, name: name, usedPercent: percent, usedBytes: used, totalBytes: total,
+            forecast: nil)
+    }
+
+    func status(_ nas: WidgetNas, demo: Bool = false) -> WidgetLine? {
+        nas.rowStatus(in: snapshot(nas, demo: demo), now: now, locale: locale, timeZone: zone)
+    }
+
+    @Test func theCapacityLineSumsTheVolumesWithBothSizes() {
+        let tb: UInt64 = 1_099_511_627_776
+        let n = nas(volumes: [
+            sized("a", 50, used: 5 * tb, total: 10 * tb),
+            sized("b", 40, used: 4 * tb, total: 10 * tb),
+            sized("c", nil, used: nil, total: 10 * tb),
+        ])
+        #expect(n.capacityLine(locale: locale) == "9,0 von 20,0 TB")
+        #expect(nas(volumes: [volume("a", 50)]).capacityLine(locale: locale) == nil)
+        #expect(nas().capacityLine(locale: locale) == nil)
+    }
+
+    @Test func anOldStateComesFirstInARow() {
+        let old = nas(finding: "x", problem: "Nicht erreichbar", observedAgo: 3 * 3600)
+        #expect(status(old)?.style == .stale)
+        #expect(status(old)?.text.hasPrefix("Stand ") == true)
+        // Demo values never turn old.
+        #expect(status(old, demo: true)?.style == .problem)
+    }
+
+    @Test func theErrorComesBeforeTheWarningsInARow() {
+        let n = nas(finding: "x", problem: "Nicht erreichbar")
+        #expect(status(n) == WidgetLine(text: "Nicht erreichbar", style: .problem))
+    }
+
+    @Test func aRowCountsTheWarningsInSingularAndPlural() {
+        var n = nas(finding: "x")
+        #expect(status(n) == WidgetLine(text: "1 Warnung", style: .finding(.critical)))
+        n.findingCount = 3
+        #expect(status(n) == WidgetLine(text: "3 Warnungen", style: .finding(.critical)))
+        n.firstFindingLevel = nil
+        #expect(status(n)?.style == .finding(.warning))
+        #expect(status(nas()) == nil)
+    }
+
+    @Test func theRowDetailNamesTheFullestVolumeAndTheBackup() {
+        var n = nas(volumes: [volume("a", 40), volume("DataVol1", 87.9)])
+        n.lastBackupAt = now.addingTimeInterval(-9 * 3600)
+        #expect(n.rowDetail(now: now, locale: locale) == "DataVol1 87 % · Backup vor 9 h")
+        n.lastBackupAt = nil
+        #expect(n.rowDetail(now: now, locale: locale) == "DataVol1 87 % · Backup n/a")
+        let without = nas(volumes: [volume("a", nil)])
+        #expect(without.rowDetail(now: now, locale: locale) == "Backup n/a")
+    }
+
+    func manySnapshot(_ count: Int, percents: [Double?] = []) -> WidgetSnapshot {
+        let all = (0 ..< count).map { index -> WidgetNas in
+            var n = nas(volumes: percents.indices.contains(index) ? [volume("v\(index)", percents[index])] : [])
+            n.id = "n\(index)"
+            return n
+        }
+        return WidgetSnapshot(
+            writtenAt: now, demo: false, staleAfterSeconds: 1800, thresholds: .standard, nas: all)
+    }
+
+    @Test func theLargeWidgetShowsThreeNasAndCountsTheRest() {
+        for (count, shown, hidden) in [(0, 0, 0), (2, 2, 0), (3, 3, 0), (5, 3, 2)] {
+            let s = manySnapshot(count)
+            #expect(s.largeRows.count == shown)
+            #expect(s.largeHiddenCount == hidden)
+        }
+        #expect(manySnapshot(5).largeRows.map(\.id) == ["n0", "n1", "n2"])
+    }
+
+    @Test func theHistoryBelongsToTheFullestVolumeOfAllNas() {
+        let s = manySnapshot(3, percents: [40, 87, 60])
+        #expect(s.historySource?.nas.id == "n1")
+        #expect(s.historySource?.volume.id == "v1")
+        // A tie goes to the first NAS; the fullest NAS may be a hidden one.
+        #expect(manySnapshot(2, percents: [50, 50]).historySource?.nas.id == "n0")
+        #expect(manySnapshot(5, percents: [10, 10, 10, 10, 99]).historySource?.nas.id == "n4")
+        #expect(manySnapshot(2, percents: [nil, nil]).historySource == nil)
+        #expect(manySnapshot(0).historySource == nil)
+    }
 }
+
