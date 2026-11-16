@@ -26,6 +26,8 @@ struct ReachabilityDiagnosisTests {
         // A public host is reachable over mobile data.
         #expect(ReachabilityDiagnosis.classify(result(local: false, .ready), hostIsLocal: false) == .portReachable)
         #expect(ReachabilityDiagnosis.classify(result(local: false, .timedOut), hostIsLocal: false) == .noAnswer)
+        // An open port beats "not at home" (VPN over mobile data).
+        #expect(ReachabilityDiagnosis.classify(result(local: false, .ready), hostIsLocal: true) == .portReachable)
         // A local host with a local interface and a ready port is not "off home".
         #expect(ReachabilityDiagnosis.classify(result(.ready), hostIsLocal: true) == .portReachable)
     }

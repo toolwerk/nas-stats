@@ -120,6 +120,7 @@ struct NasDetailView: View {
                 !store.demoMode,
                 let result = await ReachabilityDiagnosis.probe(baseUrl: entry.baseUrl)
             else { return }
+            guard !Task.isCancelled else { return }
             reason = ReachabilityDiagnosis.classify(
                 result,
                 hostIsLocal: NasAddress.host(of: entry.baseUrl).map(ReachabilityDiagnosis.isLocalHost) ?? false)

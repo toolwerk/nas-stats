@@ -30,13 +30,14 @@ struct ProbeResult: Equatable, Sendable {
 }
 
 enum ReachabilityDiagnosis {
-    /// Order of precedence: no path, refused local network, away from the
-    /// home network, then what the connection said.
+    /// Order of precedence: no path, refused local network, open port, away
+    /// from the home network, then no answer.
     static func classify(_ result: ProbeResult, hostIsLocal: Bool) -> UnreachableReason {
         if !result.pathSatisfied { return .noNetwork }
         if result.connection == .localNetworkDenied { return .localNetworkDenied }
-        if hostIsLocal && !result.onLocalInterface { return .offHomeNetwork }
+        // An open port proves the NAS is reachable, also over a VPN.
         if result.connection == .ready { return .portReachable }
+        if hostIsLocal && !result.onLocalInterface { return .offHomeNetwork }
         return .noAnswer
     }
 
@@ -70,22 +71,24 @@ enum ReachabilityDiagnosis {
     static func text(for reason: UnreachableReason) -> String {
         #if os(iOS)
         let device = "iPhone"
+        let article = "das"
         let settings = "Einstellungen › Datenschutz & Sicherheit › Lokales Netzwerk"
         #else
         let device = "Mac"
+        let article = "der"
         let settings = "Systemeinstellungen › Datenschutz & Sicherheit › Lokales Netzwerk"
         #endif
         switch reason {
         case .noNetwork:
-            return "Das \(device) hat keine Netzwerkverbindung."
+            return "\(article.capitalized) \(device) hat keine Netzwerkverbindung."
         case .offHomeNetwork:
-            return "Das \(device) ist nicht im WLAN oder Heimnetz. Die Adresse des NAS gilt nur dort."
+            return "\(article.capitalized) \(device) ist nicht im WLAN oder Heimnetz. Die Adresse des NAS gilt nur dort."
         case .localNetworkDenied:
             return "NAS Stats darf nicht ins lokale Netzwerk. Erlauben Sie es unter \(settings)."
         case .portReachable:
             return "Das NAS ist im Netz erreichbar, aber die Abfrage ist gescheitert. Prüfen Sie Anmeldung und Zertifikat in den Einstellungen des NAS."
         case .noAnswer:
-            return "Das NAS antwortet nicht. Ist das \(device) im selben Netz wie das NAS? Prüfen Sie außerdem unter \(settings), ob NAS Stats zugreifen darf."
+            return "Das NAS antwortet nicht. Ist \(article) \(device) im selben Netz wie das NAS? Prüfen Sie außerdem unter \(settings), ob NAS Stats zugreifen darf."
         }
     }
 
