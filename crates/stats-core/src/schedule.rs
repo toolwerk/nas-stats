@@ -288,6 +288,19 @@ impl Schedule {
         true
     }
 
+    /// Hands back a snapshot the app saved, e.g. after a restart. Only a
+    /// registered NAS without a snapshot takes it; error, time of the last
+    /// query and block stay as they are. `true` when it was taken.
+    pub fn restore_snapshot(&mut self, nas_id: &str, snapshot: Snapshot) -> bool {
+        match self.entries.get_mut(nas_id) {
+            Some(entry) if entry.state.snapshot.is_none() => {
+                entry.state.snapshot = Some(snapshot);
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// State of one NAS.
     pub fn state(&self, nas_id: &str) -> Option<PollState> {
         self.entries.get(nas_id).map(|entry| entry.state.clone())
@@ -339,6 +352,23 @@ mod tests {
         schedule
             .finish("nas-1", generation, now, result)
             .expect("result recorded");
+    }
+
+    #[test]
+    fn restored_snapshot_fills_only_an_empty_entry() {
+        let mut schedule = Schedule::new(300);
+        assert!(!schedule.restore_snapshot("nas-1", snapshot(T0)));
+        schedule.add("nas-1", Some(T0 - 60), true);
+        assert!(schedule.restore_snapshot("nas-1", snapshot(T0)));
+        let state = schedule.state("nas-1").expect("registered");
+        assert_eq!(state.snapshot, Some(snapshot(T0)));
+        assert_eq!(state.last_attempt_at, Some(T0 - 60));
+        assert!(state.blocked);
+        assert!(!schedule.restore_snapshot("nas-1", snapshot(T0 + 1)));
+        assert_eq!(
+            schedule.state("nas-1").expect("registered").snapshot,
+            Some(snapshot(T0))
+        );
     }
 
     #[test]

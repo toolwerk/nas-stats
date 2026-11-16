@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nas_model::Provider;
+use nas_model::{Provider, Snapshot};
 use tokio::sync::Notify;
 
 use crate::schedule::{Manual, PollState, Schedule};
@@ -179,6 +179,12 @@ impl Planner {
             self.wake.notify_one();
         }
         lifted
+    }
+
+    /// Hands back a saved snapshot ([`Schedule::restore_snapshot`]); `true`
+    /// when the NAS took it.
+    pub fn restore_snapshot(&self, nas_id: &str, snapshot: Snapshot) -> bool {
+        self.lock().schedule.restore_snapshot(nas_id, snapshot)
     }
 
     /// State of one NAS.
