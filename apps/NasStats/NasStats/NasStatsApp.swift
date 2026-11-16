@@ -23,7 +23,7 @@ struct NasStatsApp: App {
         WindowGroup {
             TabView {
                 Tab("Übersicht", systemImage: "externaldrive") {
-                    ContentView()
+                    OverviewView()
                 }
                 Tab("Einstellungen", systemImage: "gearshape") {
                     SettingsView()
@@ -48,7 +48,7 @@ struct NasStatsApp: App {
 }
 
 extension StoreHealth {
-    /// Traffic light colour of the provisional lists.
+    /// Traffic light colour of the settings list.
     var color: Color {
         switch self {
         case .critical: .red

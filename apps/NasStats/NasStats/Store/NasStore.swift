@@ -323,6 +323,7 @@ final class NasStore {
                     id: snapshot.nas.id,
                     name: snapshot.nas.name,
                     baseUrl: snapshot.nas.baseUrl,
+                    provider: snapshot.nas.provider,
                     snapshot: snapshot,
                     thresholds: thresholds
                 )
@@ -340,6 +341,7 @@ final class NasStore {
                     name: account.name.isEmpty ? nil : account.name,
                     baseUrl: account.baseUrl,
                     model: account.model,
+                    provider: account.config?.provider,
                     snapshot: state?.snapshot ?? testSnapshots[id],
                     problem: state?.problem,
                     lastAttemptAt: state?.lastAttemptAt ?? log.lastAttempts[id],

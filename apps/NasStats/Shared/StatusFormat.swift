@@ -174,7 +174,12 @@ enum StatusFormat {
     /// "vor 9 h"; a missing backup is "n/a".
     static func backupAge(_ last: Date?, now: Date = .now) -> String {
         guard let last else { return notAvailable }
-        let seconds = now.timeIntervalSince(last)
+        return age(last, now: now)
+    }
+
+    /// "gerade eben", "vor 2 min", "vor 9 h", "vor 3 Tagen".
+    static func age(_ date: Date, now: Date = .now) -> String {
+        let seconds = now.timeIntervalSince(date)
         if seconds < 60 { return "gerade eben" }
         if seconds < 3600 { return "vor \(Int(seconds / 60)) min" }
         if seconds < 48 * 3600 { return "vor \(Int(seconds / 3600)) h" }

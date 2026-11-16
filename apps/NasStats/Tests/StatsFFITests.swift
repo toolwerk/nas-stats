@@ -102,6 +102,15 @@ struct StatsFFITests {
         #expect(snapshots.map(\.nas.id) == ["demo-keller", "demo-buero", "demo-homelab"])
         #expect(snapshots.allSatisfy { $0.demo && $0.observedAt == now })
         #expect(snapshots == demoSnapshots(now: now))
+        #expect(snapshots[0].findings.map(\.text) == ["Platte 3 bei 52 °C", "DataVol1 bei 87 %"])
+        #expect(snapshots[1].findings.isEmpty)
+        #expect(snapshots[2].findings.isEmpty)
+    }
+
+    @Test func demoSnapshotCarriesFindings() {
+        let findings = demoSnapshot().findings
+        #expect(!findings.isEmpty)
+        #expect(findings.allSatisfy { $0.level != .ok })
     }
 
     @Test func newCoreKnowsNoNas() {

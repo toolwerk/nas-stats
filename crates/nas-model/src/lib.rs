@@ -8,6 +8,7 @@
 
 mod backup;
 mod device;
+mod findings;
 mod health;
 mod nas;
 mod provider;
@@ -17,6 +18,7 @@ mod storage;
 
 pub use backup::{BackupKind, BackupResult, BackupRun, BackupTask};
 pub use device::{Alert, AlertLevel, Container, Fan, NetInterface, Ups, UpsState};
+pub use findings::{Finding, FindingKind, Thresholds};
 pub use health::{Health, percent};
 pub use nas::{Nas, ProviderKind, SystemStatus, hash_serial};
 pub use provider::{BoxFuture, Provider, ProviderError};

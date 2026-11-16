@@ -138,4 +138,12 @@ struct StatusFormatTests {
             StatusFormat.observed(date, now: date.addingTimeInterval(366 * 86400), locale: de, timeZone: utc)
                 == "Stand 14. Nov. 2026, 14:05")
     }
+
+    @Test func age() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(StatusFormat.age(now, now: now) == "gerade eben")
+        #expect(StatusFormat.age(now.addingTimeInterval(-120), now: now) == "vor 2 min")
+        #expect(StatusFormat.age(now.addingTimeInterval(-3 * 3600), now: now) == "vor 3 h")
+        #expect(StatusFormat.age(now.addingTimeInterval(-50 * 3600), now: now) == "vor 2 Tagen")
+    }
 }

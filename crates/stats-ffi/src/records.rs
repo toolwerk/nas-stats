@@ -430,6 +430,60 @@ impl From<model::NetInterface> for NetInterface {
     }
 }
 
+/// The rule a finding comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, uniffi::Enum)]
+pub enum FindingKind {
+    Alert,
+    DiskHealth,
+    DiskTemperature,
+    VolumeHealth,
+    VolumeFill,
+    FanHealth,
+    UpsOnBattery,
+    BackupFailed,
+    BackupOverdue,
+}
+
+impl From<model::FindingKind> for FindingKind {
+    fn from(kind: model::FindingKind) -> Self {
+        match kind {
+            model::FindingKind::Alert => Self::Alert,
+            model::FindingKind::DiskHealth => Self::DiskHealth,
+            model::FindingKind::DiskTemperature => Self::DiskTemperature,
+            model::FindingKind::VolumeHealth => Self::VolumeHealth,
+            model::FindingKind::VolumeFill => Self::VolumeFill,
+            model::FindingKind::FanHealth => Self::FanHealth,
+            model::FindingKind::UpsOnBattery => Self::UpsOnBattery,
+            model::FindingKind::BackupFailed => Self::BackupFailed,
+            model::FindingKind::BackupOverdue => Self::BackupOverdue,
+        }
+    }
+}
+
+/// Something about a NAS that needs attention (see
+/// `nas_model::Snapshot::findings`).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct Finding {
+    pub kind: FindingKind,
+    /// `Warning` or `Critical`.
+    pub level: Health,
+    /// Id of the disk, volume or backup task, name of a fan.
+    pub subject: Option<String>,
+    /// German text, e.g. „Platte 3 bei 52 °C“.
+    pub text: String,
+}
+
+impl From<model::Finding> for Finding {
+    fn from(f: model::Finding) -> Self {
+        Self {
+            kind: f.kind.into(),
+            level: f.level.into(),
+            subject: f.subject,
+            text: f.text,
+        }
+    }
+}
+
 /// State of one NAS from a single run over all endpoints.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct Snapshot {
@@ -447,6 +501,9 @@ pub struct Snapshot {
     /// Worst health the NAS reports itself (see
     /// `nas_model::Snapshot::worst_health`), `None` when nothing is known.
     pub worst_health: Option<Health>,
+    /// What needs attention, critical first, checked against the standard
+    /// thresholds (disk 50 °C, volume 80 and 90 %, backup two days).
+    pub findings: Vec<Finding>,
     /// True for demo values, which the app must mark as such.
     pub demo: bool,
 }
@@ -464,6 +521,11 @@ impl Snapshot {
 
     fn convert(s: model::Snapshot, demo: bool) -> Self {
         let worst_health = s.worst_health().map(Into::into);
+        let findings = s
+            .findings(&model::Thresholds::default())
+            .into_iter()
+            .map(Into::into)
+            .collect();
         Self {
             nas: s.nas.into(),
             observed_at: s.observed_at,
@@ -477,6 +539,7 @@ impl Snapshot {
             alerts: s.alerts.into_iter().map(Into::into).collect(),
             interfaces: s.interfaces.into_iter().map(Into::into).collect(),
             worst_health,
+            findings,
             demo,
         }
     }
