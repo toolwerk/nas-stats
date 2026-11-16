@@ -816,13 +816,12 @@ impl NasCore {
         self.entry(&nas_id)?;
         let raw = parse_state(&nas_id, &json)?;
         let observed_at = raw.observed_at;
-        if !self.planner.take_newer_snapshot(&nas_id, raw) {
-            return Ok(false);
-        }
+        // Also for an older state: the NAS answered at its time, and a
+        // failed close comes again with the next fetch.
         if let Some(mut store) = self.archive() {
             store.close_unreachable(&nas_id, observed_at)?;
         }
-        Ok(true)
+        Ok(self.planner.take_newer_snapshot(&nas_id, raw))
     }
 
     /// Start of every UTC day with a daily value of a NAS, oldest first,
@@ -861,10 +860,11 @@ impl NasCore {
     /// Takes over a day or the last 24 hours of another device
     /// ([`NasCore::export_day`], [`NasCore::export_recent`]): an hour or
     /// day with more samples than the own one wins, events keep a known
-    /// end. Nothing changes without an archive. JSON that does not parse,
-    /// or is of another version, is `Parse`; one of another NAS is
-    /// `InvalidInput`.
-    pub fn import_history(&self, nas_id: String, json: String) -> Result<(), FfiError> {
+    /// end. Returns the events of the export that are open there, so the
+    /// app keeps them silent (the other device notifies them). Nothing
+    /// changes without an archive. JSON that does not parse, or is of
+    /// another version, is `Parse`; one of another NAS is `InvalidInput`.
+    pub fn import_history(&self, nas_id: String, json: String) -> Result<Vec<NasEvent>, FfiError> {
         self.check_registered(&nas_id)?;
         let export: Export = serde_json::from_str(&json).map_err(|e| FfiError::Parse {
             detail: e.to_string(),
@@ -876,13 +876,30 @@ impl NasCore {
         }
         let now = (self.clock)();
         let Some(mut store) = self.archive() else {
-            return Ok(());
+            return Ok(Vec::new());
         };
         store.import(&export, &nas_id, now).map_err(|e| match e {
             HistoryError::Format(detail) => FfiError::Parse { detail },
             other => other.into(),
         })?;
-        Ok(())
+        Ok(export
+            .events
+            .iter()
+            .filter(|row| row.ended_at.is_none())
+            .filter_map(|row| {
+                Some(model::Event {
+                    nas_id: nas_id.clone(),
+                    kind: model::EventKind::from_name(&row.kind)?,
+                    subject: (!row.subject.is_empty()).then(|| row.subject.clone()),
+                    level: serde_json::from_value(serde_json::Value::String(row.level.clone()))
+                        .ok()?,
+                    text: row.text.clone(),
+                    started_at: row.started_at,
+                    ended_at: None,
+                })
+            })
+            .map(NasEvent::from)
+            .collect())
     }
 
     /// Queries a NAS once without registering it, e.g. before saving it,
