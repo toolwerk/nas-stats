@@ -28,7 +28,8 @@ Für ein QNAP mit Intel- oder AMD-Prozessor `amd64` (Standard), für eines mit A
 2. Einen Ordner für die Konfiguration anlegen, z. B. `Container/nas-collector` (auf dem NAS `/share/Container/nas-collector`).
 3. Dort `collector.toml` ablegen (Vorlage: `docker/collector/collector.example.toml`, siehe unten).
 4. **Anwendungen** › **Erstellen**, den Inhalt von `docker/collector/compose.yaml` einfügen und den Pfad zu `collector.toml` anpassen, falls der Ordner anders heißt. Erstellen startet den Container.
-5. Im Protokoll des Containers steht nach dem Start `gestartet: 1 NAS, alle 5 Minuten, …` und bald danach `keller: ok`.
+5. Die `compose.yaml` gibt dem Container beim Stoppen 45 Sekunden (`stop_grace_period`), damit eine laufende Abfrage noch gespeichert wird; eine abgelehnte Anmeldung bleibt so als Sperre erhalten. Von Hand mit `docker stop -t 45 nas-collector` stoppen.
+6. Im Protokoll des Containers steht nach dem Start `gestartet: 1 NAS, alle 5 Minuten, …` und bald danach `keller: ok`.
 
 ## Eigenes Konto
 
@@ -98,7 +99,7 @@ Lehnt das NAS die Anmeldung ab (falsches Passwort, 2-Stufen-Verifizierung, geän
 Ein geänderter Zugang hebt die Sperre auf. War der Zugang richtig und die Ursache auf dem NAS (z. B. 2-Stufen-Verifizierung inzwischen abgeschaltet), den gespeicherten Stand bei gestopptem Container löschen; im laufenden Container schriebe die nächste Abfrage eines anderen NAS ihn sofort neu:
 
 ```bash
-docker stop nas-collector
+docker stop -t 45 nas-collector
 docker run --rm --volumes-from nas-collector --entrypoint rm nas-collector:latest /data/poll-state.json
 docker start nas-collector
 ```
