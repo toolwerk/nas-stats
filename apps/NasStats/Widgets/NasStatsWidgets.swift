@@ -37,29 +37,20 @@ struct StatusProvider: TimelineProvider {
         completion(StatusEntry(date: .now, snapshot: WidgetSnapshot.load(from: WidgetSnapshot.fileURL)))
     }
 
-    /// An entry for now and, while the state of the shown NAS is still
-    /// current, one for the moment it gets old, so the widget turns grey
-    /// without the app. The app reloads the timeline after every new state;
-    /// a state that can get old is looked at again after midnight, so an
-    /// old „Stand“ gains its date.
+    /// Entries and reload after `WidgetSnapshot.timeline(now:)`; without a
+    /// snapshot only an entry for now. The app reloads after every new state.
     func getTimeline(in context: Context, completion: @escaping (Timeline<StatusEntry>) -> Void) {
         let now = Date.now
         let snapshot = WidgetSnapshot.load(from: WidgetSnapshot.fileURL)
-        var entries = [StatusEntry(date: now, snapshot: snapshot)]
-        var policy = TimelineReloadPolicy.never
-        if let snapshot, let first = snapshot.nas.first,
-           let staleDate = snapshot.staleDate(first) {
-            if staleDate > now {
-                entries.append(StatusEntry(date: staleDate, snapshot: snapshot))
-            }
-            let calendar = Calendar.current
-            if let midnight = calendar.date(
-                byAdding: .day, value: 1, to: calendar.startOfDay(for: max(now, staleDate))
-            ) {
-                policy = .after(midnight)
-            }
+        guard let snapshot else {
+            completion(Timeline(entries: [StatusEntry(date: now, snapshot: nil)], policy: .never))
+            return
         }
-        completion(Timeline(entries: entries, policy: policy))
+        let plan = snapshot.timeline(now: now)
+        completion(Timeline(
+            entries: plan.dates.map { StatusEntry(date: $0, snapshot: snapshot) },
+            policy: plan.reloadAfter.map { .after($0) } ?? .never
+        ))
     }
 }
 

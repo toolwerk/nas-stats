@@ -267,3 +267,37 @@ extension WidgetSnapshotCarryOverTests {
         #expect(WidgetSnapshot.load(from: url)?.nas.first?.observedAt == nil)
     }
 }
+
+extension WidgetSnapshotCarryOverTests {
+    var berlin: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/Berlin")!
+        return calendar
+    }
+
+    @Test func theTimelineTurnsGreyAndAsksAgainAfterMidnight() throws {
+        // 10:05 Berlin, state of 10:00: grey from 10:30:01, again after midnight.
+        let morning = try #require(berlin.date(from: DateComponents(year: 2026, month: 11, day: 16, hour: 10, minute: 5)))
+        var nas = nas("a", status: .ok, observedMinutesAgo: 5)
+        nas.observedAt = morning.addingTimeInterval(-300)
+        let fresh = snapshot([nas])
+        let plan = fresh.timeline(now: morning, calendar: berlin)
+        #expect(plan.dates == [morning, morning.addingTimeInterval(25 * 60 + 1)])
+        let midnight = try #require(berlin.date(from: DateComponents(year: 2026, month: 11, day: 17)))
+        #expect(plan.reloadAfter == midnight)
+
+        // Already old: only now, asked again after the next midnight.
+        let late = morning.addingTimeInterval(3600)
+        #expect(fresh.timeline(now: late, calendar: berlin).dates == [late])
+        #expect(fresh.timeline(now: late, calendar: berlin).reloadAfter == midnight)
+    }
+
+    @Test func demoAndEmptySnapshotsOnlyReloadByTheApp() {
+        var demo = snapshot([nas("a", status: .ok, observedMinutesAgo: 5)])
+        demo.demo = true
+        #expect(demo.timeline(now: now).dates == [now])
+        #expect(demo.timeline(now: now).reloadAfter == nil)
+        #expect(snapshot([]).timeline(now: now).reloadAfter == nil)
+        #expect(snapshot([nas("a", status: .unknown, observedMinutesAgo: nil)]).timeline(now: now).reloadAfter == nil)
+    }
+}

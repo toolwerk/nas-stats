@@ -44,6 +44,23 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
         return observedAt.addingTimeInterval(TimeInterval(staleAfterSeconds) + 1)
     }
 
+    /// Plan of the widget timeline at `now`: the dates of its entries and
+    /// when WidgetKit should ask again. Always an entry for `now`; while the
+    /// state of the shown (first) NAS is still current, one for the moment
+    /// it gets old, so the widget turns grey without the app. A state that
+    /// can get old is asked again after the midnight that follows, so an
+    /// old „Stand“ gains its date; otherwise only the app reloads (`nil`).
+    func timeline(now: Date, calendar: Calendar = .current) -> (dates: [Date], reloadAfter: Date?) {
+        guard let first = nas.first, let staleDate = staleDate(first) else {
+            return ([now], nil)
+        }
+        let dates = staleDate > now ? [now, staleDate] : [now]
+        let midnight = calendar.date(
+            byAdding: .day, value: 1, to: calendar.startOfDay(for: max(now, staleDate))
+        )
+        return (dates, midnight)
+    }
+
     /// The file in the container of the App Group; `nil` without the
     /// container (e.g. in previews or without the entitlement).
     static var fileURL: URL? {
