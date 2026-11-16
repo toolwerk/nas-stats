@@ -39,16 +39,27 @@ struct StatusProvider: TimelineProvider {
 
     /// An entry for now and, while the state of the shown NAS is still
     /// current, one for the moment it gets old, so the widget turns grey
-    /// without the app. The app reloads the timeline after every new state.
+    /// without the app. The app reloads the timeline after every new state;
+    /// a state that can get old is looked at again after midnight, so an
+    /// old „Stand“ gains its date.
     func getTimeline(in context: Context, completion: @escaping (Timeline<StatusEntry>) -> Void) {
         let now = Date.now
         let snapshot = WidgetSnapshot.load(from: WidgetSnapshot.fileURL)
         var entries = [StatusEntry(date: now, snapshot: snapshot)]
+        var policy = TimelineReloadPolicy.never
         if let snapshot, let first = snapshot.nas.first,
-           let staleDate = snapshot.staleDate(first), staleDate > now {
-            entries.append(StatusEntry(date: staleDate, snapshot: snapshot))
+           let staleDate = snapshot.staleDate(first) {
+            if staleDate > now {
+                entries.append(StatusEntry(date: staleDate, snapshot: snapshot))
+            }
+            let calendar = Calendar.current
+            if let midnight = calendar.date(
+                byAdding: .day, value: 1, to: calendar.startOfDay(for: max(now, staleDate))
+            ) {
+                policy = .after(midnight)
+            }
         }
-        completion(Timeline(entries: entries, policy: .never))
+        completion(Timeline(entries: entries, policy: policy))
     }
 }
 
