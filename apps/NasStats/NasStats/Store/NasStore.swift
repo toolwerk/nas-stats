@@ -27,12 +27,35 @@ final class NasStore {
         }
     }
 
+    /// Thresholds of the settings (#21); they colour the entries and their
+    /// order, also in demo mode. Saved under `thresholds` in the defaults.
+    var thresholds: AlertThresholds {
+        didSet {
+            guard thresholds != oldValue else { return }
+            thresholds.save(to: defaults)
+            rebuild()
+        }
+    }
+
+    /// Minutes between two queries of the same NAS, one of
+    /// `intervalChoices`; never less than 5 (`minInterval`). Saved under
+    /// `queryInterval`; a change queries nothing by itself.
+    var queryIntervalMinutes: Int {
+        didSet {
+            guard queryIntervalMinutes != oldValue else { return }
+            defaults.set(queryIntervalMinutes, forKey: Self.queryIntervalKey)
+        }
+    }
+
     /// Called after every new state with the sorted entries. #23 writes the
     /// widget snapshot here and reloads the widgets.
     @ObservationIgnored var onUpdate: (@MainActor ([NasEntry]) -> Void)?
 
     static let demoModeKey = "demoMode"
     static let queryLogKey = "queryLog"
+    static let queryIntervalKey = "queryInterval"
+    /// Choices of the settings, in minutes.
+    static let intervalChoices = [5, 10, 15, 30]
     /// Same as `MIN_INTERVAL_SECS` of the core.
     static let minInterval: Int64 = 300
 
@@ -80,13 +103,15 @@ final class NasStore {
         self.log = defaults.data(forKey: Self.queryLogKey)
             .flatMap { try? JSONDecoder().decode(QueryLog.self, from: $0) } ?? QueryLog()
         self.demoMode = defaults.bool(forKey: Self.demoModeKey)
+        self.thresholds = AlertThresholds.load(from: defaults)
+        self.queryIntervalMinutes = Self.storedInterval(in: defaults)
         // The list shows the stored NAS at once, before the first query.
         rebuild()
     }
 
     /// The store of the app: the NAS from the keychain, the demo data of the
-    /// core, the demo switch in the defaults of the App Group and a query
-    /// every 5 minutes.
+    /// core, demo switch and settings in the defaults of the App Group and
+    /// a poll round every 5 minutes (each NAS at its `queryIntervalMinutes`).
     static func live() -> NasStore {
         NasStore(
             accounts: NasAccounts(),
@@ -121,8 +146,8 @@ final class NasStore {
     }
 
     /// Queries every registered NAS in parallel, except those blocked or
-    /// queried less than 5 minutes ago, also in an earlier launch or by the
-    /// test query of the add dialog. Does nothing in demo mode.
+    /// queried within the interval of the settings (at least 5 minutes),
+    /// also in an earlier launch or by the test query of the add dialog. Does nothing in demo mode.
     func refreshAll() async {
         guard !demoMode else { return }
         await query(queryable())
@@ -132,7 +157,8 @@ final class NasStore {
 
     /// Stores a NAS after the test query of the add dialog. That query
     /// counts as its first: its snapshot shows until the core has its own,
-    /// and the next query follows with the poll round after 5 minutes.
+    /// and the next query follows with the poll round after the interval of
+    /// the settings.
     /// Throws when the keychain or the core refuses it; nothing changes then.
     func add(_ stored: StoredAccount, snapshot: Snapshot? = nil) async throws {
         try accounts.add(stored)
@@ -160,8 +186,43 @@ final class NasStore {
     /// login; lifts a block and queries again. When the core refuses them,
     /// the old credentials stay stored.
     func updateCredentials(id: UUID, user: String, password: String) async throws {
-        do {
+        try await unblock(id) {
             try await accounts.updateCredentials(id: id, user: user, password: password)
+        }
+    }
+
+    /// New name for a stored NAS; empty keeps the old one (throws).
+    func rename(id: UUID, to name: String) throws {
+        try accounts.rename(id: id, name: name)
+        rebuild()
+    }
+
+    /// "Erneut versuchen": starts a blocked NAS again with its stored
+    /// credentials and queries it once. A step of the user, so no automatic
+    /// retry; when it fails again, the NAS stays blocked.
+    func resume(id: UUID) async throws {
+        try await unblock(id) {
+            try await accounts.resume(id: id)
+        }
+    }
+
+    /// Trusts the new certificate of a NAS whose certificate changed (#76),
+    /// lifts the block and queries again. When the core refuses, the old
+    /// fingerprint stays stored.
+    func confirmFingerprint(id: UUID, fingerprint: String) async throws {
+        try await unblock(id) {
+            try await accounts.confirmFingerprint(id: id, fingerprint: fingerprint)
+        }
+    }
+
+    // MARK: - Internals
+
+    /// Runs `change` with the core; on success the block and the last
+    /// error go and the NAS is queried once (not in demo mode). On failure
+    /// the entry shows the reason and the error is thrown.
+    private func unblock(_ id: UUID, _ change: () async throws -> Void) async throws {
+        do {
+            try await change()
         } catch {
             // A refused registration is now in the entry.
             rebuild()
@@ -176,17 +237,26 @@ final class NasStore {
         }
     }
 
-    // MARK: - Internals
+    /// The stored interval; a missing or unknown value is 5 minutes.
+    private static func storedInterval(in defaults: UserDefaults) -> Int {
+        let stored = defaults.integer(forKey: queryIntervalKey)
+        return intervalChoices.contains(stored) ? stored : intervalChoices[0]
+    }
 
-    /// Registered NAS that are not blocked and were not queried in the
-    /// last 5 minutes.
+    /// Seconds between two queries of the same NAS.
+    private var queryIntervalSeconds: Int64 {
+        max(Self.minInterval, Int64(queryIntervalMinutes) * 60)
+    }
+
+    /// Registered NAS that are not blocked and were not queried within the
+    /// interval of the settings (at least 5 minutes).
     private func queryable() -> [UUID] {
         let now = clock()
         return accounts.accounts.map(\.id).filter { id in
             let key = id.uuidString
             guard accounts.isRegistered(id), log.blocked[key] == nil else { return false }
             guard let last = log.lastAttempts[key] else { return true }
-            return now < last || now - last >= Self.minInterval
+            return now < last || now - last >= queryIntervalSeconds
         }
     }
 
@@ -253,7 +323,8 @@ final class NasStore {
                     id: snapshot.nas.id,
                     name: snapshot.nas.name,
                     baseUrl: snapshot.nas.baseUrl,
-                    snapshot: snapshot
+                    snapshot: snapshot,
+                    thresholds: thresholds
                 )
             }
         } else {
@@ -277,7 +348,8 @@ final class NasStore {
                     // After a restart the reason of a block comes from the log.
                     localError: accounts.registrationErrors[account.id]
                         ?? (state?.problem == nil ? log.blocked[id] : nil),
-                    queryError: queryErrors[id]
+                    queryError: queryErrors[id],
+                    thresholds: thresholds
                 )
             }
         }

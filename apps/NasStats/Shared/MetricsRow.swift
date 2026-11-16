@@ -10,13 +10,15 @@ struct MetricsRow: View {
     var upsOnBattery = false
     var lastBackup: Date?
     var now: Date = .now
+    /// From this disk temperature on the value turns yellow (settings, #21).
+    var diskTempWarningC: Double = StatusMetrics.diskTempWarningC
 
     @Environment(\.locale) private var locale
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             cell("Platten", StatusFormat.temperature(diskTempC, locale: locale),
-                 color: (diskTempC ?? 0) >= StatusMetrics.diskTempWarningC ? StatusLevel.warning.color : nil,
+                 color: (diskTempC ?? 0) >= diskTempWarningC ? StatusLevel.warning.color : nil,
                  missing: diskTempC == nil)
             cell("CPU", StatusFormat.percent(cpuPercent, fractionDigits: 0, locale: locale),
                  missing: cpuPercent == nil)
