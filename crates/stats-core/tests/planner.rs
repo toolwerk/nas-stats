@@ -333,3 +333,47 @@ async fn no_query_after_stop() {
     harness.at(1000).await;
     assert_eq!(provider.calls(), 1);
 }
+
+#[tokio::test(start_paused = true)]
+async fn cancelled_manual_refresh_frees_the_nas() {
+    let harness = Harness::new(300);
+    let provider = FakeProvider::slow(Duration::from_secs(100));
+    harness.planner.add("nas-1", provider.clone(), None, false);
+
+    let cancelled =
+        tokio::time::timeout(Duration::from_secs(5), harness.planner.refresh_now("nas-1")).await;
+    assert!(cancelled.is_err());
+    let state = harness.planner.state("nas-1").expect("registered");
+    assert!(!state.running);
+    assert_eq!(state.last_attempt_at, Some(T0));
+    assert_eq!(harness.sink.count(), 0);
+
+    // The automatic query comes at the regular time.
+    let task = harness.run();
+    harness.at(299).await;
+    assert_eq!(provider.calls(), 1);
+    harness.at(301).await;
+    assert_eq!(provider.calls(), 2);
+    harness.planner.stop();
+    task.await.expect("planner ends");
+}
+
+#[tokio::test(start_paused = true)]
+async fn replacing_during_a_query_starts_no_second_one() {
+    let harness = Harness::new(300);
+    let old = FakeProvider::slow(Duration::from_secs(10));
+    let new = FakeProvider::new();
+    harness.planner.add("nas-1", old.clone(), None, false);
+    let task = harness.run();
+
+    harness.at(1).await;
+    harness.planner.add("nas-1", new.clone(), None, false);
+    harness.at(5).await;
+    assert_eq!(new.calls(), 0);
+    harness.at(11).await;
+    assert_eq!(new.calls(), 1);
+    assert_eq!(harness.sink.count(), 1);
+
+    harness.planner.stop();
+    task.await.expect("planner ends");
+}

@@ -47,6 +47,9 @@ pub enum Manual {
 struct Entry {
     state: PollState,
     generation: u64,
+    /// Generation of the query in flight; may be an older one after the
+    /// NAS was replaced, so that no second query starts beside it.
+    in_flight: Option<u64>,
 }
 
 /// Polling state of all NAS, with the rules of the planner.
@@ -82,12 +85,12 @@ impl Schedule {
     /// start of the last query and whether it is blocked.
     ///
     /// Replacing an existing NAS keeps only its snapshot; a query still in
-    /// flight for the old entry is discarded when it finishes.
+    /// flight for the old entry is discarded when it finishes, and until
+    /// then the new entry counts as running.
     pub fn add(&mut self, nas_id: &str, last_attempt_at: Option<i64>, blocked: bool) {
-        let snapshot = self
-            .entries
-            .remove(nas_id)
-            .and_then(|entry| entry.state.snapshot);
+        let (snapshot, in_flight) = self.entries.remove(nas_id).map_or((None, None), |entry| {
+            (entry.state.snapshot, entry.in_flight)
+        });
         self.next_generation += 1;
         self.entries.insert(
             nas_id.to_owned(),
@@ -99,9 +102,10 @@ impl Schedule {
                     error_at: None,
                     last_attempt_at,
                     blocked,
-                    running: false,
+                    running: in_flight.is_some(),
                 },
                 generation: self.next_generation,
+                in_flight,
             },
         );
     }
@@ -118,7 +122,7 @@ impl Schedule {
         match state.last_attempt_at {
             None => true,
             // A last query in the future means the clock went back.
-            Some(last) => last > now || now - last >= self.interval,
+            Some(last) => last > now || now.saturating_sub(last) >= self.interval,
         }
     }
 
@@ -164,10 +168,10 @@ impl Schedule {
             return Manual::Running;
         }
         if let Some(last) = state.last_attempt_at {
-            let since = now - last;
+            let since = now.saturating_sub(last);
             if (0..MANUAL_PAUSE_SECS).contains(&since) {
                 return Manual::TooSoon {
-                    retry_at: last + MANUAL_PAUSE_SECS,
+                    retry_at: last.saturating_add(MANUAL_PAUSE_SECS),
                 };
             }
         }
@@ -185,7 +189,23 @@ impl Schedule {
         }
         entry.state.last_attempt_at = Some(now);
         entry.state.running = true;
+        entry.in_flight = Some(entry.generation);
         Some(entry.generation)
+    }
+
+    /// Ends a query started with [`Schedule::begin`] that gave no result
+    /// (cancelled or panicked): only the running mark goes, the start time
+    /// stays. `false` when that query is not in flight.
+    pub fn abandon(&mut self, nas_id: &str, generation: u64) -> bool {
+        let Some(entry) = self.entries.get_mut(nas_id) else {
+            return false;
+        };
+        if entry.in_flight != Some(generation) {
+            return false;
+        }
+        entry.in_flight = None;
+        entry.state.running = false;
+        true
     }
 
     /// Records the result of a query started with [`Schedule::begin`].
@@ -202,11 +222,15 @@ impl Schedule {
         result: Result<Snapshot, ProviderError>,
     ) -> Option<PollState> {
         let entry = self.entries.get_mut(nas_id)?;
-        if entry.generation != generation || !entry.state.running {
+        if entry.in_flight != Some(generation) {
+            return None;
+        }
+        entry.in_flight = None;
+        entry.state.running = false;
+        if entry.generation != generation {
             return None;
         }
         let state = &mut entry.state;
-        state.running = false;
         match result {
             Ok(snapshot) => {
                 state.snapshot = Some(snapshot);
@@ -441,6 +465,53 @@ mod tests {
             schedule.finish("nas-1", old, T0 + 1, Ok(snapshot(T0))),
             None
         );
+    }
+
+    #[test]
+    fn replacing_during_a_query_starts_no_second_one() {
+        let mut schedule = Schedule::new(300);
+        schedule.add("nas-1", None, false);
+        let old = schedule.begin("nas-1", T0).expect("query starts");
+        schedule.add("nas-1", None, false);
+        assert!(schedule.due(T0).is_empty());
+        assert_eq!(schedule.manual("nas-1", T0), Manual::Running);
+        assert_eq!(schedule.begin("nas-1", T0), None);
+
+        assert_eq!(
+            schedule.finish("nas-1", old, T0 + 5, Ok(snapshot(T0))),
+            None
+        );
+        let state = schedule.state("nas-1").expect("registered");
+        assert!(!state.running);
+        assert_eq!(state.snapshot, None);
+        assert_eq!(schedule.due(T0 + 5), vec!["nas-1".to_owned()]);
+    }
+
+    #[test]
+    fn abandoned_query_frees_the_nas() {
+        let mut schedule = Schedule::new(300);
+        schedule.add("nas-1", None, false);
+        let generation = schedule.begin("nas-1", T0).expect("query starts");
+        assert!(schedule.abandon("nas-1", generation));
+        assert!(!schedule.abandon("nas-1", generation));
+        let state = schedule.state("nas-1").expect("registered");
+        assert!(!state.running);
+        assert_eq!(state.last_attempt_at, Some(T0));
+        assert_eq!(schedule.due(T0 + 300), vec!["nas-1".to_owned()]);
+        assert_eq!(
+            schedule.finish("nas-1", generation, T0 + 1, Ok(snapshot(T0))),
+            None
+        );
+    }
+
+    #[test]
+    fn absurd_remembered_time_does_not_overflow() {
+        let mut schedule = Schedule::new(300);
+        schedule.add("nas-1", Some(i64::MIN), false);
+        assert_eq!(schedule.due(T0), vec!["nas-1".to_owned()]);
+        assert_eq!(schedule.manual("nas-1", T0), Manual::Go);
+        schedule.add("nas-2", Some(i64::MAX), false);
+        assert_eq!(schedule.manual("nas-2", T0), Manual::Go);
     }
 
     #[test]

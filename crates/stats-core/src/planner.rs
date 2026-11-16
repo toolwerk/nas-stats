@@ -12,8 +12,11 @@ use crate::schedule::{Manual, PollState, Schedule};
 
 /// Receives every finished query, never a skipped or discarded one.
 ///
-/// History, events and the callback to the apps attach here. Called without
-/// the planner's lock held, from the task that ran the query.
+/// History, events and the callback to the apps attach here. Called from
+/// the task that ran the query, one call at a time and in the order the
+/// queries finished. A NAS removed or replaced during its query is not
+/// reported. The sink may read the planner, but must not call
+/// [`Planner::add`] or [`Planner::remove`] (that would deadlock).
 pub trait PollSink: Send + Sync {
     fn polled(&self, state: &PollState);
 }
@@ -35,6 +38,27 @@ pub fn system_clock() -> Clock {
 /// set or a machine that slept.
 pub const MAX_SLEEP_SECS: u64 = 60;
 
+/// Releases the running mark of a query that ends without a result
+/// (cancelled future or panicking provider).
+struct InFlight<'a> {
+    planner: &'a Planner,
+    nas_id: &'a str,
+    generation: u64,
+    done: bool,
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        if !self.done {
+            self.planner
+                .lock()
+                .schedule
+                .abandon(self.nas_id, self.generation);
+            self.planner.wake.notify_one();
+        }
+    }
+}
+
 struct Inner {
     schedule: Schedule,
     providers: BTreeMap<String, Arc<dyn Provider>>,
@@ -46,6 +70,10 @@ struct Inner {
 /// the time driver enabled.
 pub struct Planner {
     inner: Mutex<Inner>,
+    /// Held from recording a result until the sink has it, and by `add` and
+    /// `remove`, so the sink sees results in order and none of a NAS that
+    /// was removed or replaced meanwhile. Always taken before `inner`.
+    report: Mutex<()>,
     clock: Clock,
     sink: Arc<dyn PollSink>,
     wake: Notify,
@@ -61,6 +89,7 @@ impl Planner {
                 schedule: Schedule::new(interval_secs),
                 providers: BTreeMap::new(),
             }),
+            report: Mutex::new(()),
             clock,
             sink,
             wake: Notify::new(),
@@ -70,6 +99,10 @@ impl Planner {
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn report_lock(&self) -> MutexGuard<'_, ()> {
+        self.report.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn now(&self) -> i64 {
@@ -86,6 +119,7 @@ impl Planner {
         blocked: bool,
     ) {
         {
+            let _report = self.report_lock();
             let mut inner = self.lock();
             inner.schedule.add(nas_id, last_attempt_at, blocked);
             inner.providers.insert(nas_id.to_owned(), provider);
@@ -95,6 +129,7 @@ impl Planner {
 
     /// Removes a NAS; a query in flight is discarded. `false` when unknown.
     pub fn remove(&self, nas_id: &str) -> bool {
+        let _report = self.report_lock();
         let mut inner = self.lock();
         inner.providers.remove(nas_id);
         inner.schedule.remove(nas_id)
@@ -147,22 +182,31 @@ impl Planner {
         generation: u64,
         provider: Arc<dyn Provider>,
     ) -> Option<PollState> {
+        let mut in_flight = InFlight {
+            planner: self,
+            nas_id,
+            generation,
+            done: false,
+        };
         let result = provider.snapshot().await;
+        in_flight.done = true;
         let now = self.now();
-        let state = self
-            .lock()
-            .schedule
-            .finish(nas_id, generation, now, result)?;
-        self.sink.polled(&state);
+        let report = self.report_lock();
+        let state = self.lock().schedule.finish(nas_id, generation, now, result);
+        if let Some(state) = &state {
+            self.sink.polled(state);
+        }
+        drop(report);
         self.wake.notify_one();
-        Some(state)
+        state
     }
 
     /// Manual refresh: queries now unless the last query is less than
     /// [`crate::MANUAL_PAUSE_SECS`] ago, a query is in flight or the NAS is
     /// blocked or unknown; then the reason comes back, with the earliest
     /// time for [`Manual::TooSoon`]. A NAS removed or replaced during the
-    /// query gives [`Manual::Unknown`].
+    /// query gives [`Manual::Unknown`]. Dropping the future before it ends
+    /// frees the NAS again; the start counts as the last query.
     pub async fn refresh_now(&self, nas_id: &str) -> Result<PollState, Manual> {
         let now = self.now();
         let (generation, provider) = {
