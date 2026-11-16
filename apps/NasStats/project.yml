@@ -194,6 +194,8 @@ targets:
       - path: NasStats/Store
       # Detail screen (#18): its content model is tested, the view compiles along.
       - path: NasStats/Detail
+      # Events tab (#20): its content model is tested, the view compiles along.
+      - path: NasStats/Events
       - path: Shared
       - path: Generated/stats_ffi.swift
         optional: true

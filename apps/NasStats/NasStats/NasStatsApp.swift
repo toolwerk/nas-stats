@@ -26,6 +26,9 @@ struct NasStatsApp: App {
                 Tab("Übersicht", systemImage: "externaldrive") {
                     OverviewView()
                 }
+                Tab("Ereignisse", systemImage: "bell") {
+                    EventsView()
+                }
                 Tab("Einstellungen", systemImage: "gearshape") {
                     SettingsView()
                 }
