@@ -2,7 +2,7 @@
 //!
 //! Three fictional NAS as in `docs/mockup/nas-stats-mockup.html` (Keller,
 //! Büro, Homelab) with their current state, 90 days of daily history and the
-//! runs of their backup tasks. Screenshots, store images and the demo mode use
+//! runs of their backup tasks and the events of the mockup. Screenshots, store images and the demo mode use
 //! this instead of real NAS data.
 //!
 //! All times hang on the `now` passed to [`demo`], so the data always looks
@@ -13,11 +13,12 @@
 //! every base URL ends in `.demo.invalid` and every hostname in `-demo`. The
 //! visible "Demo" label is up to the apps and widgets.
 
+mod events;
 mod history;
 mod rng;
 mod snapshots;
 
-use nas_model::{BackupRun, Sample, Snapshot};
+use nas_model::{BackupRun, Event, Sample, Snapshot};
 
 pub use rng::DEMO_SEED;
 
@@ -36,6 +37,9 @@ pub struct DemoSet {
     pub samples: Vec<Sample>,
     /// One run per day for each backup task except snapshots.
     pub backup_runs: Vec<BackupRun>,
+    /// Events as in the mockup, newest first: Platte 3 and DataVol1 of
+    /// Keller open, the UPS of Keller and Homelab unreachable resolved.
+    pub events: Vec<Event>,
 }
 
 /// Builds the demo data for the time `now` (Unix seconds UTC).
@@ -46,10 +50,12 @@ pub fn demo(now: i64) -> DemoSet {
     let snapshots = snapshots::snapshots(now);
     let samples = history::samples(now, &snapshots);
     let backup_runs = history::backup_runs(&snapshots);
+    let events = events::events(now, &snapshots);
     DemoSet {
         snapshots,
         samples,
         backup_runs,
+        events,
     }
 }
 
@@ -418,6 +424,105 @@ mod tests {
         for id in ["demo-buero", "demo-homelab"] {
             let findings = snapshot(&set, id).findings(&Thresholds::default());
             assert!(findings.is_empty(), "{id}: {findings:?}");
+        }
+    }
+
+    #[test]
+    fn events_as_in_the_mockup() {
+        use nas_model::{EventKind, Health};
+
+        use crate::events::{
+            DATAVOL1_SINCE, DISK3_SINCE, HOMELAB_DURATION, HOMELAB_SINCE, UPS_DURATION, UPS_SINCE,
+        };
+
+        let set = demo(NOW);
+        let rows: Vec<_> = set
+            .events
+            .iter()
+            .map(|e| {
+                (
+                    e.nas_id.as_str(),
+                    e.kind,
+                    e.level,
+                    e.text.as_str(),
+                    e.started_at,
+                    e.ended_at,
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (
+                    "demo-keller",
+                    EventKind::DiskTemperature,
+                    Health::Warning,
+                    "Platte 3 bei 52 °C",
+                    NOW - DISK3_SINCE,
+                    None
+                ),
+                (
+                    "demo-keller",
+                    EventKind::VolumeFill,
+                    Health::Warning,
+                    "DataVol1 bei 87 %",
+                    NOW - DATAVOL1_SINCE,
+                    None
+                ),
+                (
+                    "demo-keller",
+                    EventKind::UpsOnBattery,
+                    Health::Critical,
+                    "USV auf Batterie",
+                    NOW - UPS_SINCE,
+                    Some(NOW - UPS_SINCE + UPS_DURATION)
+                ),
+                (
+                    "demo-homelab",
+                    EventKind::Unreachable,
+                    Health::Critical,
+                    "Homelab nicht erreichbar",
+                    NOW - HOMELAB_SINCE,
+                    Some(NOW - HOMELAB_SINCE + HOMELAB_DURATION)
+                ),
+            ]
+        );
+        // 14:05 now: 13:40 today, 22:15, 06:31 and 03:10 yesterday.
+        let clock = |at: i64| (at.rem_euclid(86_400) / 3600, at.rem_euclid(3600) / 60);
+        let clocks: Vec<_> = set.events.iter().map(|e| clock(e.started_at)).collect();
+        assert_eq!(clocks, [(13, 40), (22, 15), (6, 31), (3, 10)]);
+        assert_eq!(UPS_DURATION, 4 * 60);
+        assert_eq!(HOMELAB_DURATION, 18 * 60);
+        assert_eq!(set.events[0].subject.as_deref(), Some("demo-keller-disk3"));
+        assert_eq!(
+            set.events[1].subject.as_deref(),
+            Some("demo-keller-datavol1")
+        );
+    }
+
+    #[test]
+    fn demo_events_match_the_snapshots() {
+        use nas_model::{Thresholds, detect_events};
+
+        let set = demo(NOW);
+        for s in &set.snapshots {
+            let changes = detect_events(&set.events, s, &Thresholds::default());
+            assert!(changes.is_empty(), "{}: {changes:?}", s.nas.id);
+        }
+    }
+
+    #[test]
+    fn other_now_moves_the_event_times_only() {
+        let a = demo(NOW);
+        let b = demo(NOW + 3600);
+        assert_eq!(a.events.len(), b.events.len());
+        for (a, b) in a.events.iter().zip(&b.events) {
+            let moved = nas_model::Event {
+                started_at: a.started_at + 3600,
+                ended_at: a.ended_at.map(|t| t + 3600),
+                ..a.clone()
+            };
+            assert_eq!(&moved, b);
         }
     }
 
