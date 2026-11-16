@@ -45,7 +45,8 @@ use nas_http::{Fingerprint, NasClient};
 use nas_model::{self as model, BoxFuture, Provider, ProviderError};
 use provider_qnap::{QnapClient, QnapProvider};
 use stats_core::{
-    Clock, EventRecord, HistoryError, HistoryStore, Planner, PollSink, PollState, system_clock,
+    Clock, EventRecord, HistoryError, HistoryStore, Planner, PollSink, PollState, archive_poll,
+    system_clock,
 };
 
 use crate::error::FfiError;
@@ -235,59 +236,13 @@ impl PollSink for Sink {
         let thresholds = self.thresholds();
         if let Some(history) = &self.history {
             // An error of the archive must not stop the callback.
-            let _ = archive(&mut lock(history), state, &thresholds, (self.clock)());
+            let _ = archive_poll(&mut lock(history), state, &thresholds, (self.clock)());
         }
         let listener = lock(&self.listener).clone();
         if let Some(listener) = listener {
             listener.state_changed(record(state.clone(), &thresholds));
         }
     }
-}
-
-/// Writes one finished query: after a success the snapshot and the events
-/// it opens, raises or closes by `thresholds`; after no answer
-/// (unreachable, time-out, HTTP 502/503/504 of a proxy) an "unreachable"
-/// event when the last snapshot is 15 minutes old. Without any snapshot
-/// nothing.
-fn archive(
-    store: &mut HistoryStore,
-    state: &PollState,
-    thresholds: &model::Thresholds,
-    now: i64,
-) -> Result<(), HistoryError> {
-    let Some(snapshot) = &state.snapshot else {
-        return Ok(());
-    };
-    let changes = if let Some(error) = &state.error {
-        // Only a NAS that gave no answer is unreachable (no connection,
-        // time-out, HTTP 502/503/504 of a proxy); a refused login or an odd
-        // answer still came from it.
-        if !error.is_no_answer() {
-            return Ok(());
-        }
-        let open = open_events(store, &state.nas_id)?;
-        model::detect_unreachable(&open, &snapshot.nas, Some(snapshot.observed_at), now)
-            .into_iter()
-            .collect()
-    } else {
-        store.write_snapshot(snapshot, now)?;
-        let open = open_events(store, &state.nas_id)?;
-        model::detect_events(&open, snapshot, thresholds)
-    };
-    let records: Vec<EventRecord> = changes
-        .iter()
-        .map(|change| EventRecord::from(change.event()))
-        .collect();
-    store.write_events(&records)
-}
-
-/// Open events of a NAS; kinds of a newer build are left out.
-fn open_events(store: &HistoryStore, nas_id: &str) -> Result<Vec<model::Event>, HistoryError> {
-    Ok(store
-        .open_events(nas_id)?
-        .iter()
-        .filter_map(|record| record.to_event().ok())
-        .collect())
 }
 
 /// Fills an archive with the history, backup runs and events of the demo
