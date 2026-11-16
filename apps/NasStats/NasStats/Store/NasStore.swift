@@ -80,6 +80,9 @@ final class NasStore {
     @ObservationIgnored private let demoSource: (Int64) -> [Snapshot]
     @ObservationIgnored private let pollInterval: Duration?
     @ObservationIgnored private let clock: () -> Int64
+    @ObservationIgnored private let lastStates: LastStates
+    /// What `lastStates` holds: NAS id → saved state of the core.
+    @ObservationIgnored private var savedStates: [String: String]
 
     @ObservationIgnored private var queryErrors: [String: String] = [:]
     @ObservationIgnored private var log: QueryLog
@@ -88,18 +91,24 @@ final class NasStore {
     @ObservationIgnored private var started = false
     /// Lives as long as the store; ends once the store is gone.
     @ObservationIgnored private var pollTask: Task<Void, Never>?
+    /// The round of `refreshAll` running now; a second call waits for it.
+    @ObservationIgnored private var round: Task<Void, Never>?
 
     /// - Parameter pollInterval: Time between two rounds of queries; `nil`
     ///   queries only on `start`, `add`, `updateCredentials` and explicit
     ///   `refreshAll` calls.
+    /// - Parameter lastStates: Where the last snapshot of every NAS is
+    ///   kept across launches; by default nowhere.
     init(
         accounts: NasAccounts,
         defaults: UserDefaults,
         demoSource: @escaping (Int64) -> [Snapshot],
         pollInterval: Duration?,
-        clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) }
+        clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) },
+        lastStates: LastStates = LastStates(fileURL: nil)
     ) {
         self.clock = clock
+        self.lastStates = lastStates
         self.accounts = accounts
         self.defaults = defaults
         self.demoSource = demoSource
@@ -109,6 +118,23 @@ final class NasStore {
         self.demoMode = defaults.bool(forKey: Self.demoModeKey)
         self.thresholds = AlertThresholds.load(from: defaults)
         self.queryIntervalMinutes = Self.storedInterval(in: defaults)
+        // The last state of an earlier launch shows until the first answer;
+        // one the core refuses (other format after an update) is dropped.
+        var saved = lastStates.load()
+        let before = saved
+        for account in accounts.accounts where accounts.isRegistered(account.id) {
+            let id = account.id.uuidString
+            guard let json = saved[id] else { continue }
+            do {
+                try accounts.core.restoreState(nasId: id, json: json)
+            } catch {
+                saved[id] = nil
+            }
+        }
+        self.savedStates = saved
+        if saved != before {
+            lastStates.save(saved)
+        }
         // The list shows the stored NAS at once, before the first query.
         rebuild()
     }
@@ -122,7 +148,8 @@ final class NasStore {
             accounts: NasAccounts(),
             defaults: UserDefaults(suiteName: AppGroup.id) ?? .standard,
             demoSource: { demoSnapshots(now: $0) },
-            pollInterval: .seconds(300)
+            pollInterval: .seconds(300),
+            lastStates: LastStates(fileURL: LastStates.liveURL)
         )
         // Previews never touch the file of the real app.
         guard ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] != "1" else {
@@ -172,9 +199,21 @@ final class NasStore {
     /// Queries every registered NAS in parallel, except those blocked or
     /// queried within the interval of the settings (at least 5 minutes),
     /// also in an earlier launch or by the test query of the add dialog. Does nothing in demo mode.
+    /// While a round runs, a further call waits for it instead of starting
+    /// one of its own (start, return to the app, background task).
     func refreshAll() async {
         guard !demoMode else { return }
-        await query(queryable())
+        if let round {
+            await round.value
+            return
+        }
+        let ids = queryable()
+        let task = Task { await self.query(ids) }
+        round = task
+        await task.value
+        if round == task {
+            round = nil
+        }
     }
 
     // MARK: - Changing the list
@@ -203,6 +242,9 @@ final class NasStore {
         log.blocked[id.uuidString] = nil
         log.lastAttempts[id.uuidString] = nil
         saveLog()
+        if savedStates.removeValue(forKey: id.uuidString) != nil {
+            lastStates.save(savedStates)
+        }
         rebuild()
     }
 
@@ -331,10 +373,21 @@ final class NasStore {
             }
             if state.snapshot != nil {
                 testSnapshots[key] = nil
+                saveState(of: key)
             }
         }
         saveLog()
         rebuild()
+    }
+
+    /// Keeps the last snapshot of the core for the next launch; a failure
+    /// leaves the saved one.
+    private func saveState(of key: String) {
+        guard let json = try? accounts.core.savedState(nasId: key),
+              savedStates[key] != json
+        else { return }
+        savedStates[key] = json
+        lastStates.save(savedStates)
     }
 
     /// Builds `entries` from the accounts and the states of the core (or

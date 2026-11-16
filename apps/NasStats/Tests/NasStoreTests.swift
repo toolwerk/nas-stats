@@ -15,6 +15,8 @@ final class FakeCore: NasCoreProtocol {
         var updatedUsers: [String] = []
         /// Password of every `updateCredentials` call.
         var updatedPasswords: [String] = []
+        /// NAS id of every `restoreState` call.
+        var restored: [String] = []
     }
 
     private let presets: Mutex<[String: NasState]>
@@ -26,10 +28,18 @@ final class FakeCore: NasCoreProtocol {
     let refuseUpdate = Mutex(false)
     /// `refresh` throws `Internal` while set.
     let failRefresh = Mutex(false)
+    /// `refresh` waits a little while set, so calls overlap.
+    let slowRefresh = Mutex(false)
+    /// Saved state → snapshot; `restoreState` refuses any other JSON.
+    private let restorable: Mutex<[String: Snapshot]>
 
-    init(states: [NasState] = []) {
+    init(states: [NasState] = [], restorable: [String: Snapshot] = [:]) {
         presets = Mutex(Dictionary(uniqueKeysWithValues: states.map { ($0.nasId, $0) }))
+        self.restorable = Mutex(restorable)
     }
+
+    /// What `savedState` returns for a NAS with a snapshot.
+    static func saved(_ nasId: String) -> String { "saved:\(nasId)" }
 
     var calls: Calls { log.withLock { $0 } }
 
@@ -47,6 +57,9 @@ final class FakeCore: NasCoreProtocol {
 
     func refresh(nasId: String) async throws -> NasState {
         log.withLock { $0.refreshed.append(nasId) }
+        if slowRefresh.withLock({ $0 }) {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
         if failRefresh.withLock({ $0 }) {
             throw FfiError.Internal(detail: "weg")
         }
@@ -68,6 +81,30 @@ final class FakeCore: NasCoreProtocol {
 
     func states() -> [NasState] {
         registered.withLock { $0.values.sorted { $0.nasId < $1.nasId } }
+    }
+
+    func savedState(nasId: String) throws -> String? {
+        guard let state = registered.withLock({ $0[nasId] }) else {
+            throw FfiError.UnknownNas(id: nasId)
+        }
+        guard let snapshot = state.snapshot else { return nil }
+        restorable.withLock { $0[Self.saved(nasId)] = snapshot }
+        return Self.saved(nasId)
+    }
+
+    func restoreState(nasId: String, json: String) throws {
+        log.withLock { $0.restored.append(nasId) }
+        guard registered.withLock({ $0[nasId] }) != nil else {
+            throw FfiError.UnknownNas(id: nasId)
+        }
+        guard let snapshot = restorable.withLock({ $0[json] }) else {
+            throw FfiError.InvalidInput(detail: "kaputt")
+        }
+        registered.withLock { states in
+            if states[nasId]?.snapshot == nil {
+                states[nasId]?.snapshot = snapshot
+            }
+        }
     }
 
     func testConnection(config: NasConfig, user: String, password: String) async throws -> Snapshot {
@@ -208,6 +245,89 @@ struct NasStoreTests {
         )
         await store.start()
         return store
+    }
+
+    /// A file for `LastStates` that the test removes again.
+    static func lastStatesFile() -> LastStates {
+        LastStates(fileURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent("last-states-\(UUID().uuidString).json"))
+    }
+
+    /// A store on `core` with `keychain` and `lastStates`, not started.
+    func store(_ keychain: MemoryAccountStore, core: FakeCore, lastStates: LastStates) -> NasStore {
+        NasStore(
+            accounts: NasAccounts(keychain: keychain, core: core),
+            defaults: defaults,
+            demoSource: { demoSnapshots(now: $0) },
+            pollInterval: nil,
+            clock: { [clock] in clock.now },
+            lastStates: lastStates
+        )
+    }
+
+    @Test func theLastStateComesBackAfterARestart() async throws {
+        let a = Self.account("Keller")
+        let id = a.account.id.uuidString
+        let file = Self.lastStatesFile()
+        defer { try? FileManager.default.removeItem(at: file.fileURL!) }
+        file.save([id: FakeCore.saved(id)])
+
+        // Away from home: the query after the start fails.
+        let core = FakeCore(restorable: [FakeCore.saved(id): Self.snapshot(id, health: .ok)])
+        core.failRefresh.withLock { $0 = true }
+        let store = store(MemoryAccountStore([a]), core: core, lastStates: file)
+        #expect(core.calls.restored == [id])
+        #expect(store.entries.first?.snapshot != nil)
+        await store.start()
+        #expect(core.calls.refreshed == [id])
+        #expect(store.entries.first?.snapshot?.nas.id == id)
+        #expect(file.load() == [id: FakeCore.saved(id)])
+    }
+
+    @Test func aStateTheCoreRefusesIsDropped() async throws {
+        let (a, b) = (Self.account("A"), Self.account("B"))
+        let (idA, idB) = (a.account.id.uuidString, b.account.id.uuidString)
+        let file = Self.lastStatesFile()
+        defer { try? FileManager.default.removeItem(at: file.fileURL!) }
+        file.save([idA: "altes Format", idB: FakeCore.saved(idB)])
+
+        let core = FakeCore(restorable: [FakeCore.saved(idB): Self.snapshot(idB, health: .ok)])
+        let store = store(MemoryAccountStore([a, b]), core: core, lastStates: file)
+        #expect(file.load() == [idB: FakeCore.saved(idB)])
+        #expect(store.entries.first { $0.id == idA }?.snapshot == nil)
+        #expect(store.entries.first { $0.id == idB }?.snapshot != nil)
+    }
+
+    @Test func aQuerySavesTheStateAndRemoveDeletesIt() async throws {
+        let (a, b) = (Self.account("A"), Self.account("B"))
+        let idA = a.account.id.uuidString
+        let file = Self.lastStatesFile()
+        defer { try? FileManager.default.removeItem(at: file.fileURL!) }
+
+        // B answers without a snapshot, so nothing is saved for it.
+        let core = FakeCore(states: [Self.state(a, health: .ok), Self.state(b, health: nil)])
+        let store = store(MemoryAccountStore([a, b]), core: core, lastStates: file)
+        await store.start()
+        #expect(file.load() == [idA: FakeCore.saved(idA)])
+
+        try await store.remove(id: a.account.id)
+        #expect(file.load() == [:])
+    }
+
+    @Test func aSecondRefreshWaitsForTheRunningRound() async throws {
+        let a = Self.account("Keller")
+        let core = FakeCore(states: [Self.state(a, health: .ok)])
+        core.slowRefresh.withLock { $0 = true }
+        let store = store(MemoryAccountStore([a]), core: core, lastStates: LastStates(fileURL: nil))
+
+        // Runs once the first call waits for its round.
+        let second = Task { @MainActor in
+            await store.refreshAll()
+            return store.entries.first?.snapshot != nil
+        }
+        await store.refreshAll()
+        #expect(await second.value)
+        #expect(core.calls.refreshed == [a.account.id.uuidString])
     }
 
     @Test func sortsCriticalWarningOkUnknown() async throws {
