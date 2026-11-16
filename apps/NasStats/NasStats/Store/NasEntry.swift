@@ -59,7 +59,8 @@ struct NasEntry: Identifiable, Sendable {
     var localError: String?
     /// Error thrown by the last query (not a `problem` of the NAS).
     var queryError: String?
-    /// Thresholds of the settings for fill level and disk temperature.
+    /// Thresholds of the settings, for the colour of fill bars and disk
+    /// temperatures; the findings come from the core with the same ones.
     var thresholds: AlertThresholds = .standard
 
     /// Model of the last snapshot, else of the test query.
@@ -86,55 +87,10 @@ struct NasEntry: Identifiable, Sendable {
         return problem == nil && queryError == nil ? base : min(base, .warning)
     }
 
-    /// What needs attention, critical first: the findings of the core, but
-    /// fill level and disk temperature checked against the thresholds of
-    /// the settings (#21) instead of the standard ones of the core, with
-    /// the same texts.
+    /// What needs attention, critical first: the findings of the core,
+    /// computed there with the thresholds of the settings (#21, #85).
     var findings: [Finding] {
-        guard let snapshot else { return [] }
-        var all = snapshot.findings.filter { $0.kind != .diskTemperature && $0.kind != .volumeFill }
-        for disk in snapshot.disks {
-            if let temp = disk.temperatureC, temp >= thresholds.diskTempWarningC {
-                all.append(Finding(
-                    kind: .diskTemperature, level: .warning, subject: disk.id,
-                    text: "\(disk.name) bei \(Int(temp.rounded(.down))) °C"
-                ))
-            }
-        }
-        for volume in capacityVolumes {
-            let level: Health
-            switch thresholds.fill.level(for: volume.usedPercent) {
-            case .critical: level = .critical
-            case .warning: level = .warning
-            default: continue
-            }
-            let percent = Int((volume.usedPercent ?? 0).rounded(.down))
-            all.append(Finding(
-                kind: .volumeFill, level: level, subject: volume.id,
-                text: "\(volume.name) bei \(percent) %"
-            ))
-        }
-        // Order of the rules of the core, critical first; stable within.
-        return all.enumerated()
-            .sorted { lhs, rhs in
-                let l = (lhs.element.level == .critical ? 0 : 1, Self.rank(lhs.element.kind), lhs.offset)
-                let r = (rhs.element.level == .critical ? 0 : 1, Self.rank(rhs.element.kind), rhs.offset)
-                return l < r
-            }
-            .map(\.element)
-    }
-
-    /// Place of a rule in the order of the core.
-    private static func rank(_ kind: FindingKind) -> Int {
-        switch kind {
-        case .alert: 0
-        case .diskHealth, .diskTemperature: 1
-        case .volumeHealth: 2
-        case .volumeFill: 3
-        case .fanHealth: 4
-        case .upsOnBattery: 5
-        case .backupFailed, .backupOverdue: 6
-        }
+        snapshot?.findings ?? []
     }
 
     /// State for the status dot: "Nicht erreichbar" when the NAS did not
@@ -176,18 +132,13 @@ struct NasEntry: Identifiable, Sendable {
         return problem?.message ?? queryError
     }
 
-    /// Volumes whose fill level counts, as in the core
-    /// (`Snapshot::capacity_volumes`): those of the first kind present in
-    /// the order volume, pool, array, share.
+    /// Volumes whose fill level counts, as the core names them
+    /// (`Snapshot.capacityVolumeIds`): a pool and the volume in it count
+    /// once.
     var capacityVolumes: [Volume] {
-        let volumes = snapshot?.volumes ?? []
-        for kind in [VolumeKind.volume, .pool, .array, .share] {
-            let ofKind = volumes.filter { $0.kind == kind }
-            if !ofKind.isEmpty {
-                return ofKind
-            }
-        }
-        return []
+        guard let snapshot else { return [] }
+        let ids = Set(snapshot.capacityVolumeIds)
+        return snapshot.volumes.filter { ids.contains($0.id) }
     }
 
     /// Temperature of the hottest disk in °C.
