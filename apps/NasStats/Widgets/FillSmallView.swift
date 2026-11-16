@@ -2,7 +2,7 @@ import SwiftUI
 import WidgetKit
 
 /// Small widget „Füllstand“ (#38): status dot and name, a bar per volume of
-/// the chosen NAS (the three fullest) and below the sum of their sizes; once
+/// the chosen NAS (the three fullest) and below the sum of the sizes of all its volumes; once
 /// the state is old, its time replaces the sum.
 struct FillSmallView: View {
     let nas: WidgetNas
