@@ -60,23 +60,31 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
         return chosen
     }
 
-    /// Plan of the widget timeline at `now`: the dates of its entries and
-    /// when WidgetKit should ask again. Always an entry for `now`; while the
-    /// state of the shown NAS `shown` is still current, one for the moment
-    /// it gets old, so the widget turns grey without the app. A state that
-    /// can get old is asked again after the midnight that follows, so an
-    /// old „Stand“ gains its date; otherwise only the app reloads (`nil`).
+    /// Plan of the widget timeline at `now` for the NAS `shown`; see
+    /// `timeline(for: [WidgetNas], now:calendar:)`.
     func timeline(
         for shown: WidgetNas?, now: Date, calendar: Calendar = .current
     ) -> (dates: [Date], reloadAfter: Date?) {
-        guard let shown, let staleDate = staleDate(shown) else {
-            return ([now], nil)
-        }
-        let dates = staleDate > now ? [now, staleDate] : [now]
+        timeline(for: [shown].compactMap { $0 }, now: now, calendar: calendar)
+    }
+
+    /// Plan of the widget timeline at `now`: the dates of its entries and
+    /// when WidgetKit should ask again. Always an entry for `now`; while the
+    /// state of a shown NAS is still current, one for the moment it gets old,
+    /// so the widget turns grey without the app. A state that can get old is
+    /// asked again after the midnight that follows the last of these moments,
+    /// so an old „Stand“ gains its date; otherwise only the app reloads
+    /// (`nil`).
+    func timeline(
+        for shown: [WidgetNas], now: Date, calendar: Calendar = .current
+    ) -> (dates: [Date], reloadAfter: Date?) {
+        let staleDates = shown.compactMap { staleDate($0) }
+        guard let last = staleDates.max() else { return ([now], nil) }
+        let upcoming = Set(staleDates.filter { $0 > now }).sorted()
         let midnight = calendar.date(
-            byAdding: .day, value: 1, to: calendar.startOfDay(for: max(now, staleDate))
+            byAdding: .day, value: 1, to: calendar.startOfDay(for: max(now, last))
         )
-        return (dates, midnight)
+        return ([now] + upcoming, midnight)
     }
 
     /// The file in the container of the App Group; `nil` without the

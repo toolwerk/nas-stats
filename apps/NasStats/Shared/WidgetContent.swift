@@ -134,3 +134,81 @@ extension WidgetNas {
         return lines
     }
 }
+
+/// What the widgets "Füllstand" and "Alle NAS" show of a NAS (#38).
+extension WidgetNas {
+    /// "14,0 von 22,5 TB": the sum of the volumes that have used and total
+    /// size; `nil` if none has.
+    func capacityLine(locale: Locale = .current) -> String? {
+        let sized = volumes.compactMap { volume -> (UInt64, UInt64)? in
+            guard let used = volume.usedBytes, let total = volume.totalBytes else { return nil }
+            return (used, total)
+        }
+        guard !sized.isEmpty else { return nil }
+        return StatusFormat.capacity(
+            used: sized.reduce(0) { $0 + $1.0 }, total: sized.reduce(0) { $0 + $1.1 },
+            locale: locale)
+    }
+
+    /// The text at the right of a row of the large widget; the first rule
+    /// that applies wins: "Stand 14:02" of an old state, the error, the
+    /// number of warnings in the colour of the first one, else nothing.
+    func rowStatus(
+        in snapshot: WidgetSnapshot, now: Date,
+        locale: Locale = .current, timeZone: TimeZone = .current
+    ) -> WidgetLine? {
+        if let observedAt, snapshot.isStale(self, now: now) {
+            return WidgetLine(
+                text: StatusFormat.observed(observedAt, now: now, locale: locale, timeZone: timeZone),
+                style: .stale)
+        }
+        if let problemLine { return WidgetLine(text: problemLine, style: .problem) }
+        if findingCount > 0 {
+            return WidgetLine(
+                text: findingCount == 1 ? "1 Warnung" : "\(findingCount) Warnungen",
+                style: .finding(firstFindingLevel ?? .warning))
+        }
+        return nil
+    }
+
+    /// The line under the bar of a row: "DataVol1 87 % · Backup vor 9 h".
+    /// Without a volume with a percentage only the backup part.
+    func rowDetail(now: Date, locale: Locale = .current) -> String {
+        let backup = "Backup \(StatusFormat.backupAge(lastBackupAt, now: now))"
+        guard let volume = fullestVolume else { return backup }
+        let percent = StatusFormat.percent(
+            StatusFormat.floored(volume.usedPercent, fractionDigits: 0), fractionDigits: 0,
+            locale: locale)
+        return "\(volume.name) \(percent) · \(backup)"
+    }
+}
+
+extension WidgetSnapshot {
+    /// Most NAS the large widget has room for next to the history.
+    static let largeNasLimit = 3
+
+    /// The rows of the large widget: the worst NAS first (the snapshot is
+    /// sorted that way), at most `largeNasLimit`.
+    var largeRows: [WidgetNas] { Array(nas.prefix(Self.largeNasLimit)) }
+
+    /// How many NAS the large widget leaves out.
+    var largeHiddenCount: Int { max(0, nas.count - Self.largeNasLimit) }
+
+    /// The NAS and its volume the history below the rows belongs to: the
+    /// fullest volume of all NAS, on a tie the first one. `nil` if no volume
+    /// has a percentage.
+    var historySource: (nas: WidgetNas, volume: WidgetVolume)? {
+        var best: (nas: WidgetNas, volume: WidgetVolume)?
+        for candidate in nas {
+            guard let volume = candidate.fullestVolume, let percent = volume.usedPercent else {
+                continue
+            }
+            if let current = best?.volume.usedPercent, current >= percent { continue }
+            best = (candidate, volume)
+        }
+        return best
+    }
+
+    /// The history needs two points for a line.
+    static let minimumHistoryPoints = 2
+}
