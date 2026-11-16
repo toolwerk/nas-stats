@@ -86,8 +86,7 @@ struct MenuBarPopover: View {
                     Label {
                         Text(verbatim: entry.displayName)
                     } icon: {
-                        Image(systemName: "circle.fill")
-                            .foregroundStyle(entry.statusLevel.color)
+                        Image(nsImage: Self.menuDot(entry.statusLevel))
                     }
                     .tag(entry.id)
                 }
@@ -97,6 +96,19 @@ struct MenuBarPopover: View {
         } else if entries.count > 1 {
             segments(entries)
         }
+    }
+
+    /// Coloured dot for the menu: a menu draws symbols as monochrome
+    /// templates, a drawn image keeps its colour.
+    private static func menuDot(_ level: StatusLevel) -> NSImage {
+        let colour = NSColor(level.color)
+        let image = NSImage(size: NSSize(width: 8, height: 8), flipped: false) { rect in
+            colour.setFill()
+            NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5)).fill()
+            return true
+        }
+        image.isTemplate = false
+        return image
     }
 
     /// Equally wide buttons, the shown NAS highlighted.
