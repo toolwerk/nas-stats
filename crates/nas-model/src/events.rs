@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::backup::BackupResult;
 use crate::findings::{FindingKind, Thresholds};
 use crate::health::Health;
 use crate::nas::Nas;
@@ -128,7 +129,9 @@ impl EventChange {
 /// without a finding closes, unless it is still active: a disk at most
 /// [`DISK_TEMP_RECOVERY_C`] below the temperature threshold, a volume at
 /// most [`FILL_RECOVERY_PERCENT`] below the fill threshold, or a part that
-/// is still there but whose value is unknown. A part that is gone closes its
+/// is still there but whose value is unknown. A backup task stays open while
+/// a new run is running (or, when overdue, reports no run), so only a
+/// successful run ends it. A part that is gone closes its
 /// event; an open [`EventKind::Unreachable`] always closes, as the NAS
 /// answered.
 ///
@@ -233,8 +236,16 @@ fn still_active(event: &Event, snapshot: &Snapshot, thresholds: &Thresholds) -> 
             .find(|f| Some(f.name.as_str()) == subject)
             .is_some_and(|f| f.health.is_none()),
         EventKind::UpsOnBattery => snapshot.ups.as_ref().is_some_and(|u| u.state.is_none()),
-        EventKind::BackupFailed => backup().is_some_and(|b| b.last_result.is_none()),
-        EventKind::BackupOverdue => backup().is_some_and(|b| b.last_run.is_none()),
+        EventKind::BackupFailed => {
+            backup().is_some_and(|b| matches!(b.last_result, None | Some(BackupResult::Running)))
+        }
+        EventKind::BackupOverdue => backup().is_some_and(|b| {
+            b.last_run.is_none()
+                || matches!(
+                    b.last_result,
+                    Some(BackupResult::Running | BackupResult::Never)
+                )
+        }),
         EventKind::Alert | EventKind::Unreachable => false,
     }
 }
@@ -289,6 +300,9 @@ mod tests {
 
     const T0: i64 = 1_700_000_000;
     const STEP: i64 = 300;
+
+    /// Puts a state into a snapshot.
+    type Change = fn(&mut Snapshot);
 
     fn empty(at: i64) -> Snapshot {
         Snapshot {
@@ -544,6 +558,56 @@ mod tests {
     }
 
     #[test]
+    fn running_backup_keeps_its_event_open() {
+        let running = |s: &mut Snapshot| {
+            s.backups = vec![backup(Some(T0 + STEP), Some(BackupResult::Running))]
+        };
+        let bads: [(EventKind, Change); 2] = [
+            (EventKind::BackupFailed, |s| {
+                s.backups = vec![backup(Some(T0), Some(BackupResult::Error))]
+            }),
+            (EventKind::BackupOverdue, |s| {
+                s.backups = vec![backup(Some(T0 - 3 * 86_400), Some(BackupResult::Ok))]
+            }),
+        ];
+        for (kind, bad) in bads {
+            let mut open = Vec::new();
+            let mut s = empty(T0);
+            bad(&mut s);
+            assert_eq!(opened(&step(&mut open, &s)).kind, kind);
+
+            // A new run starts: still open.
+            let mut s = empty(T0 + STEP);
+            running(&mut s);
+            assert!(
+                step(&mut open, &s).is_empty(),
+                "{kind:?}: running stays open"
+            );
+
+            // It fails again: the same event, no second one.
+            let mut s = empty(T0 + 2 * STEP);
+            s.backups = vec![backup(Some(T0 + STEP), Some(BackupResult::Error))];
+            let changes = step(&mut open, &s);
+            if kind == EventKind::BackupFailed {
+                assert!(changes.is_empty(), "{changes:?}");
+            } else {
+                // Overdue gives way to failed: the overdue event closes.
+                assert_eq!(changes.len(), 2, "{changes:?}");
+            }
+
+            // It succeeds: closed.
+            let mut s = empty(T0 + 3 * STEP);
+            s.backups = vec![backup(Some(T0 + 3 * STEP), Some(BackupResult::Ok))];
+            let changes = step(&mut open, &s);
+            assert!(
+                changes.iter().all(|c| matches!(c, EventChange::Closed(_))),
+                "{changes:?}"
+            );
+            assert!(open.iter().all(|e| !e.is_open()));
+        }
+    }
+
+    #[test]
     fn overdue_backup_opens_once_and_closes() {
         let e = opens_once_and_closes(
             |s| s.backups = vec![backup(Some(T0 - 3 * 86_400), Some(BackupResult::Ok))],
@@ -623,7 +687,6 @@ mod tests {
 
     #[test]
     fn unknown_value_keeps_open_and_missing_part_closes() {
-        type Change = fn(&mut Snapshot);
         let cases: [(EventKind, Change, Change); 8] = [
             (
                 EventKind::DiskTemperature,
