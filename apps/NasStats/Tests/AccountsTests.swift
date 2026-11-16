@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import Testing
 
 /// Address check, error texts and account data of the add dialog (#14).
@@ -110,5 +111,18 @@ struct AccountsTests {
             model: "TS-464",
             syncsViaICloud: true
         )
+    }
+
+    @Test(arguments: [true, false])
+    @MainActor func addQueryFollowsTheICloudSetting(syncs: Bool) throws {
+        var stored = NasStoreTests.account("Keller")
+        stored.account.syncsViaICloud = syncs
+        let query = try AccountKeychain().addQuery(for: stored)
+        #expect(query[kSecAttrSynchronizable as String] as? Bool == syncs)
+    }
+
+    @Test func deleteQueryMatchesLocalAndSyncedEntries() {
+        let query = AccountKeychain().deleteQuery(id: UUID())
+        #expect(query[kSecAttrSynchronizable as String] as? String == kSecAttrSynchronizableAny as String)
     }
 }
