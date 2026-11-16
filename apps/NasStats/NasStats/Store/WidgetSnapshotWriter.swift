@@ -3,7 +3,6 @@ import os
 
 extension WidgetSnapshot {
     /// The widget snapshot of the entries of the store, in their order.
-    /// Forecast and history stay empty until the core delivers them (#67).
     init(
         entries: [NasEntry],
         demo: Bool,
@@ -92,7 +91,7 @@ extension WidgetNas {
                     usedPercent: volume.usedPercent,
                     usedBytes: volume.usedBytes,
                     totalBytes: volume.totalBytes,
-                    forecast: nil
+                    forecast: entry.forecast(for: volume.id)
                 )
             },
             hottestDiskC: entry.hottestDiskC,
@@ -100,7 +99,7 @@ extension WidgetNas {
             memoryPercent: entry.snapshot?.system.memoryPercent,
             lastBackupAt: entry.lastBackupAt,
             observedAt: entry.observedAt.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-            fullestVolumeHistory: []
+            fullestVolumeHistory: entry.fullestVolumeHistory
         )
     }
 }

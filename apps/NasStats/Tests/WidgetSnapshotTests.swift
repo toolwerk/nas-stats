@@ -19,8 +19,7 @@ struct WidgetSnapshotTests {
         let store = NasStore(
             accounts: NasAccounts(keychain: MemoryAccountStore(), core: FakeCore()),
             defaults: defaults,
-            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
-            pollInterval: nil
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) }
         )
         store.demoMode = true
         return store
@@ -75,9 +74,17 @@ struct WidgetSnapshotTests {
         #expect(keller.memoryPercent == entry.snapshot?.system.memoryPercent)
         #expect(keller.lastBackupAt == entry.lastBackupAt)
         #expect(keller.observedAt != nil)
-        // Forecast and history follow with #67.
-        #expect(snapshot.nas.allSatisfy { $0.fullestVolumeHistory.isEmpty })
-        #expect(snapshot.nas.flatMap(\.volumes).allSatisfy { $0.forecast == nil })
+        // Forecast and recent fill level from the demo core (#67).
+        let dataVol1 = try #require(keller.volumes.first { $0.id == "demo-keller-datavol1" })
+        guard case let .full(days, date) = dataVol1.forecast else {
+            Issue.record("DataVol1 without forecast")
+            return
+        }
+        #expect(Int(days) == 143)
+        #expect(date != nil)
+        #expect(keller.fullestVolumeHistory.count == 30)
+        #expect(keller.fullestVolumeHistory == entry.fullestVolumeHistory)
+        #expect(keller.fullestVolumeHistory.allSatisfy { $0.percent > 0 && $0.percent <= 100 })
     }
 
     @Test func theAgeOfAnOldStateFollowsTheInterval() {

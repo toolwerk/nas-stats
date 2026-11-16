@@ -19,6 +19,19 @@ final class FakeCore: NasCoreProtocol {
         var restored: [String] = []
         /// Thresholds of every `setThresholds` call.
         var thresholds: [Thresholds] = []
+        /// Every `restorePoll` call.
+        var restoredPolls: [RestoredPoll] = []
+        /// Seconds of every `setInterval` call.
+        var intervals: [Int64] = []
+        /// Number of `startPlanner` and `stopPlanner` calls.
+        var plannerStarts = 0
+        var plannerStops = 0
+    }
+
+    struct RestoredPoll: Equatable {
+        var nasId: String
+        var lastAttemptAt: Int64?
+        var blocked: Bool
     }
 
     private let presets: Mutex<[String: NasState]>
@@ -34,6 +47,12 @@ final class FakeCore: NasCoreProtocol {
     let slowRefresh = Mutex(false)
     /// Saved state → snapshot; `restoreState` refuses any other JSON.
     private let restorable: Mutex<[String: Snapshot]>
+    /// Listener of the last `startPlanner`; `stopPlanner` drops it.
+    let listener = Mutex<StateListener?>(nil)
+    /// What `history`, `events` and `forecast` return, for every NAS.
+    let historyPreset = Mutex<[Metric: [HistorySeries]]>([:])
+    let eventsPreset = Mutex<[NasEvent]>([])
+    let forecastPreset = Mutex<[String: Forecast]>([:])
 
     init(states: [NasState] = [], restorable: [String: Snapshot] = [:]) {
         presets = Mutex(Dictionary(uniqueKeysWithValues: states.map { ($0.nasId, $0) }))
@@ -117,25 +136,52 @@ final class FakeCore: NasCoreProtocol {
         throw FfiError.Internal(detail: "not used")
     }
 
-    // History, events and the planner (#60) are not used by the store yet.
-
     func refreshNow(nasId: String) async throws -> NasState {
         throw FfiError.Internal(detail: "not used")
     }
 
-    func restorePoll(nasId: String, lastAttemptAt: Int64?, blocked: Bool) throws {}
+    func restorePoll(nasId: String, lastAttemptAt: Int64?, blocked: Bool) throws {
+        log.withLock {
+            $0.restoredPolls.append(RestoredPoll(nasId: nasId, lastAttemptAt: lastAttemptAt, blocked: blocked))
+        }
+        guard registered.withLock({ $0[nasId] }) != nil else {
+            throw FfiError.UnknownNas(id: nasId)
+        }
+    }
 
-    func startPlanner(listener: StateListener) {}
+    func startPlanner(listener: StateListener) {
+        log.withLock { $0.plannerStarts += 1 }
+        self.listener.withLock { $0 = listener }
+    }
 
-    func stopPlanner() {}
+    func stopPlanner() {
+        log.withLock { $0.plannerStops += 1 }
+        listener.withLock { $0 = nil }
+    }
 
-    func setInterval(secs: Int64) {}
+    /// A finished query of the planner: the state goes into the core, then
+    /// to the listener, from a thread of the core.
+    func plannerQueried(_ state: NasState) {
+        registered.withLock { $0[state.nasId] = state }
+        guard let listener = listener.withLock({ $0 }) else { return }
+        Thread.detachNewThread { listener.stateChanged(state: state) }
+    }
 
-    func history(nasId: String, metric: Metric, range: HistoryRange) throws -> [HistorySeries] { [] }
+    func setInterval(secs: Int64) {
+        log.withLock { $0.intervals.append(secs) }
+    }
 
-    func events(nasId: String?, from: Int64, to: Int64) throws -> [NasEvent] { [] }
+    func history(nasId: String, metric: Metric, range: HistoryRange) throws -> [HistorySeries] {
+        historyPreset.withLock { $0[metric] ?? [] }
+    }
 
-    func forecast(nasId: String, volumeId: String) throws -> Forecast? { nil }
+    func events(nasId: String?, from: Int64, to: Int64) throws -> [NasEvent] {
+        eventsPreset.withLock { $0 }
+    }
+
+    func forecast(nasId: String, volumeId: String) throws -> Forecast? {
+        forecastPreset.withLock { $0[volumeId] }
+    }
 
     func backupRuns(nasId: String, from: Int64, to: Int64) throws -> [BackupRun] { [] }
 
@@ -260,10 +306,12 @@ struct NasStoreTests {
             accounts: NasAccounts(keychain: keychain, core: core),
             defaults: defaults,
             demoSource: { demoSnapshots(now: $0, thresholds: $1) },
-            pollInterval: nil,
             clock: { [clock] in clock.now }
         )
-        await store.start()
+        store.start()
+        // The planner of the fake core never queries; this is the first
+        // round the planner of the real core would run.
+        await store.refreshAll()
         return store
     }
 
@@ -279,7 +327,6 @@ struct NasStoreTests {
             accounts: NasAccounts(keychain: keychain, core: core),
             defaults: defaults,
             demoSource: { demoSnapshots(now: $0, thresholds: $1) },
-            pollInterval: nil,
             clock: { [clock] in clock.now },
             lastStates: lastStates
         )
@@ -298,7 +345,8 @@ struct NasStoreTests {
         let store = store(MemoryAccountStore([a]), core: core, lastStates: file)
         #expect(core.calls.restored == [id])
         #expect(store.entries.first?.snapshot != nil)
-        await store.start()
+        store.start()
+        await store.refreshAll()
         #expect(core.calls.refreshed == [id])
         #expect(store.entries.first?.snapshot?.nas.id == id)
         #expect(file.load() == [id: FakeCore.saved(id)])
@@ -327,7 +375,8 @@ struct NasStoreTests {
         // B answers without a snapshot, so nothing is saved for it.
         let core = FakeCore(states: [Self.state(a, health: .ok), Self.state(b, health: nil)])
         let store = store(MemoryAccountStore([a, b]), core: core, lastStates: file)
-        await store.start()
+        store.start()
+        await store.refreshAll()
         #expect(file.load() == [idA: FakeCore.saved(idA)])
 
         try await store.remove(id: a.account.id)
@@ -474,9 +523,14 @@ struct NasStoreTests {
         #expect(core.calls.refreshed.sorted() == ids)
         #expect(store.entries.count == 2)
 
+        #expect(core.calls.plannerStarts == 1)
+
         // A second start does nothing.
-        await store.start()
-        #expect(core.calls.refreshed.count == 2)
+        let calls = core.calls
+        store.start()
+        #expect(core.calls.restoredPolls == calls.restoredPolls)
+        #expect(core.calls.plannerStarts == 1)
+        #expect(core.calls.intervals == calls.intervals)
     }
 
     @Test func addAndRemoveChangeKeychainCoreAndEntries() async throws {
@@ -665,8 +719,7 @@ struct NasStoreTests {
         let store = NasStore(
             accounts: NasAccounts(keychain: MemoryAccountStore([Self.account("Keller")]), core: FakeCore()),
             defaults: defaults,
-            demoSource: { _, _ in [] },
-            pollInterval: nil
+            demoSource: { _, _ in [] }
         )
         #expect(store.entries.map(\.displayName) == ["Keller"])
     }
@@ -731,7 +784,6 @@ struct NasStoreTests {
             accounts: NasAccounts(keychain: keychain, core: core),
             defaults: defaults,
             demoSource: { demoSnapshots(now: $0, thresholds: $1) },
-            pollInterval: nil,
             clock: { [clock] in clock.now }
         )
     }
@@ -958,5 +1010,158 @@ struct NasStoreTests {
         clock.advance(minutes: 60)
         await store.refreshAll()
         #expect(core.calls.refreshed.count == 2)
+    }
+
+    // MARK: - History, forecast and the planner (#67)
+
+    /// Waits up to 2 s for `condition`, e.g. for a state of the planner.
+    func eventually(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<200 {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
+    }
+
+    @Test func theDemoForecastOfDataVol1IsFullIn143Days() throws {
+        defaults.set(true, forKey: NasStore.demoModeKey)
+        let store = makeStore(MemoryAccountStore(), core: FakeCore())
+        let keller = try #require(store.entries.first { $0.id == "demo-keller" })
+        let forecast = try #require(keller.forecast(for: "demo-keller-datavol1"))
+        let text = StatusFormat.forecast(forecast)
+        #expect(text.main == "voll in 143 Tagen")
+        #expect(text.date != nil)
+        // Only volumes with a rising trend get one, never "kein Trend".
+        #expect(!keller.forecasts.values.contains(.noTrend))
+        #expect(keller.fullestVolumeHistory.count == 30)
+    }
+
+    @Test func historyAndEventsComeThroughTheStore() throws {
+        let now = Int64(Date().timeIntervalSince1970)
+        let store = makeStore(MemoryAccountStore(), core: FakeCore())
+        store.demoMode = true
+        let used = try store.history(nasId: "demo-keller", metric: .volumeUsed, range: .month)
+        #expect(used.contains { $0.key == "demo-keller-datavol1" && !$0.points.isEmpty })
+        let events = try store.events(nasId: nil, from: now - 30 * 86_400, to: now + 3600)
+        #expect(!events.isEmpty)
+        #expect(try store.events(nasId: "demo-keller", from: now - 30 * 86_400, to: now + 3600)
+            .allSatisfy { $0.nasId == "demo-keller" })
+
+        // Outside demo mode from the core of the accounts.
+        defaults.set(false, forKey: NasStore.demoModeKey)
+        let core = FakeCore()
+        let series = HistorySeries(key: nil, points: [HistoryPoint(at: 100, min: 1, mean: 2, max: 3, count: 4)])
+        core.historyPreset.withLock { $0[.cpu] = [series] }
+        let event = NasEvent(
+            nasId: "a", kind: .volumeFill, subject: "v", level: .warning,
+            text: "Volume voll", startedAt: 100, endedAt: nil
+        )
+        core.eventsPreset.withLock { $0 = [event] }
+        let live = makeStore(MemoryAccountStore(), core: core)
+        #expect(try live.history(nasId: "a", metric: .cpu, range: .day) == [series])
+        #expect(try live.history(nasId: "a", metric: .mem, range: .day).isEmpty)
+        #expect(try live.events(nasId: "a", from: 0, to: 200) == [event])
+    }
+
+    @Test func aStateOfThePlannerReachesTheStoreWithoutAQueryOfItsOwn() async throws {
+        let a = Self.account("Keller")
+        let id = a.account.id.uuidString
+        let core = FakeCore()
+        let store = makeStore(MemoryAccountStore([a]), core: core)
+        store.start()
+        let listener = try #require(core.listener.withLock { $0 })
+
+        // Forecast and history of the core for the new snapshot.
+        let state = Self.state(a, health: .ok)
+        let volumes = NasEntry.capacityVolumes(of: try #require(state.snapshot))
+        let first = try #require(volumes.first)
+        let fullest = try #require(volumes.max { ($0.usedPercent ?? 0) < ($1.usedPercent ?? 0) })
+        core.forecastPreset.withLock {
+            $0[first.id] = Forecast(daysToFull: 10, fullAt: clock.now + 10 * 86_400, growthPerDay: 1)
+        }
+        let day: Int64 = 86_400
+        core.historyPreset.withLock {
+            $0[.volumeUsed] = [HistorySeries(key: fullest.id, points: [
+                // Older than 30 days: left out.
+                HistoryPoint(at: clock.now - 40 * day, min: 1, mean: 1, max: 1, count: 1),
+                HistoryPoint(at: clock.now - 2 * day, min: 50, mean: 50, max: 50, count: 1),
+                HistoryPoint(at: clock.now - day, min: 60, mean: 60, max: 60, count: 1),
+            ])]
+            $0[.volumeTotal] = [HistorySeries(key: fullest.id, points: [
+                HistoryPoint(at: clock.now - day, min: 200, mean: 200, max: 200, count: 1),
+            ])]
+        }
+
+        core.plannerQueried(state)
+        #expect(await eventually { store.entries.first?.snapshot != nil })
+        #expect(core.calls.refreshed.isEmpty)
+        let entry = try #require(store.entries.first)
+        #expect(entry.id == id)
+        #expect(entry.forecast(for: first.id)
+            == .full(days: 10, date: Date(timeIntervalSince1970: TimeInterval(clock.now + 10 * 86_400))))
+        let total = try #require(fullest.totalBytes)
+        #expect(entry.fullestVolumeHistory == [
+            WidgetFillPoint(
+                day: Date(timeIntervalSince1970: TimeInterval(clock.now - 2 * day)),
+                percent: 50 / Double(total) * 100),
+            WidgetFillPoint(day: Date(timeIntervalSince1970: TimeInterval(clock.now - day)), percent: 30),
+        ])
+
+        // A state of an id the store does not know changes nothing.
+        let before = store.entries.map(\.id)
+        listener.stateChanged(state: NasState(nasId: "fremd", snapshot: nil, problem: nil, lastAttemptAt: 1, blocked: false))
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(store.entries.map(\.id) == before)
+    }
+
+    @Test func startHandsTheQueryLogToTheCore() throws {
+        let (a, b) = (Self.account("A"), Self.account("B"))
+        let (idA, idB) = (a.account.id.uuidString, b.account.id.uuidString)
+        let log = NasStore.QueryLog(lastAttempts: [idA: 1_000], blocked: [idB: "Anmeldung abgelehnt"])
+        defaults.set(try JSONEncoder().encode(log), forKey: NasStore.queryLogKey)
+        defaults.set(15, forKey: NasStore.queryIntervalKey)
+        let core = FakeCore()
+        let store = makeStore(MemoryAccountStore([a, b]), core: core)
+        #expect(core.calls.plannerStarts == 0)
+        store.start()
+        #expect(core.calls.restoredPolls.sorted { $0.nasId < $1.nasId } == [
+            FakeCore.RestoredPoll(nasId: idA, lastAttemptAt: 1_000, blocked: false),
+            FakeCore.RestoredPoll(nasId: idB, lastAttemptAt: nil, blocked: true),
+        ].sorted { $0.nasId < $1.nasId })
+        #expect(core.calls.intervals == [900])
+        #expect(core.calls.plannerStarts == 1)
+        #expect(core.calls.refreshed.isEmpty)
+
+        store.queryIntervalMinutes = 30
+        #expect(core.calls.intervals == [900, 1800])
+    }
+
+    @Test func theDemoModeStopsThePlannerAndLeavingItStartsItAgain() throws {
+        let core = FakeCore()
+        let store = makeStore(MemoryAccountStore([Self.account("Keller")]), core: core)
+        store.start()
+        #expect(core.calls.plannerStarts == 1)
+        store.demoMode = true
+        #expect(core.calls.plannerStops == 1)
+        #expect(core.listener.withLock { $0 } == nil)
+        store.demoMode = false
+        #expect(core.calls.plannerStarts == 2)
+        #expect(core.listener.withLock { $0 } != nil)
+
+        // Started in demo mode: no planner until it goes off.
+        defaults.set(true, forKey: NasStore.demoModeKey)
+        let demoCore = FakeCore()
+        let demo = makeStore(MemoryAccountStore(), core: demoCore)
+        demo.start()
+        #expect(demoCore.calls.plannerStarts == 0)
+    }
+
+    @Test func anAddedNasCountsAsQueriedForThePlanner() async throws {
+        let core = FakeCore()
+        let store = await started(MemoryAccountStore(), core: core)
+        let new = Self.account("Neu")
+        try await store.add(new)
+        #expect(core.calls.restoredPolls.last
+            == FakeCore.RestoredPoll(nasId: new.account.id.uuidString, lastAttemptAt: clock.now, blocked: false))
     }
 }

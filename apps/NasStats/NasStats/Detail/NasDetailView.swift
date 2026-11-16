@@ -199,11 +199,10 @@ struct NasDetailView: View {
 
     private func volumeRow(_ volume: Volume, thresholds: FillThresholds) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            // The forecast follows with #60 and #67.
             FillBar(
                 name: volume.name, percent: volume.usedPercent,
                 usedBytes: volume.usedBytes, totalBytes: volume.totalBytes,
-                forecast: nil, thresholds: thresholds)
+                forecast: entry?.forecast(for: volume.id), thresholds: thresholds)
             if volume.health == .warning || volume.health == .critical {
                 Text(verbatim: volume.statusText ?? partLabel(volume.health))
                     .font(.caption)
@@ -312,8 +311,7 @@ private struct NasDetailPreview: View {
         return NasStore(
             accounts: NasAccounts(),
             defaults: defaults,
-            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
-            pollInterval: nil)
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) })
     }()
 
     var body: some View {
