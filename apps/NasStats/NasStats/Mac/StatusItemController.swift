@@ -11,11 +11,13 @@ import SwiftUI
 /// AppKit instead of `MenuBarExtra`: only a status item tells left and
 /// right clicks apart and shows a coloured image.
 @MainActor
-final class StatusItemController: NSObject, NSWindowDelegate {
+final class StatusItemController: NSObject, NSWindowDelegate, NSPopoverDelegate {
     private let store: NasStore
     private let defaults: UserDefaults
     private let statusItem: NSStatusItem
     private let popover = NSPopover()
+    /// System uptime of the last closing of the popover.
+    private var popoverClosedAt: TimeInterval = 0
     private var mainWindow: NSWindow?
     private var addNasWindow: NSWindow?
     private var settingsWindow: NSWindow?
@@ -28,6 +30,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         super.init()
         // Closes on a click outside, like a menu.
         popover.behavior = .transient
+        popover.delegate = self
         if let button = statusItem.button {
             button.target = self
             button.action = #selector(clicked(_:))
@@ -105,6 +108,11 @@ final class StatusItemController: NSObject, NSWindowDelegate {
             popover.performClose(nil)
             return
         }
+        // A transient popover closes already on the mouse down on the
+        // symbol; the action of its mouse up must not open it again.
+        if ProcessInfo.processInfo.systemUptime - popoverClosedAt < 0.3 {
+            return
+        }
         let view = MenuBarPopover(
             onOpenWindow: { [weak self] in
                 self?.popover.performClose(nil)
@@ -120,8 +128,14 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         controller.sizingOptions = [.preferredContentSize]
         popover.contentViewController = controller
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        // Key, so the buttons take the first click.
+        // Active and key, so the buttons take the first click and a click
+        // into another app closes the popover.
+        NSApp.activate()
         popover.contentViewController?.view.window?.makeKey()
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        popoverClosedAt = ProcessInfo.processInfo.systemUptime
     }
 
     /// Right click: refresh, display, login item, settings, quit.
@@ -225,6 +239,9 @@ final class StatusItemController: NSObject, NSWindowDelegate {
             return
         }
         let controller = NSHostingController(rootView: MainWindowView().environment(store))
+        // The frame of the window alone sets the size (960×640 or the saved
+        // one), not the ideal size of the content.
+        controller.sizingOptions = []
         // Title and the toolbar items of the views go to the window.
         controller.sceneBridgingOptions = [.toolbars, .title]
         let window = NSWindow(contentViewController: controller)
