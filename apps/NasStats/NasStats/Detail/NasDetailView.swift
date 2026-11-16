@@ -95,7 +95,9 @@ struct NasDetailView: View {
                     .font(.footnote)
                     .foregroundStyle(offline ? .secondary : Color.red)
                 #if os(iOS)
-                if offline {
+                // Also for a NAS that stays red because its last state
+                // was critical.
+                if let kind = entry.problem?.kind, kind == .unreachable || kind == .timeout {
                     // iOS reports a refused "Lokales Netzwerk" like a NAS
                     // that does not answer.
                     Text("Im Heimnetz? Prüfen Sie in den iOS-Einstellungen unter Datenschutz & Sicherheit › Lokales Netzwerk, ob NAS Stats zugreifen darf.")

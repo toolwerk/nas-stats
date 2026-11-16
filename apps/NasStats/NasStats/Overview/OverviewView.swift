@@ -48,7 +48,7 @@ struct OverviewView: View {
                     }
                     ForEach(store.entries) { entry in
                         NavigationLink(value: entry.id) {
-                            NasCard(entry: entry, now: now)
+                            NasCard(entry: entry, now: now, intervalMinutes: store.queryIntervalMinutes)
                         }
                         .buttonStyle(.plain)
                     }

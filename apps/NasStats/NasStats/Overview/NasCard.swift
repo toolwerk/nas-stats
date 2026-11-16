@@ -6,6 +6,8 @@ import SwiftUI
 struct NasCard: View {
     let entry: NasEntry
     var now: Date = .now
+    /// Query interval of the settings, in minutes.
+    var intervalMinutes: Int = 5
 
     /// Problem line and findings, in this order.
     private var lines: [(text: String, level: StatusLevel)] {
@@ -81,9 +83,10 @@ struct NasCard: View {
         .contentShape(shape)
     }
 
-    /// Older than two query intervals of 5 minutes.
+    /// Older than two query intervals: at least one query is missing.
     private func isOld(_ snapshot: Snapshot) -> Bool {
-        now.timeIntervalSince1970 - TimeInterval(snapshot.observedAt) >= 600
+        now.timeIntervalSince1970 - TimeInterval(snapshot.observedAt)
+            >= TimeInterval(2 * max(5, intervalMinutes) * 60)
     }
 
     private var shape: RoundedRectangle {
