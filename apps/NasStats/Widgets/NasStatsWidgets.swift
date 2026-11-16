@@ -22,7 +22,18 @@ struct StatusWidget: Widget {
         }
         .configurationDisplayName("NAS")
         .description("Zustand, Füllstand und Kennzahlen eines NAS.")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .supportedFamilies(Self.families)
+    }
+}
+
+extension StatusWidget {
+    /// The lock screen shapes (#25) exist on iPhone only.
+    static var families: [WidgetFamily] {
+        #if os(iOS)
+        [.systemSmall, .systemMedium, .accessoryCircular, .accessoryRectangular, .accessoryInline]
+        #else
+        [.systemSmall, .systemMedium]
+        #endif
     }
 }
 
@@ -86,9 +97,18 @@ struct StatusView: View {
     @ViewBuilder private var content: some View {
         if let snapshot = entry.snapshot {
             if let nas = entry.nas {
-                if family == .systemMedium {
+                switch family {
+                case .systemMedium:
                     NasMediumView(nas: nas, snapshot: snapshot, now: entry.date)
-                } else {
+                #if os(iOS)
+                case .accessoryCircular:
+                    NasCircularView(nas: nas, demo: snapshot.demo)
+                case .accessoryRectangular:
+                    NasRectangularView(nas: nas, snapshot: snapshot, now: entry.date)
+                case .accessoryInline:
+                    NasInlineView(nas: nas, demo: snapshot.demo)
+                #endif
+                default:
                     NasSmallView(nas: nas, snapshot: snapshot, now: entry.date)
                 }
             } else {
@@ -99,14 +119,23 @@ struct StatusView: View {
         }
     }
 
-    private func empty(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("NAS Stats").font(.headline)
-            Text(text)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+    @ViewBuilder private func empty(_ text: String) -> some View {
+        switch family {
+        #if os(iOS)
+        case .accessoryCircular:
+            NasCircularView(nas: nil, demo: false)
+        case .accessoryInline:
+            Text("NAS Stats · \(text)")
+        #endif
+        default:
+            VStack(alignment: .leading, spacing: 4) {
+                Text("NAS Stats").font(.headline)
+                Text(text)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -127,3 +156,23 @@ private let previews: [(String, WidgetSnapshot)] = [
 } timeline: {
     for (_, snapshot) in previews { StatusEntry(entry: snapshot, now: WidgetSamples.now) }
 }
+
+#if os(iOS)
+#Preview("Rund", as: .accessoryCircular) {
+    StatusWidget()
+} timeline: {
+    for (_, snapshot) in previews { StatusEntry(entry: snapshot, now: WidgetSamples.now) }
+}
+
+#Preview("Rechteckig", as: .accessoryRectangular) {
+    StatusWidget()
+} timeline: {
+    for (_, snapshot) in previews { StatusEntry(entry: snapshot, now: WidgetSamples.now) }
+}
+
+#Preview("Zeile", as: .accessoryInline) {
+    StatusWidget()
+} timeline: {
+    for (_, snapshot) in previews { StatusEntry(entry: snapshot, now: WidgetSamples.now) }
+}
+#endif

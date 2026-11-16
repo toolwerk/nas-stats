@@ -11,6 +11,8 @@ struct FillRing: View {
     var offline = false
     var showsPercentSign = true
     var thresholds: FillThresholds = .standard
+    /// Replaces the track colour, e.g. white for the lock screen.
+    var trackColor: Color?
 
     private var color: Color { tint ?? thresholds.level(for: percent).color }
 
@@ -28,7 +30,7 @@ struct FillRing: View {
                 } else {
                     Circle()
                         .inset(by: line / 2)
-                        .stroke(Color("FillTrack"), lineWidth: line)
+                        .stroke(trackColor ?? Color("FillTrack"), lineWidth: line)
                     if let percent {
                         Circle()
                             .inset(by: line / 2)
