@@ -115,6 +115,25 @@ final class EventNotifier {
         save()
     }
 
+    /// Takes in open events another device notifies (#37), e.g. the Mac:
+    /// they stay silent here, also after a rise to critical, so nothing is
+    /// notified twice. Events known already stay as they are.
+    func adopt(nasId: String, open: [NasEvent]) {
+        var changed = false
+        for event in open where notified[Self.id(of: event)] == nil {
+            notified[Self.id(of: event)] = Notified(
+                nasId: nasId,
+                category: NotificationCategory(event.kind),
+                critical: true,
+                posted: false
+            )
+            changed = true
+        }
+        if changed {
+            save()
+        }
+    }
+
     /// Follows a change of the settings: a kind switched off withdraws its
     /// notifications, its events stay silent; changed quiet hours move the
     /// pending notifications to their new end, or release them at once.

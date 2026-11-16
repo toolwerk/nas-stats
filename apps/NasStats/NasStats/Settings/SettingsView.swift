@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Settings of iPhone (tab) and Mac (window of the menu bar) (#21): the
-/// NAS, iCloud Keychain (#113), query interval, thresholds,
+/// NAS, iCloud Keychain (#113) and transfer (#37), query interval, thresholds,
 /// notifications (#39), demo mode and
 /// the privacy note.
 struct SettingsView: View {
@@ -10,6 +10,10 @@ struct SettingsView: View {
     /// Why the last switch of the iCloud setting did not fully work; stays
     /// until the next switch.
     @State private var sharingError: String?
+    @State private var confirmingStopTransfer = false
+    /// Why the last switch of the transfer did not work; stays until the
+    /// next switch.
+    @State private var transferError: String?
     #if os(macOS)
     /// Opens the add dialog; set by `StatusItemController`.
     var onAddNas: () -> Void = {}
@@ -64,7 +68,7 @@ struct SettingsView: View {
                 Text("Zeigt drei erfundene NAS. Die Werte sind erfunden und stammen von keinem echten Gerät.")
             }
             Section {
-                Text("Keine Telemetrie. Zustand und Verlauf bleiben auf dem Gerät. Zugangsdaten liegen im Schlüsselbund, geteilt nur mit „Zugänge über iCloud-Schlüsselbund teilen“.")
+                Text("Keine Telemetrie. Zustand und Verlauf bleiben auf Ihren Geräten; mit der Übertragung in iCloud gehen Zustand, Verlauf und Ereignisse über Ihre private iCloud vom Mac zum iPhone, ohne Zugänge. Zugangsdaten liegen im Schlüsselbund, geteilt nur mit „Zugänge über iCloud-Schlüsselbund teilen“.")
                     .font(.footnote)
                 LabeledContent("Core") {
                     Text(verbatim: coreVersion())
@@ -141,6 +145,9 @@ struct SettingsView: View {
             } message: {
                 Text("Die NAS verschwinden von Ihren anderen Geräten und bleiben nur auf diesem.")
             }
+            if let cloud = store.cloud {
+                transferToggle(cloud)
+            }
         } header: {
             Text("iCloud")
         } footer: {
@@ -150,6 +157,80 @@ struct SettingsView: View {
                     Text(sharingError)
                         .foregroundStyle(.red)
                 }
+                if let cloud = store.cloud {
+                    transferFooter(cloud)
+                }
+            }
+        }
+    }
+
+    /// The transfer of state and history (#37): the Mac writes, the iPhone
+    /// takes over. Turning it off on the Mac asks first, because it deletes
+    /// the data in iCloud.
+    private func transferToggle(_ cloud: CloudTransfer) -> some View {
+        Toggle(
+            cloud.role == .upload ? "Zustand und Verlauf in iCloud übertragen" : "Zustand und Verlauf vom Mac übernehmen",
+            isOn: Binding(
+                get: { store.transfersViaICloud },
+                set: { on in
+                    if !on, cloud.role == .upload {
+                        confirmingStopTransfer = true
+                    } else {
+                        setTransfer(on)
+                    }
+                }
+            )
+        )
+        .confirmationDialog(
+            "Daten aus iCloud löschen?",
+            isPresented: $confirmingStopTransfer,
+            titleVisibility: .visible
+        ) {
+            Button("Löschen und ausschalten", role: .destructive) {
+                setTransfer(false)
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: {
+            Text("Zustand, Verlauf und Ereignisse der NAS werden aus Ihrer iCloud gelöscht. Was das iPhone schon übernommen hat, bleibt dort.")
+        }
+    }
+
+    @ViewBuilder
+    private func transferFooter(_ cloud: CloudTransfer) -> some View {
+        switch cloud.role {
+        case .upload:
+            Text("Überträgt Zustand, Verlauf und Ereignisse der NAS in Ihre private iCloud, ohne Zugänge.")
+        case .download:
+            Text("Übernimmt Zustand, Verlauf und Ereignisse der NAS, die auch auf diesem iPhone stehen.")
+        }
+        if store.transfersViaICloud {
+            switch cloud.status {
+            case .transferred(let date):
+                Text(cloud.role == .upload
+                     ? "Zuletzt übertragen: \(StatusFormat.age(date))."
+                     : "Zuletzt vom Mac: \(StatusFormat.age(date)).")
+            case .none, .noData:
+                if cloud.role == .download {
+                    Text("Noch keine Daten vom Mac.")
+                }
+            case .failed(let message):
+                Text(message)
+                    .foregroundStyle(.red)
+            }
+        }
+        if let transferError {
+            Text(transferError)
+                .foregroundStyle(.red)
+        }
+    }
+
+    private func setTransfer(_ on: Bool) {
+        transferError = nil
+        Task {
+            do {
+                try await store.setTransfersViaICloud(on)
+            } catch {
+                transferError = connectionErrorText(error)
             }
         }
     }
