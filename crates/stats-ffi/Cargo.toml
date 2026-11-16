@@ -13,7 +13,7 @@ crate-type = ["lib", "staticlib"]
 nas-demo = { workspace = true }
 nas-model = { workspace = true }
 nas-http = { workspace = true }
-provider-qnap = { path = "../provider-qnap" }
+provider-qnap = { workspace = true }
 serde_json = { workspace = true }
 stats-core = { workspace = true }
 thiserror = { workspace = true }

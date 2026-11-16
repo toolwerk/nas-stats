@@ -11,22 +11,28 @@
 //! [`core_version`], [`fetch_fingerprint`], [`standard_thresholds`],
 //! [`demo_snapshot`] and [`demo_snapshots`].
 //!
+//! The collector on the NAS (#46) keeps the history while no app runs:
+//! [`collector_nas`] lists its NAS, [`NasCore::import_from_collector`] takes
+//! over the history of one of them.
+//!
 //! Every network call runs on one tokio runtime of the core ([`runtime`]);
 //! the apps only await the result.
 
+mod collector;
 mod core;
 mod demo;
 mod error;
 mod records;
 
+pub use crate::collector::collector_nas;
 pub use crate::core::{MIN_INTERVAL_SECS, NasCore};
 pub use crate::error::FfiError;
 pub use crate::records::{
-    Alert, AlertLevel, BackupKind, BackupResult, BackupRun, BackupTask, Container, Disk, EventKind,
-    Fan, Finding, FindingKind, Forecast, Health, HistoryPoint, HistoryRange, HistorySeries, Metric,
-    Nas, NasConfig, NasEvent, NasProblem, NasState, NetInterface, ProblemKind, ProviderKind,
-    ScrubState, ScrubStatus, Snapshot, StateListener, SystemStatus, Thresholds, Ups, UpsState,
-    Volume, VolumeKind,
+    Alert, AlertLevel, BackupKind, BackupResult, BackupRun, BackupTask, CollectorImport,
+    CollectorNas, Container, Disk, EventKind, Fan, Finding, FindingKind, Forecast, Health,
+    HistoryPoint, HistoryRange, HistorySeries, Metric, Nas, NasConfig, NasEvent, NasProblem,
+    NasState, NetInterface, ProblemKind, ProviderKind, ScrubState, ScrubStatus, Snapshot,
+    StateListener, SystemStatus, Thresholds, Ups, UpsState, Volume, VolumeKind,
 };
 
 uniffi::setup_scaffolding!();

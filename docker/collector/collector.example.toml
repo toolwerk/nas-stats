@@ -1,0 +1,24 @@
+# Konfiguration des Sammel-Containers von NAS Stats.
+# Kopieren nach collector.toml und anpassen. Die Datei enthält das Passwort
+# im Klartext: nur für den Container lesbar ablegen (siehe docs/collector.md).
+
+# Adresse der Schnittstelle für die Apps. Den Port im Router nicht freigeben.
+listen = "0.0.0.0:8743"
+
+# Abstand der Abfragen je NAS in Minuten, mindestens 5.
+interval_minutes = 5
+
+[[nas]]
+# Eigene Kennung, nur Buchstaben, Ziffern, '.', '_' und '-'.
+id = "keller"
+# Derzeit nur "qnap".
+provider = "qnap"
+# Adresse des NAS, nur https://. Vom Container aus gesehen, also die
+# IP-Adresse im Heimnetz, nicht "localhost".
+base_url = "https://192.168.1.20:443"
+# Fingerabdruck des Zertifikats des NAS. Ausgeben mit:
+#   docker run --rm nas-collector fingerprint https://192.168.1.20:443
+fingerprint = "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"
+# Eigenes Konto nur für den Container (auf QNAP derzeit ein Admin-Konto).
+user = "nasstats"
+password = "hier-das-passwort"

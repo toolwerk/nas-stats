@@ -318,3 +318,35 @@ async fn cookies_are_kept_and_json_is_posted_as_json() {
     );
     assert_eq!(header(&heads[1], "cookie"), Some("CSID=abc"));
 }
+
+#[tokio::test]
+async fn bearer_get_sends_the_token() {
+    let server = server(Answer::Status(200)).await;
+    let client = NasClient::new(&server.url(), server.fingerprint()).unwrap();
+    let body = client
+        .get_text_bearer("v1/export", &[("nas", "keller")], "abc123")
+        .await
+        .unwrap();
+    assert_eq!(body, "hallo");
+    let heads = server.heads();
+    assert!(
+        heads[0].starts_with("GET /v1/export?nas=keller "),
+        "{}",
+        heads[0]
+    );
+    assert_eq!(header(&heads[0], "authorization"), Some("Bearer abc123"));
+    // The plain call sends no token.
+    client.get_text("v1/nas", &[]).await.unwrap();
+    assert_eq!(header(&server.heads()[1], "authorization"), None);
+}
+
+#[tokio::test]
+async fn bearer_get_with_rejected_token_is_login_failed() {
+    let server = server(Answer::Status(401)).await;
+    let client = NasClient::new(&server.url(), server.fingerprint()).unwrap();
+    let err = client
+        .get_text_bearer("v1/nas", &[], "falsch")
+        .await
+        .unwrap_err();
+    assert_eq!(err, ProviderError::LoginFailed);
+}
