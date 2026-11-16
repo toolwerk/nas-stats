@@ -23,10 +23,12 @@ struct NasCircularView: View {
             .widgetAccentable()
             .padding(4)
             if demo {
-                Text("DEMO")
-                    .font(.system(size: 7, weight: .bold))
-                    .frame(maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, 3)
+                // Inside the ring, below the percentage, so it never sits on the arc.
+                GeometryReader { proxy in
+                    Text("DEMO")
+                        .font(.system(size: 6, weight: .bold))
+                        .position(x: proxy.size.width / 2, y: proxy.size.height * 0.72)
+                }
             }
         }
     }
@@ -42,10 +44,16 @@ struct NasRectangularView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
-                Text(nas.lockTitle)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .widgetAccentable()
+                // A long name is cut, the state stays.
+                HStack(spacing: 0) {
+                    Text(nas.name).lineLimit(1)
+                    Text(" · \(nas.status.label)")
+                        .lineLimit(1)
+                        .fixedSize()
+                        .layoutPriority(1)
+                }
+                .font(.headline)
+                .widgetAccentable()
                 if snapshot.demo {
                     Spacer(minLength: 0)
                     Text("DEMO").font(.caption2.bold())
@@ -56,6 +64,7 @@ struct NasRectangularView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .background(AccessoryWidgetBackground().clipShape(RoundedRectangle(cornerRadius: 8)))
     }
 }
 

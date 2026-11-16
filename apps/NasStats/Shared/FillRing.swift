@@ -25,7 +25,7 @@ struct FillRing: View {
                     Circle()
                         .inset(by: line / 2)
                         .stroke(
-                            StatusLevel.offline.color,
+                            tint ?? StatusLevel.offline.color,
                             style: StrokeStyle(lineWidth: line, dash: [line * 0.7, line * 0.7]))
                 } else {
                     Circle()
