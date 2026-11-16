@@ -87,6 +87,20 @@ impl NasClient {
         self.send(self.http.get(url).query(query)).await
     }
 
+    /// Like [`NasClient::get_text`] with `Authorization: Bearer <token>`,
+    /// for the collector of NAS Stats (#46). A 401 is
+    /// [`ProviderError::LoginFailed`].
+    pub async fn get_text_bearer(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+        token: &str,
+    ) -> Result<String, ProviderError> {
+        let url = self.url(path)?;
+        self.send(self.http.get(url).query(query).bearer_auth(token))
+            .await
+    }
+
     /// `POST <base><path>` with a URL-encoded form, body as text.
     pub async fn post_form_text(
         &self,
