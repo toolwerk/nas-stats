@@ -69,6 +69,7 @@ struct NasDetailContentTests {
         entry.problem = kind.map {
             NasProblem(
                 kind: $0, message: "Fehler", stopsPolling: stops,
+                noAnswer: $0 == .unreachable || $0 == .timeout,
                 oldFingerprint: nil, newFingerprint: nil, httpStatus: nil)
         }
         return entry

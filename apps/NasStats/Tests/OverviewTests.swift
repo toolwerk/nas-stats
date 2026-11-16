@@ -26,6 +26,7 @@ struct OverviewTests {
     private func problem(_ kind: ProblemKind, stops: Bool = false) -> NasProblem {
         NasProblem(
             kind: kind, message: "NAS antwortet nicht", stopsPolling: stops,
+            noAnswer: kind == .unreachable || kind == .timeout,
             oldFingerprint: nil, newFingerprint: nil, httpStatus: nil
         )
     }
@@ -86,11 +87,20 @@ struct OverviewTests {
         var e = entry("a")
         e.problem = NasProblem(
             kind: .unreachable, message: "error sending request for url", stopsPolling: false,
+            noAnswer: true,
             oldFingerprint: nil, newFingerprint: nil, httpStatus: nil
         )
         #expect(e.problemLine == "Nicht erreichbar")
         e.problem = NasProblem(
+            kind: .http, message: "HTTP-Status 502", stopsPolling: false,
+            noAnswer: true,
+            oldFingerprint: nil, newFingerprint: nil, httpStatus: 502
+        )
+        #expect(e.problemLine == "Nicht erreichbar")
+        #expect(e.statusLevel == .offline)
+        e.problem = NasProblem(
             kind: .http, message: "HTTP 500", stopsPolling: false,
+            noAnswer: false,
             oldFingerprint: nil, newFingerprint: nil, httpStatus: 500
         )
         #expect(e.problemLine == "HTTP 500")

@@ -8,6 +8,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `stats-ffi`: HTTP 502, 503 and 504 count as „no answer“ like no connection and a time-out (`ProviderError::is_no_answer`), because a reverse proxy sends them when the NAS behind it is gone. After 15 minutes without a snapshot they open „nicht erreichbar“; other HTTP errors such as 500, a refused login, missing rights, a changed certificate and an unreadable answer still do not. `NasProblem` gets `noAnswer`, and the apps show „Nicht erreichbar“ (grey) from it instead of checking the kinds themselves (#112).
 - `stats-ffi`: the core computes the findings with the thresholds the app sets (`NasCore::set_thresholds`, `demo_snapshots(now, thresholds)`, `standard_thresholds`) and recomputes them from the snapshot as read, so a changed threshold shows at once without a query, also for the snapshot of the test query of the add dialog, which the core takes over when the NAS is added. Snapshots name the volumes whose fill level counts (`capacity_volume_ids`). The apps take the findings of the core unchanged and no longer check fill level and disk temperature themselves (#85).
 
 ### Added

@@ -622,6 +622,9 @@ pub struct NasProblem {
     /// The core does not query this NAS again until the user changes the
     /// credentials or adds the NAS again.
     pub stops_polling: bool,
+    /// The NAS gave no answer: no connection, time-out, or HTTP 502/503/504
+    /// of a proxy. The app shows it as "not reachable".
+    pub no_answer: bool,
     /// For `CertificateChanged`: the fingerprint trusted so far.
     pub old_fingerprint: Option<String>,
     /// For `CertificateChanged`: the fingerprint the NAS presents now.
@@ -655,6 +658,7 @@ impl From<&model::ProviderError> for NasProblem {
             kind,
             message: e.to_string(),
             stops_polling: e.stops_polling(),
+            no_answer: e.is_no_answer(),
             old_fingerprint,
             new_fingerprint,
             http_status,
@@ -928,7 +932,21 @@ mod tests {
         let problem = NasProblem::from(&model::ProviderError::Http(503));
         assert_eq!(problem.kind, ProblemKind::Http);
         assert!(!problem.stops_polling);
+        assert!(problem.no_answer);
         assert_eq!(problem.http_status, Some(503));
         assert_eq!(problem.message, "HTTP-Status 503");
+    }
+
+    #[test]
+    fn only_a_missing_answer_is_flagged_no_answer() {
+        assert!(!NasProblem::from(&model::ProviderError::Http(500)).no_answer);
+        assert!(
+            !NasProblem::from(&model::ProviderError::CertificateChanged {
+                old: "AA".into(),
+                new: "BB".into(),
+            })
+            .no_answer
+        );
+        assert!(NasProblem::from(&model::ProviderError::Timeout).no_answer);
     }
 }

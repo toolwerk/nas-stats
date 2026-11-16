@@ -312,6 +312,7 @@ struct NasStoreTests {
     static func problem(_ kind: ProblemKind, stops: Bool) -> NasProblem {
         NasProblem(
             kind: kind, message: "Fehler", stopsPolling: stops,
+            noAnswer: kind == .unreachable || kind == .timeout,
             oldFingerprint: nil, newFingerprint: nil, httpStatus: nil
         )
     }
