@@ -12,6 +12,8 @@ struct MetricsRow: View {
     var now: Date = .now
     /// From this disk temperature on the value turns yellow (settings, #21).
     var diskTempWarningC: Double = StatusMetrics.diskTempWarningC
+    /// `false` leaves out the UPS cell, e.g. in the medium widget (#24).
+    var showsUps = true
 
     @Environment(\.locale) private var locale
 
@@ -24,9 +26,11 @@ struct MetricsRow: View {
                  missing: cpuPercent == nil)
             cell("RAM", StatusFormat.percent(ramPercent, fractionDigits: 0, locale: locale),
                  missing: ramPercent == nil)
-            cell("USV", StatusFormat.percent(upsChargePercent, fractionDigits: 0, locale: locale),
-                 color: upsOnBattery ? StatusLevel.critical.color : nil,
-                 missing: upsChargePercent == nil)
+            if showsUps {
+                cell("USV", StatusFormat.percent(upsChargePercent, fractionDigits: 0, locale: locale),
+                     color: upsOnBattery ? StatusLevel.critical.color : nil,
+                     missing: upsChargePercent == nil)
+            }
             cell("Backup", StatusFormat.backupAge(lastBackup, now: now), missing: lastBackup == nil)
         }
     }
