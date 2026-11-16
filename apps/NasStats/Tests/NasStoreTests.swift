@@ -26,6 +26,12 @@ final class FakeCore: NasCoreProtocol {
         /// Number of `startPlanner` and `stopPlanner` calls.
         var plannerStarts = 0
         var plannerStops = 0
+        /// `nasId|json` of every `importHistory` call (#37).
+        var importedHistory: [String] = []
+        /// `nasId|json` of every `applyRemoteState` call (#37).
+        var remoteStates: [String] = []
+        /// `nasId|day` of every `exportDay` call (#37).
+        var exportedDays: [String] = []
         /// Every `importFromCollector` call.
         var imports: [CollectorImportCall] = []
     }
@@ -68,6 +74,10 @@ final class FakeCore: NasCoreProtocol {
     /// collector NAS id instead.
     let importResult = Mutex(CollectorImport(until: 0, samples: 0, hourly: 0, daily: 0, backupRuns: 0))
     let failImport = Mutex<[String: FfiError]>([:])
+    /// What `historyDays` returns, for every NAS (#37).
+    let daysPreset = Mutex<[Int64]>([])
+    /// Events per NAS id that an `importHistory` brings into the archive.
+    let importedEvents = Mutex<[String: [NasEvent]]>([:])
 
     init(states: [NasState] = [], restorable: [String: Snapshot] = [:]) {
         presets = Mutex(Dictionary(uniqueKeysWithValues: states.map { ($0.nasId, $0) }))
@@ -204,6 +214,47 @@ final class FakeCore: NasCoreProtocol {
     }
 
     func backupRuns(nasId: String, from: Int64, to: Int64) throws -> [BackupRun] { [] }
+
+    /// `day:<nasId>:<day>` for every day of `daysPreset`.
+    func exportDay(nasId: String, day: Int64) throws -> String? {
+        log.withLock { $0.exportedDays.append("\(nasId)|\(day)") }
+        return daysPreset.withLock { $0.contains(day) } ? "day:\(nasId):\(day)" : nil
+    }
+
+    func exportRecent(nasId: String) throws -> String? { "recent:\(nasId)" }
+
+    func historyDays(nasId: String) throws -> [Int64] { daysPreset.withLock { $0 } }
+
+    func importHistory(nasId: String, json: String) throws -> [NasEvent] {
+        log.withLock { $0.importedHistory.append("\(nasId)|\(json)") }
+        guard registered.withLock({ $0[nasId] }) != nil else {
+            throw FfiError.UnknownNas(id: nasId)
+        }
+        guard let events = importedEvents.withLock({ $0.removeValue(forKey: nasId) }) else { return [] }
+        presetEvents.withLock { $0[nasId, default: []] += events }
+        return events
+    }
+
+    /// Takes a restorable snapshot when it is newer than the own one.
+    func applyRemoteState(nasId: String, json: String) throws -> Bool {
+        log.withLock { $0.remoteStates.append("\(nasId)|\(json)") }
+        guard let state = registered.withLock({ $0[nasId] }) else {
+            throw FfiError.UnknownNas(id: nasId)
+        }
+        guard let snapshot = restorable.withLock({ $0[json] }) else {
+            throw FfiError.InvalidInput(detail: "kaputt")
+        }
+        if let own = state.snapshot, own.observedAt >= snapshot.observedAt {
+            return false
+        }
+        registered.withLock { $0[nasId]?.snapshot = snapshot }
+        return true
+    }
+
+    /// Makes `json` a state `restoreState` and `applyRemoteState` take.
+    func makeRestorable(_ json: String, _ snapshot: Snapshot) {
+        restorable.withLock { $0[json] = snapshot }
+    }
 
     func importFromCollector(
         baseUrl: String, fingerprint: String, token: String, collectorNasId: String,

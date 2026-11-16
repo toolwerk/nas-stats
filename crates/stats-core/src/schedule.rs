@@ -301,6 +301,26 @@ impl Schedule {
         }
     }
 
+    /// Takes a snapshot another device read (#37) when it is newer than
+    /// the own one or there is none. A snapshot read after the start of the
+    /// last own query also clears the error of that query: the NAS answered
+    /// since. Block, time of the last query and a query in flight stay.
+    /// `true` when it was taken; `false` for an older one or an unknown NAS.
+    pub fn take_newer_snapshot(&mut self, nas_id: &str, snapshot: Snapshot) -> bool {
+        let observed_at = snapshot.observed_at;
+        if !self.offer_snapshot(nas_id, snapshot) {
+            return false;
+        }
+        if let Some(entry) = self.entries.get_mut(nas_id) {
+            let state = &mut entry.state;
+            if state.last_attempt_at.is_none_or(|last| observed_at > last) {
+                state.error = None;
+                state.error_at = None;
+            }
+        }
+        true
+    }
+
     /// Hands back what the app remembers across launches, keeping what is
     /// stricter: a known block stays, a later own query counts over an
     /// older time, and a NAS with a query in flight is left alone. When
@@ -431,6 +451,60 @@ mod tests {
             schedule.state("nas-1").expect("registered").snapshot,
             Some(snapshot(T0 + 1))
         );
+    }
+
+    #[test]
+    fn a_newer_snapshot_of_another_device_clears_only_an_older_error() {
+        let mut schedule = Schedule::new(300);
+        assert!(!schedule.take_newer_snapshot("nas-1", snapshot(T0)));
+        schedule.add("nas-1", None, false);
+        poll(&mut schedule, T0, Ok(snapshot(T0)));
+        poll(
+            &mut schedule,
+            T0 + 300,
+            Err(ProviderError::Unreachable("weg".into())),
+        );
+
+        // Older or the same: the own one stays, so does the error.
+        assert!(!schedule.take_newer_snapshot("nas-1", snapshot(T0)));
+        assert!(!schedule.take_newer_snapshot("nas-1", snapshot(T0 - 60)));
+        let state = schedule.state("nas-1").expect("registered");
+        assert_eq!(state.snapshot, Some(snapshot(T0)));
+        assert!(state.error.is_some());
+
+        // Newer, but read before the own failed query: the error stays.
+        assert!(schedule.take_newer_snapshot("nas-1", snapshot(T0 + 200)));
+        let state = schedule.state("nas-1").expect("registered");
+        assert_eq!(state.snapshot, Some(snapshot(T0 + 200)));
+        assert!(state.error.is_some());
+
+        // Read after it: the NAS answered since, the error goes; the time of
+        // the last query stays.
+        assert!(schedule.take_newer_snapshot("nas-1", snapshot(T0 + 400)));
+        let state = schedule.state("nas-1").expect("registered");
+        assert_eq!(state.snapshot, Some(snapshot(T0 + 400)));
+        assert_eq!(state.error, None);
+        assert_eq!(state.error_at, None);
+        assert_eq!(state.last_attempt_at, Some(T0 + 300));
+    }
+
+    #[test]
+    fn a_newer_snapshot_keeps_the_block_and_a_running_query() {
+        let mut schedule = Schedule::new(300);
+        schedule.add("nas-1", Some(T0), true);
+        assert!(schedule.take_newer_snapshot("nas-1", snapshot(T0 + 60)));
+        assert!(schedule.state("nas-1").expect("registered").blocked);
+
+        let mut schedule = Schedule::new(300);
+        schedule.add("nas-1", None, false);
+        let generation = schedule.begin("nas-1", T0).expect("query starts");
+        assert!(schedule.take_newer_snapshot("nas-1", snapshot(T0 + 10)));
+        assert!(schedule.state("nas-1").expect("registered").running);
+        // The own query still counts when it ends.
+        let state = schedule
+            .finish("nas-1", generation, T0 + 20, Ok(snapshot(T0 + 20)))
+            .expect("recorded");
+        assert_eq!(state.snapshot, Some(snapshot(T0 + 20)));
     }
 
     #[test]

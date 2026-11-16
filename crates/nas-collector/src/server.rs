@@ -327,6 +327,7 @@ mod tests {
             hourly: Vec::new(),
             daily: Vec::new(),
             backup_runs: Vec::new(),
+            events: Vec::new(),
         };
         store.import(&export, "keller", T0).expect("history");
         export.samples[0].at = T0 - 300;

@@ -4,8 +4,13 @@
 //! Texts are stored as in the database: the metric as its name (`disk.temp`),
 //! an empty key for a value of the whole NAS, the backup result as its serde
 //! name (`ok`). A reader skips rows it does not know, so a newer collector
-//! can add metrics without breaking an older app. Events are not part of the
-//! export: the app detects them itself.
+//! can add metrics without breaking an older app. The collector sends no
+//! events: the app detects them itself.
+//!
+//! The Mac hands the same format to the iPhone over iCloud (#37), one UTC
+//! day of hourly and daily values with its events and backup runs
+//! ([`crate::HistoryStore::export_day`]) and the raw samples of the last
+//! 24 hours ([`crate::HistoryStore::export_recent`]).
 //!
 //! [`crate::HistoryStore::export`] writes it, [`crate::HistoryStore::import`]
 //! reads it into the archive of the app.
@@ -34,6 +39,10 @@ pub struct Export {
     pub daily: Vec<ExportBucket>,
     /// Backup runs.
     pub backup_runs: Vec<ExportBackupRun>,
+    /// Events, only between the devices of the user (#37); the collector
+    /// sends none, and its JSON has no such field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<ExportEvent>,
 }
 
 /// One NAS of the collector as `GET /v1/nas` lists it.
@@ -94,6 +103,22 @@ pub struct ExportBackupRun {
     pub message: Option<String>,
 }
 
+/// One event, as stored in the archive.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportEvent {
+    /// Serde name of the kind, e.g. `disk_temperature`.
+    pub kind: String,
+    /// Disk, volume, task, fan or alert text; empty for the whole NAS.
+    pub subject: String,
+    /// Unix seconds UTC.
+    pub started_at: i64,
+    /// `None` while the event is open.
+    pub ended_at: Option<i64>,
+    /// `ok`, `warning` or `critical`.
+    pub level: String,
+    pub text: String,
+}
+
 /// What an import took over: rows that were new or changed, per kind;
 /// rows already stored with the same values do not count.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -102,4 +127,5 @@ pub struct ImportCount {
     pub hourly: u32,
     pub daily: u32,
     pub backup_runs: u32,
+    pub events: u32,
 }
