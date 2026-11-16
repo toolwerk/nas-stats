@@ -213,14 +213,14 @@ final class FakeCore: NasCoreProtocol {
 
     func historyDays(nasId: String) throws -> [Int64] { daysPreset.withLock { $0 } }
 
-    func importHistory(nasId: String, json: String) throws {
+    func importHistory(nasId: String, json: String) throws -> [NasEvent] {
         log.withLock { $0.importedHistory.append("\(nasId)|\(json)") }
         guard registered.withLock({ $0[nasId] }) != nil else {
             throw FfiError.UnknownNas(id: nasId)
         }
-        if let events = importedEvents.withLock({ $0.removeValue(forKey: nasId) }) {
-            presetEvents.withLock { $0[nasId, default: []] += events }
-        }
+        guard let events = importedEvents.withLock({ $0.removeValue(forKey: nasId) }) else { return [] }
+        presetEvents.withLock { $0[nasId, default: []] += events }
+        return events
     }
 
     /// Takes a restorable snapshot when it is newer than the own one.

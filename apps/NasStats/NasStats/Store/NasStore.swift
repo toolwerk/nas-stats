@@ -728,13 +728,13 @@ final class NasStore {
         var complete = true
         for (key, ofNas) in Dictionary(grouping: records, by: \.nasId) {
             guard let id = UUID(uuidString: key), accounts.isRegistered(id) else { continue }
-            let openBefore = Set(openEvents(of: key).map(EventNotifier.id(of:)))
+            var imported: [NasEvent] = []
             for day in ofNas.filter({ $0.kind == .day }).sorted(by: { $0.time < $1.time }) {
-                complete = importHistory(day.payloadText, of: key) && complete
+                complete = importHistory(day.payloadText, of: key, events: &imported) && complete
             }
             if let state = ofNas.first(where: { $0.kind == .state }) {
                 if state.recent != nil {
-                    complete = importHistory(state.recentText, of: key) && complete
+                    complete = importHistory(state.recentText, of: key, events: &imported) && complete
                 }
                 complete = applyState(state.payloadText, of: key) && complete
             }
@@ -744,34 +744,39 @@ final class NasStore {
             }
             // Only the events that came with the records stay silent; own
             // ones notify as before.
-            let imported = openEvents(of: key).filter { !openBefore.contains(EventNotifier.id(of: $0)) }
             notifier?.adopt(nasId: key, open: imported)
         }
         rebuild()
         return complete
     }
 
-    /// Open events of a NAS in the archive; none when it fails.
-    private func openEvents(of key: String) -> [NasEvent] {
-        ((try? accounts.core.events(nasId: key, from: clock(), to: Int64.max)) ?? []).filter { $0.endedAt == nil }
-    }
-
-    /// `false` when the core refused the history.
-    private func importHistory(_ json: String?, of key: String) -> Bool {
+    /// Adds the open events of the record to `events`. `false` when the
+    /// core could not take it now (archive); a record it can never read
+    /// (other format, broken JSON) is only logged, so it does not hold
+    /// the token forever.
+    private func importHistory(_ json: String?, of key: String, events: inout [NasEvent]) -> Bool {
         do {
-            guard let json else { throw FfiError.InvalidInput(detail: "kein Text") }
-            try accounts.core.importHistory(nasId: key, json: json)
+            guard let json else { throw FfiError.Parse(detail: "kein Text") }
+            events += try accounts.core.importHistory(nasId: key, json: json)
             return true
         } catch {
             Self.logger.error("History of the Mac refused: \(String(describing: error), privacy: .public)")
-            return false
+            return Self.isLasting(error)
+        }
+    }
+
+    /// An error that comes again with the same record.
+    private static func isLasting(_ error: any Error) -> Bool {
+        switch error as? FfiError {
+        case .Parse, .InvalidInput: true
+        default: false
         }
     }
 
     /// Hands the state of the Mac to the core; `false` when it refused it.
     private func applyState(_ json: String?, of key: String) -> Bool {
         do {
-            guard let json else { throw FfiError.InvalidInput(detail: "kein Text") }
+            guard let json else { throw FfiError.Parse(detail: "kein Text") }
             let core = accounts.core
             if try core.applyRemoteState(nasId: key, json: json),
                core.states().first(where: { $0.nasId == key })?.problem == nil {
@@ -781,7 +786,7 @@ final class NasStore {
             return true
         } catch {
             Self.logger.error("State of the Mac refused: \(String(describing: error), privacy: .public)")
-            return false
+            return Self.isLasting(error)
         }
     }
 

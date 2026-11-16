@@ -114,9 +114,10 @@ struct CloudKitDatabase: CloudDatabase {
         do {
             while true {
                 let changes = try await database.recordZoneChanges(inZoneWith: zoneID, since: serverToken)
+                // A record that did not come throws, so the token stays and
+                // it comes with the next fetch.
                 for (_, result) in changes.modificationResultsByID {
-                    guard case .success(let modification) = result else { continue }
-                    if let record = Self.cloudRecord(modification.record) {
+                    if let record = try Self.cloudRecord(result.get().record) {
                         records.append(record)
                     }
                 }
@@ -189,7 +190,8 @@ struct CloudKitDatabase: CloudDatabase {
     }
 
     /// The record of the transfer; `nil` for another type or missing fields.
-    private static func cloudRecord(_ ck: CKRecord) -> CloudRecord? {
+    /// An asset that does not read throws.
+    private static func cloudRecord(_ ck: CKRecord) throws -> CloudRecord? {
         guard let kind = CloudRecord.Kind(rawValue: ck.recordType),
               let nasId = ck["nasId"] as? String,
               let payload = ck["payload"] as? Data
@@ -201,7 +203,11 @@ struct CloudKitDatabase: CloudDatabase {
         case .state: ck["observedAt"] as? Int64
         case .day: ck["day"] as? Int64
         }
-        let recent = (ck["recent"] as? CKAsset)?.fileURL.flatMap { try? Data(contentsOf: $0) }
+        var recent: Data?
+        if let asset = ck["recent"] as? CKAsset {
+            guard let url = asset.fileURL else { throw CocoaError(.fileReadNoSuchFile) }
+            recent = try Data(contentsOf: url)
+        }
         return CloudRecord(
             kind: kind,
             nasId: nasId,

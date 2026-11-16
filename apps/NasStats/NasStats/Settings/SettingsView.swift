@@ -201,7 +201,7 @@ struct SettingsView: View {
         case .upload:
             Text("Überträgt Zustand, Verlauf und Ereignisse der NAS in Ihre private iCloud, ohne Zugänge.")
         case .download:
-            Text("Übernimmt Zustand, Verlauf und Ereignisse der NAS, die auch auf diesem iPhone stehen.")
+            Text("Übernimmt Zustand, Verlauf und Ereignisse der NAS, die auch auf diesem iPhone stehen, über den iCloud-Schlüsselbund geteilt. Ein NAS, das hier getrennt eingetragen ist, bekommt nichts vom Mac.")
         }
         if store.transfersViaICloud {
             switch cloud.status {
