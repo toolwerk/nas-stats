@@ -21,12 +21,20 @@ struct NasStatsApp: App {
     var body: some Scene {
         #if os(iOS)
         WindowGroup {
-            ContentView()
-                .environment(store)
+            TabView {
+                Tab("Übersicht", systemImage: "externaldrive") {
+                    ContentView()
+                }
+                Tab("Einstellungen", systemImage: "gearshape") {
+                    SettingsView()
+                }
+            }
+            .environment(store)
         }
         #else
         // Menu bar only; LSUIElement keeps the app out of the Dock. The
-        // status item and its windows come from `StatusItemController`.
+        // status item and its windows (also the settings, #21) come from
+        // `StatusItemController`.
         Settings {
             EmptyView()
         }
