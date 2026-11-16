@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import WidgetKit
 
 /// The state of every NAS for all screens, the menu bar and later the
 /// widgets: queries the NAS of `NasAccounts` and holds the last state per
@@ -44,11 +45,14 @@ final class NasStore {
         didSet {
             guard queryIntervalMinutes != oldValue else { return }
             defaults.set(queryIntervalMinutes, forKey: Self.queryIntervalKey)
+            // The widget snapshot holds the age from which a state is old.
+            onUpdate?(entries)
         }
     }
 
-    /// Called after every new state with the sorted entries. #23 writes the
-    /// widget snapshot here and reloads the widgets.
+    /// Called after every new state with the sorted entries and after a
+    /// change of the interval; `live()` writes the widget snapshot here and
+    /// reloads the widgets (#23).
     @ObservationIgnored var onUpdate: (@MainActor ([NasEntry]) -> Void)?
 
     static let demoModeKey = "demoMode"
@@ -112,13 +116,33 @@ final class NasStore {
     /// The store of the app: the NAS from the keychain, the demo data of the
     /// core, demo switch and settings in the defaults of the App Group and
     /// a poll round every 5 minutes (each NAS at its `queryIntervalMinutes`).
+    /// Every new state goes into the widget snapshot of the App Group (#23).
     static func live() -> NasStore {
-        NasStore(
+        let store = NasStore(
             accounts: NasAccounts(),
             defaults: UserDefaults(suiteName: AppGroup.id) ?? .standard,
             demoSource: { demoSnapshots(now: $0) },
             pollInterval: .seconds(300)
         )
+        // Previews never touch the file of the real app.
+        guard ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] != "1" else {
+            return store
+        }
+        // Without a container the writer does nothing.
+        let writer = WidgetSnapshotWriter(fileURL: WidgetSnapshot.fileURL) {
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+        store.onUpdate = { [weak store] entries in
+            guard let store else { return }
+            writer.update(WidgetSnapshot(
+                entries: entries,
+                demo: store.demoMode,
+                queryIntervalMinutes: store.queryIntervalMinutes,
+                thresholds: store.thresholds
+            ))
+        }
+        store.onUpdate?(store.entries)
+        return store
     }
 
     /// The core of the accounts, e.g. for the test query of the add dialog.
