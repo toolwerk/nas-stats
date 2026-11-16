@@ -193,6 +193,14 @@ final class FakeCore: NasCoreProtocol {
 
     func backupRuns(nasId: String, from: Int64, to: Int64) throws -> [BackupRun] { [] }
 
+    /// The store does not import yet (#124).
+    func importFromCollector(
+        baseUrl: String, fingerprint: String, token: String, collectorNasId: String,
+        nasId: String, since: Int64?
+    ) async throws -> CollectorImport {
+        CollectorImport(until: 0, samples: 0, hourly: 0, daily: 0, backupRuns: 0)
+    }
+
     func updateCredentials(nasId: String, user: String, password: String) async throws {
         log.withLock {
             $0.updated.append(nasId)
