@@ -245,3 +245,25 @@ struct WidgetSnapshotCarryOverTests {
         #expect(read.nas.first?.status == .ok)
     }
 }
+
+extension WidgetSnapshotCarryOverTests {
+    @Test func theDemoModeDoesNotLoseTheLastLiveState() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nasstats-widget-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent(WidgetSnapshot.fileName)
+        let live = snapshot([nas("a", status: .ok, observedMinutesAgo: 3)])
+        let writer = WidgetSnapshotWriter(fileURL: url) {}
+        writer.update(live)
+        writer.update(snapshot([nas("demo-keller", status: .warning, observedMinutesAgo: 0)], demo: true))
+        writer.update(snapshot([nas("a", status: .unknown, observedMinutesAgo: nil)]))
+        #expect(WidgetSnapshot.load(from: url)?.nas.first?.observedAt == live.nas.first?.observedAt)
+
+        // A demo file of an earlier launch carries nothing over.
+        let demoFirst = WidgetSnapshotWriter(fileURL: url) {}
+        demoFirst.update(snapshot([nas("demo-keller", status: .warning, observedMinutesAgo: 0)], demo: true))
+        let fresh = WidgetSnapshotWriter(fileURL: url) {}
+        fresh.update(snapshot([nas("demo-keller", status: .unknown, observedMinutesAgo: nil)]))
+        #expect(WidgetSnapshot.load(from: url)?.nas.first?.observedAt == nil)
+    }
+}

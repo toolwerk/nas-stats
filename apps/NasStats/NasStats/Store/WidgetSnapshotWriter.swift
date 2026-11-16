@@ -116,8 +116,9 @@ final class WidgetSnapshotWriter {
     private let reload: @MainActor () -> Void
     /// What was written last; stays after a failed write.
     private var lastWritten: WidgetSnapshot?
-    /// Last known state per NAS: what was written last, else the file of
-    /// an earlier launch.
+    /// Last known live state per NAS: the last live snapshot written, else
+    /// the file of an earlier launch. Demo snapshots never replace it, so
+    /// the demo mode does not lose the state of a blocked NAS.
     private var previous: WidgetSnapshot?
 
     /// - Parameters:
@@ -126,7 +127,7 @@ final class WidgetSnapshotWriter {
     init(fileURL: URL?, reload: @escaping @MainActor () -> Void) {
         self.fileURL = fileURL
         self.reload = reload
-        previous = WidgetSnapshot.load(from: fileURL)
+        previous = WidgetSnapshot.load(from: fileURL).flatMap { $0.demo ? nil : $0 }
     }
 
     /// Writes `snapshot` unless it equals the last one written apart from
@@ -150,7 +151,9 @@ final class WidgetSnapshotWriter {
             return
         }
         lastWritten = snapshot
-        previous = snapshot
+        if !snapshot.demo {
+            previous = snapshot
+        }
         reload()
     }
 }
