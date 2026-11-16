@@ -7,10 +7,13 @@ struct NasStatsApp: App {
     /// registered with the core.
     @State private var store: NasStore
     @Environment(\.scenePhase) private var scenePhase
+    /// Takes the silent push of iCloud (#37).
+    @UIApplicationDelegateAdaptor(PhoneAppDelegate.self) private var appDelegate
 
     init() {
         let store = NasStore.live()
         _store = State(initialValue: store)
+        PhoneAppDelegate.store = store
         store.start()
     }
     #else
@@ -38,13 +41,17 @@ struct NasStatsApp: App {
             }
             .environment(store)
         }
-        // Back in the app, due NAS are queried at once (the planner of the
-        // core sleeps while the app is suspended); leaving it asks iOS for
-        // an occasional query in the background.
+        // Back in the app, the records of the Mac in iCloud come first (#37)
+        // and due NAS are queried at once (the planner of the core sleeps
+        // while the app is suspended); leaving it asks iOS for an
+        // occasional query in the background.
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
-                Task { await store.refreshAll() }
+                Task {
+                    await store.fetchFromCloud()
+                    await store.refreshAll()
+                }
             case .background:
                 let minutes = store.queryIntervalMinutes
                 Task { await BackgroundRefresh.schedule(intervalMinutes: minutes) }
@@ -56,6 +63,7 @@ struct NasStatsApp: App {
             // The next run first, so one that ends early still has a successor.
             let minutes = await MainActor.run { store.queryIntervalMinutes }
             await BackgroundRefresh.schedule(intervalMinutes: minutes)
+            await store.fetchFromCloud()
             await store.refreshAll()
         }
         #else

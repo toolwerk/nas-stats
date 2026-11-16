@@ -90,6 +90,19 @@ final class NasStore {
     /// `setSharesAccessViaICloud`.
     private(set) var sharesAccessViaICloud: Bool
 
+    /// Whether state, history and events go over the private iCloud from
+    /// the Mac to the iPhone (#37): the Mac writes them after every new
+    /// snapshot, the iPhone takes them over for the NAS of its own list.
+    /// Off by default, one setting per device, saved under
+    /// `transfersViaICloud`. Change it with `setTransfersViaICloud`.
+    private(set) var transfersViaICloud: Bool
+
+    /// The transfer over iCloud; `nil` transfers nothing (tests, previews).
+    @ObservationIgnored let cloud: CloudTransfer?
+    /// The last upload or fetch started by the store; the tests wait for it.
+    @ObservationIgnored private(set) var cloudWork: Task<Void, Never>?
+
+    static let transfersViaICloudKey = "transfersViaICloud"
     static let sharesAccessViaICloudKey = "sharesAccessViaICloud"
     static let demoModeKey = "demoMode"
     static let queryLogKey = "queryLog"
@@ -154,6 +167,7 @@ final class NasStore {
     ///   kept across launches; by default nowhere.
     /// - Parameter notifier: Notifies the open events after every query;
     ///   by default none.
+    /// - Parameter cloud: Transfer over iCloud (#37); by default none.
     init(
         accounts: NasAccounts,
         defaults: UserDefaults,
@@ -161,9 +175,12 @@ final class NasStore {
         demoCore: @escaping (Int64) -> any NasCoreProtocol = { NasCore.demo(now: $0) },
         clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) },
         lastStates: LastStates = LastStates(fileURL: nil),
-        notifier: EventNotifier? = nil
+        notifier: EventNotifier? = nil,
+        cloud: CloudTransfer? = nil
     ) {
         self.clock = clock
+        self.cloud = cloud
+        self.transfersViaICloud = defaults.bool(forKey: Self.transfersViaICloudKey)
         self.lastStates = lastStates
         self.notifier = notifier
         self.accounts = accounts
@@ -278,7 +295,8 @@ final class NasStore {
             defaults: defaults,
             demoSource: { demoSnapshots(now: $0, thresholds: $1) },
             lastStates: LastStates(fileURL: isPreview ? nil : LastStates.liveURL),
-            notifier: isPreview ? nil : EventNotifier(poster: SystemNotificationPoster(), defaults: defaults)
+            notifier: isPreview ? nil : EventNotifier(poster: SystemNotificationPoster(), defaults: defaults),
+            cloud: isPreview ? nil : CloudTransfer(database: CloudKitDatabase(), defaults: defaults)
         )
         // Previews never touch the files of the real app.
         guard !isPreview else {
@@ -344,6 +362,7 @@ final class NasStore {
         if !demoMode {
             core.startPlanner(listener: listener)
         }
+        cloudWork = Task { _ = await self.fetchFromCloud() }
     }
 
     /// History of a metric of a NAS in a range ending now; in demo mode
@@ -438,6 +457,8 @@ final class NasStore {
         saveLog()
         rebuild()
         requestNotifications()
+        // Its state may be in iCloud already, skipped before (#37).
+        cloudWork = Task { _ = await self.fetchFromCloud() }
     }
 
     /// Removes a NAS from the keychain, the core and the list.
@@ -482,6 +503,46 @@ final class NasStore {
         sharesAccessViaICloud = shares
         defaults.set(shares, forKey: Self.sharesAccessViaICloudKey)
         return failed
+    }
+
+    /// Switches the transfer over iCloud (#37). On, the Mac writes every NAS
+    /// with a state, the iPhone fetches everything there is. Off, the Mac
+    /// deletes what it wrote (the settings ask first) and throws when
+    /// iCloud refuses, the switch stays on then; the iPhone only stops
+    /// taking over and keeps what it took.
+    func setTransfersViaICloud(_ on: Bool) async throws {
+        guard on != transfersViaICloud, let cloud else { return }
+        if !on, cloud.role == .upload {
+            try await cloud.deleteAll()
+        }
+        transfersViaICloud = on
+        defaults.set(on, forKey: Self.transfersViaICloudKey)
+        guard on else { return }
+        switch cloud.role {
+        case .upload:
+            cloud.resume()
+            for state in accounts.core.states() {
+                guard let snapshot = state.snapshot else { continue }
+                upload(state.nasId, observedAt: snapshot.observedAt)
+            }
+            await cloudWork?.value
+        case .download:
+            cloud.resetToken()
+            await fetchFromCloud()
+        }
+    }
+
+    /// iPhone: takes over what the Mac wrote to iCloud since the last fetch
+    /// (#37), for the NAS of this device. Does nothing on the Mac, with
+    /// the switch off and in demo mode. `true` when something came.
+    @discardableResult
+    func fetchFromCloud() async -> Bool {
+        guard let cloud, cloud.role == .download, transfersViaICloud, !demoMode else { return false }
+        let known = Set(accounts.accounts.filter { accounts.isRegistered($0.id) }.map(\.id.uuidString))
+        let count = await cloud.fetch(knownIds: known) { [weak self] records in
+            self?.applyRemote(records) ?? false
+        }
+        return count > 0
     }
 
     /// "Erneut versuchen": starts a blocked NAS again with its stored
@@ -617,6 +678,7 @@ final class NasStore {
                 // A query of `refreshAll` also comes through the listener.
                 if derived[key]?.observedAt != snapshot.observedAt {
                     derived[key] = Self.derive(key, snapshot: snapshot, core: accounts.core, now: clock())
+                    upload(key, observedAt: snapshot.observedAt)
                 }
             }
         }
@@ -642,6 +704,90 @@ final class NasStore {
             open: events.filter { $0.endedAt == nil },
             settings: notificationSettings
         )
+    }
+
+    /// Mac: writes a new state of a NAS to iCloud (#37), not in demo mode
+    /// and only with the switch on.
+    private func upload(_ key: String, observedAt: Int64) {
+        guard let cloud, cloud.role == .upload, transfersViaICloud, !demoMode else { return }
+        let core = accounts.core
+        cloudWork = Task { await cloud.upload(nasId: key, observedAt: observedAt, core: core) }
+    }
+
+    /// iPhone: takes over the records of the Mac (#37), per NAS the days
+    /// first, then the last 24 hours and the state; a state newer than the
+    /// own one replaces it and clears the error of the own query when the
+    /// core cleared it too. Events of the Mac show in the chronicle but
+    /// never notify here: the Mac notifies them. `false` when a record was
+    /// not taken over, so the next fetch brings it again (the core takes
+    /// the rest a second time without change); also in demo mode.
+    private func applyRemote(_ records: [CloudRecord]) -> Bool {
+        guard !demoMode else { return false }
+        guard !records.isEmpty else { return true }
+        let core = accounts.core
+        var complete = true
+        for (key, ofNas) in Dictionary(grouping: records, by: \.nasId) {
+            guard let id = UUID(uuidString: key), accounts.isRegistered(id) else { continue }
+            var imported: [NasEvent] = []
+            for day in ofNas.filter({ $0.kind == .day }).sorted(by: { $0.time < $1.time }) {
+                complete = importHistory(day.payloadText, of: key, events: &imported) && complete
+            }
+            if let state = ofNas.first(where: { $0.kind == .state }) {
+                if state.recent != nil {
+                    complete = importHistory(state.recentText, of: key, events: &imported) && complete
+                }
+                complete = applyState(state.payloadText, of: key) && complete
+            }
+            saveState(of: key)
+            if let snapshot = core.states().first(where: { $0.nasId == key })?.snapshot {
+                derived[key] = Self.derive(key, snapshot: snapshot, core: core, now: clock())
+            }
+            // Only the events that came with the records stay silent; own
+            // ones notify as before.
+            notifier?.adopt(nasId: key, open: imported)
+        }
+        rebuild()
+        return complete
+    }
+
+    /// Adds the open events of the record to `events`. `false` when the
+    /// core could not take it now (archive); a record it can never read
+    /// (other format, broken JSON) is only logged, so it does not hold
+    /// the token forever.
+    private func importHistory(_ json: String?, of key: String, events: inout [NasEvent]) -> Bool {
+        do {
+            guard let json else { throw FfiError.Parse(detail: "kein Text") }
+            events += try accounts.core.importHistory(nasId: key, json: json)
+            return true
+        } catch {
+            Self.logger.error("History of the Mac refused: \(String(describing: error), privacy: .public)")
+            return Self.isLasting(error)
+        }
+    }
+
+    /// An error that comes again with the same record.
+    private static func isLasting(_ error: any Error) -> Bool {
+        switch error as? FfiError {
+        case .Parse, .InvalidInput: true
+        default: false
+        }
+    }
+
+    /// Hands the state of the Mac to the core; `false` when it refused it.
+    private func applyState(_ json: String?, of key: String) -> Bool {
+        do {
+            guard let json else { throw FfiError.Parse(detail: "kein Text") }
+            let core = accounts.core
+            if try core.applyRemoteState(nasId: key, json: json),
+               core.states().first(where: { $0.nasId == key })?.problem == nil {
+                queryErrors[key] = nil
+                testSnapshots[key] = nil
+            }
+            return true
+        } catch {
+            Self.logger.error("State of the Mac refused: \(String(describing: error), privacy: .public)")
+            return Self.isLasting(error)
+        }
     }
 
     /// Takes in every query the planner finished while it had no listener
