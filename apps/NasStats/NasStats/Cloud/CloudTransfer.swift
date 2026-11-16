@@ -53,6 +53,9 @@ final class CloudTransfer {
     @ObservationIgnored private var queue: Task<Void, Never>?
     @ObservationIgnored private var zoneReady = false
     @ObservationIgnored private var subscribed = false
+    /// Set by `deleteAll`: uploads still waiting write nothing, until
+    /// `resume`.
+    @ObservationIgnored private var paused = false
 
     private static let log = Logger(subsystem: "net.staude.nasstats", category: "cloud")
 
@@ -85,18 +88,36 @@ final class CloudTransfer {
         await enqueue { await self.runUpload(nasId: nasId, observedAt: observedAt, core: core) }
     }
 
-    /// Deletes everything this Mac wrote, with the zone. Throws when iCloud
-    /// refuses; the marks stay then.
+    /// Deletes everything this Mac wrote, with the zone, after the upload
+    /// running now; uploads that come later write nothing until `resume`.
+    /// Throws when iCloud refuses; the marks stay then, and uploads go on.
     func deleteAll() async throws {
-        await queue?.value
-        try await database.deleteZone()
+        paused = true
+        let result: Result<Void, any Error> = await enqueue {
+            do {
+                try await self.database.deleteZone()
+                return .success(())
+            } catch {
+                return .failure(error)
+            }
+        }
+        if case .failure(let error) = result {
+            paused = false
+            throw error
+        }
         zoneReady = false
         defaults.removeObject(forKey: Self.uploadsKey)
         defaults.removeObject(forKey: Self.lastTransferKey)
         status = .none
     }
 
+    /// Uploads write again, after the switch went on.
+    func resume() {
+        paused = false
+    }
+
     private func runUpload(nasId: String, observedAt: Int64, core: any NasCoreProtocol) async {
+        guard !paused else { return }
         do {
             guard let state = try core.savedState(nasId: nasId) else { return }
             guard try await database.accountStatus() == .available else {
@@ -148,10 +169,11 @@ final class CloudTransfer {
     /// Fetches what changed since the last fetch and hands the records of
     /// the NAS in `knownIds` to `apply`; others are skipped, as are records
     /// of a newer version. A NAS new in `knownIds` fetches everything again,
-    /// so its records skipped before come now. Returns how many records
-    /// went to `apply`.
+    /// so its records skipped before come now. When `apply` returns `false`
+    /// (a record was not taken over), the token stays, so they come again.
+    /// Returns how many records went to `apply`.
     @discardableResult
-    func fetch(knownIds: Set<String>, apply: @escaping @MainActor ([CloudRecord]) -> Void) async -> Int {
+    func fetch(knownIds: Set<String>, apply: @escaping @MainActor ([CloudRecord]) -> Bool) async -> Int {
         await enqueue { await self.runFetch(knownIds: knownIds, apply: apply) }
     }
 
@@ -161,7 +183,7 @@ final class CloudTransfer {
         defaults.removeObject(forKey: Self.tokenKey)
     }
 
-    private func runFetch(knownIds: Set<String>, apply: @MainActor ([CloudRecord]) -> Void) async -> Int {
+    private func runFetch(knownIds: Set<String>, apply: @MainActor ([CloudRecord]) -> Bool) async -> Int {
         let fetched = Set(defaults.stringArray(forKey: Self.fetchedIdsKey) ?? [])
         if !knownIds.isSubset(of: fetched) {
             resetToken()
@@ -176,14 +198,17 @@ final class CloudTransfer {
                 changes = try await database.changes(since: defaults.data(forKey: Self.tokenKey))
             } catch CloudDatabaseError.tokenExpired {
                 resetToken()
+                // The zone may be new, without the subscription.
+                subscribed = false
                 changes = try await database.changes(since: nil)
             }
             let usable = changes.records.filter { record in
                 record.version <= CloudRecord.version && knownIds.contains(record.nasId)
             }
-            apply(usable)
-            defaults.set(changes.token, forKey: Self.tokenKey)
-            defaults.set(knownIds.sorted(), forKey: Self.fetchedIdsKey)
+            if apply(usable) {
+                defaults.set(changes.token, forKey: Self.tokenKey)
+                defaults.set(knownIds.sorted(), forKey: Self.fetchedIdsKey)
+            }
             if let newest = usable.filter({ $0.kind == .state }).map(\.writtenAt).max() {
                 transferred(at: newest)
             } else {
@@ -192,9 +217,11 @@ final class CloudTransfer {
             await subscribeOnce()
             return usable.count
         } catch CloudDatabaseError.zoneNotFound {
+            // A subscription needs the zone; it follows with the first fetch
+            // that finds one.
             resetToken()
+            subscribed = false
             status = .noData
-            await subscribeOnce()
         } catch {
             fail(connectionErrorText(error))
         }

@@ -362,9 +362,9 @@ struct CloudTransferTests {
         database.put(CloudRecord.state(nasId: "n1", observedAt: 900, payload: "mac", recent: nil, writtenAt: 1_000)!)
         let cloud = transfer(database, role: .download)
         let taken = Taken()
-        await cloud.fetch(knownIds: ["n1"]) { taken.lists.append($0.map(\.name)) }
+        await cloud.fetch(knownIds: ["n1"]) { taken.lists.append($0.map(\.name)); return true }
         database.state.withLock { $0.expireTokens = true }
-        await cloud.fetch(knownIds: ["n1"]) { taken.lists.append($0.map(\.name)) }
+        await cloud.fetch(knownIds: ["n1"]) { taken.lists.append($0.map(\.name)); return true }
         let tokens = database.current.fetchTokens
         #expect(tokens.count == 3)
         #expect(tokens[0] == nil)
@@ -379,9 +379,9 @@ struct CloudTransferTests {
         database.put(CloudRecord.state(nasId: "n2", observedAt: 900, payload: "mac", recent: nil, writtenAt: 1_000)!)
         let cloud = transfer(database, role: .download)
         let taken = Taken()
-        await cloud.fetch(knownIds: ["n1"]) { taken.lists.append($0.map(\.nasId)) }
-        await cloud.fetch(knownIds: ["n1"]) { taken.lists.append($0.map(\.nasId)) }
-        await cloud.fetch(knownIds: ["n1", "n2"]) { taken.lists.append($0.map(\.nasId)) }
+        await cloud.fetch(knownIds: ["n1"]) { taken.lists.append($0.map(\.nasId)); return true }
+        await cloud.fetch(knownIds: ["n1"]) { taken.lists.append($0.map(\.nasId)); return true }
+        await cloud.fetch(knownIds: ["n1", "n2"]) { taken.lists.append($0.map(\.nasId)); return true }
         #expect(taken.lists == [["n1"], [], ["n1", "n2"]])
         #expect(database.current.fetchTokens.last == .some(nil))
     }
@@ -389,11 +389,16 @@ struct CloudTransferTests {
     @Test func noZoneMeansNoDataFromTheMacYet() async throws {
         let database = FakeCloudDatabase()
         let cloud = transfer(database, role: .download)
-        let count = await cloud.fetch(knownIds: ["n1"]) { _ in }
+        let count = await cloud.fetch(knownIds: ["n1"]) { _ in true }
         #expect(count == 0)
         #expect(cloud.status == .noData)
+        // The subscription waits for the zone.
+        #expect(database.current.subscriptions == 0)
+        database.put(CloudRecord.state(nasId: "n1", observedAt: 900, payload: "mac", recent: nil, writtenAt: 1_000)!)
+        await cloud.fetch(knownIds: ["n1"]) { _ in true }
+        #expect(database.current.subscriptions == 1)
         database.state.withLock { $0.status = .noAccount }
-        await cloud.fetch(knownIds: ["n1"]) { _ in }
+        await cloud.fetch(knownIds: ["n1"]) { _ in true }
         #expect(cloud.status == .failed(CloudTransfer.notSignedIn))
     }
 
@@ -406,9 +411,9 @@ struct CloudTransferTests {
             nasId: id, kind: .diskTemperature, subject: "3", level: .warning,
             text: "Platte 3 bei 52 °C", startedAt: 1_000, endedAt: nil
         )
-        core.presetEvents.withLock { $0[id] = [open] }
+        core.importedEvents.withLock { $0[id] = [open] }
         let database = FakeCloudDatabase()
-        database.put(CloudRecord.state(nasId: id, observedAt: 900, payload: "mac:\(id)", recent: nil, writtenAt: 1_000)!)
+        database.put(CloudRecord.state(nasId: id, observedAt: 900, payload: "mac:\(id)", recent: "recent", writtenAt: 1_000)!)
         let poster = FakePoster()
         let notifier = EventNotifier(poster: poster, defaults: defaults)
         await notifier.refreshAuthorization()
@@ -426,6 +431,47 @@ struct CloudTransferTests {
         clock.advance(minutes: 5)
         await store.refreshAll()
         #expect(poster.posts.isEmpty)
+
+        // An own event in the archive before the next records notifies.
+        let own = NasEvent(
+            nasId: id, kind: .volumeFill, subject: "1", level: .warning,
+            text: "Volume 1 zu 85 % voll", startedAt: 2_000, endedAt: nil
+        )
+        core.presetEvents.withLock { $0[id] = [critical, own] }
+        database.put(CloudRecord.day(nasId: id, day: 0, payload: "day", writtenAt: 2_000)!)
+        #expect(await store.fetchFromCloud())
+        clock.advance(minutes: 5)
+        await store.refreshAll()
+        #expect(poster.posts.map(\.id) == [EventNotifier.id(of: own)])
+    }
+
+    @Test func aRecordNotTakenOverComesAgain() async throws {
+        let database = FakeCloudDatabase()
+        database.put(CloudRecord.state(nasId: "n1", observedAt: 900, payload: "mac", recent: nil, writtenAt: 1_000)!)
+        let cloud = transfer(database, role: .download)
+        let taken = Taken()
+        await cloud.fetch(knownIds: ["n1"]) { taken.lists.append($0.map(\.name)); return false }
+        await cloud.fetch(knownIds: ["n1"]) { taken.lists.append($0.map(\.name)); return true }
+        await cloud.fetch(knownIds: ["n1"]) { taken.lists.append($0.map(\.name)); return true }
+        #expect(taken.lists == [["state-n1"], ["state-n1"], []])
+    }
+
+    @Test func uploadsAfterDeletingWriteNothingUntilResumed() async throws {
+        let (core, id) = try await macCore()
+        let database = FakeCloudDatabase()
+        let cloud = transfer(database, role: .upload)
+        await cloud.upload(nasId: id, observedAt: 500, core: core)
+        async let deleted: Void = cloud.deleteAll()
+        async let late: Void = cloud.upload(nasId: id, observedAt: 600, core: core)
+        try await deleted
+        await late
+        #expect(database.current.records.isEmpty)
+        #expect(!database.current.zoneExists)
+        #expect(cloud.uploads.isEmpty)
+
+        cloud.resume()
+        await cloud.upload(nasId: id, observedAt: 700, core: core)
+        #expect(database.current.records.keys.sorted() == ["state-\(id)"])
     }
 
     /// Waits until `condition` holds, at most a second.

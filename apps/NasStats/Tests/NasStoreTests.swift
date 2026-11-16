@@ -64,6 +64,8 @@ final class FakeCore: NasCoreProtocol {
     let forecastPreset = Mutex<[String: Forecast]>([:])
     /// What `historyDays` returns, for every NAS (#37).
     let daysPreset = Mutex<[Int64]>([])
+    /// Events per NAS id that an `importHistory` brings into the archive.
+    let importedEvents = Mutex<[String: [NasEvent]]>([:])
 
     init(states: [NasState] = [], restorable: [String: Snapshot] = [:]) {
         presets = Mutex(Dictionary(uniqueKeysWithValues: states.map { ($0.nasId, $0) }))
@@ -215,6 +217,9 @@ final class FakeCore: NasCoreProtocol {
         log.withLock { $0.importedHistory.append("\(nasId)|\(json)") }
         guard registered.withLock({ $0[nasId] }) != nil else {
             throw FfiError.UnknownNas(id: nasId)
+        }
+        if let events = importedEvents.withLock({ $0.removeValue(forKey: nasId) }) {
+            presetEvents.withLock { $0[nasId, default: []] += events }
         }
     }
 

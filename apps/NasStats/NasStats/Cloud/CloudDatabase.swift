@@ -49,9 +49,9 @@ struct CloudKitDatabase: CloudDatabase {
     static let containerId = "iCloud.net.staude.nasstats"
     static let zoneName = "NasStats"
     static let subscriptionId = "nasstats-changed"
-    /// CloudKit takes at most 400 records per request; smaller blocks keep
-    /// a request well under its size limit.
-    static let blockSize = 50
+    /// A request may carry about 2 MB; a day is up to some 100 KB, so ten
+    /// records stay under it.
+    static let blockSize = 10
 
     private static let log = Logger(subsystem: "net.staude.nasstats", category: "cloud")
 
@@ -70,7 +70,10 @@ struct CloudKitDatabase: CloudDatabase {
     }
 
     func ensureZone() async throws {
-        _ = try await database.modifyRecordZones(saving: [CKRecordZone(zoneID: zoneID)], deleting: [])
+        let (saved, _) = try await database.modifyRecordZones(saving: [CKRecordZone(zoneID: zoneID)], deleting: [])
+        for (_, result) in saved {
+            _ = try result.get()
+        }
     }
 
     func save(_ records: [CloudRecord]) async throws {
@@ -133,8 +136,12 @@ struct CloudKitDatabase: CloudDatabase {
 
     func deleteZone() async throws {
         do {
-            _ = try await database.modifyRecordZones(saving: [], deleting: [zoneID])
-        } catch let error as CKError where error.code == .zoneNotFound {
+            // Errors of the zone itself come in the result, not thrown.
+            let (_, deleted) = try await database.modifyRecordZones(saving: [], deleting: [zoneID])
+            for (_, result) in deleted {
+                try result.get()
+            }
+        } catch let error as CKError where Self.zoneMissing(error) {
             // Gone already.
         }
     }
@@ -144,7 +151,10 @@ struct CloudKitDatabase: CloudDatabase {
         let info = CKSubscription.NotificationInfo()
         info.shouldSendContentAvailable = true
         subscription.notificationInfo = info
-        _ = try await database.modifySubscriptions(saving: [subscription], deleting: [])
+        let (saved, _) = try await database.modifySubscriptions(saving: [subscription], deleting: [])
+        for (_, result) in saved {
+            _ = try result.get()
+        }
     }
 
     private static func zoneMissing(_ error: CKError) -> Bool {

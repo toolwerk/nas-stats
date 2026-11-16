@@ -520,6 +520,7 @@ final class NasStore {
         guard on else { return }
         switch cloud.role {
         case .upload:
+            cloud.resume()
             for state in accounts.core.states() {
                 guard let snapshot = state.snapshot else { continue }
                 upload(state.nasId, observedAt: snapshot.observedAt)
@@ -539,7 +540,7 @@ final class NasStore {
         guard let cloud, cloud.role == .download, transfersViaICloud, !demoMode else { return false }
         let known = Set(accounts.accounts.filter { accounts.isRegistered($0.id) }.map(\.id.uuidString))
         let count = await cloud.fetch(knownIds: known) { [weak self] records in
-            self?.applyRemote(records)
+            self?.applyRemote(records) ?? false
         }
         return count > 0
     }
@@ -715,47 +716,72 @@ final class NasStore {
 
     /// iPhone: takes over the records of the Mac (#37), per NAS the days
     /// first, then the last 24 hours and the state; a state newer than the
-    /// own one replaces it and clears the error of the own query. Events
-    /// of the Mac show in the chronicle but never notify here: the Mac
-    /// notifies them.
-    private func applyRemote(_ records: [CloudRecord]) {
-        guard !records.isEmpty, !demoMode else { return }
+    /// own one replaces it and clears the error of the own query when the
+    /// core cleared it too. Events of the Mac show in the chronicle but
+    /// never notify here: the Mac notifies them. `false` when a record was
+    /// not taken over, so the next fetch brings it again (the core takes
+    /// the rest a second time without change); also in demo mode.
+    private func applyRemote(_ records: [CloudRecord]) -> Bool {
+        guard !demoMode else { return false }
+        guard !records.isEmpty else { return true }
         let core = accounts.core
+        var complete = true
         for (key, ofNas) in Dictionary(grouping: records, by: \.nasId) {
             guard let id = UUID(uuidString: key), accounts.isRegistered(id) else { continue }
+            let openBefore = Set(openEvents(of: key).map(EventNotifier.id(of:)))
             for day in ofNas.filter({ $0.kind == .day }).sorted(by: { $0.time < $1.time }) {
-                importHistory(day.payloadText, of: key)
+                complete = importHistory(day.payloadText, of: key) && complete
             }
             if let state = ofNas.first(where: { $0.kind == .state }) {
-                importHistory(state.recentText, of: key)
-                if let json = state.payloadText {
-                    do {
-                        if try core.applyRemoteState(nasId: key, json: json) {
-                            queryErrors[key] = nil
-                            testSnapshots[key] = nil
-                        }
-                    } catch {
-                        Self.logger.error("State of the Mac refused: \(String(describing: error), privacy: .public)")
-                    }
+                if state.recent != nil {
+                    complete = importHistory(state.recentText, of: key) && complete
                 }
+                complete = applyState(state.payloadText, of: key) && complete
             }
             saveState(of: key)
             if let snapshot = core.states().first(where: { $0.nasId == key })?.snapshot {
                 derived[key] = Self.derive(key, snapshot: snapshot, core: core, now: clock())
             }
-            if let events = try? core.events(nasId: key, from: clock(), to: Int64.max) {
-                notifier?.adopt(nasId: key, open: events.filter { $0.endedAt == nil })
-            }
+            // Only the events that came with the records stay silent; own
+            // ones notify as before.
+            let imported = openEvents(of: key).filter { !openBefore.contains(EventNotifier.id(of: $0)) }
+            notifier?.adopt(nasId: key, open: imported)
         }
         rebuild()
+        return complete
     }
 
-    private func importHistory(_ json: String?, of key: String) {
-        guard let json else { return }
+    /// Open events of a NAS in the archive; none when it fails.
+    private func openEvents(of key: String) -> [NasEvent] {
+        ((try? accounts.core.events(nasId: key, from: clock(), to: Int64.max)) ?? []).filter { $0.endedAt == nil }
+    }
+
+    /// `false` when the core refused the history.
+    private func importHistory(_ json: String?, of key: String) -> Bool {
         do {
+            guard let json else { throw FfiError.InvalidInput(detail: "kein Text") }
             try accounts.core.importHistory(nasId: key, json: json)
+            return true
         } catch {
             Self.logger.error("History of the Mac refused: \(String(describing: error), privacy: .public)")
+            return false
+        }
+    }
+
+    /// Hands the state of the Mac to the core; `false` when it refused it.
+    private func applyState(_ json: String?, of key: String) -> Bool {
+        do {
+            guard let json else { throw FfiError.InvalidInput(detail: "kein Text") }
+            let core = accounts.core
+            if try core.applyRemoteState(nasId: key, json: json),
+               core.states().first(where: { $0.nasId == key })?.problem == nil {
+                queryErrors[key] = nil
+                testSnapshots[key] = nil
+            }
+            return true
+        } catch {
+            Self.logger.error("State of the Mac refused: \(String(describing: error), privacy: .public)")
+            return false
         }
     }
 
