@@ -21,20 +21,31 @@ enum StatusFormat {
         return (value * factor).rounded(.down) / factor
     }
 
-    /// "19,0 von 21,8 TB" in steps of 1024, like the NAS web interfaces.
-    /// Nil if used or total is missing.
-    static func capacity(used: UInt64?, total: UInt64?, locale: Locale = .current) -> String? {
-        guard let used, let total else { return nil }
-        let units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    private static let byteUnits = ["B", "KB", "MB", "GB", "TB", "PB"]
+
+    /// Scales a size down in steps of 1024 until it fits the unit. Rounds to
+    /// one decimal before it picks the unit: 1023,96 MB is "1 GB", not
+    /// "1.024 MB" (#86).
+    private static func scaleToUnit(_ value: UInt64) -> (scaled: Double, index: Int) {
         var index = 0
-        var scaled = Double(total)
-        while scaled >= 1024, index < units.count - 1 {
+        var scaled = Double(value)
+        while (scaled * 10).rounded() / 10 >= 1024, index < byteUnits.count - 1 {
             scaled /= 1024
             index += 1
         }
+        return (scaled, index)
+    }
+
+    /// "19,0 von 21,8 TB" in steps of 1024, like the NAS web interfaces. The
+    /// unit follows the total after rounding to one decimal, so a total just
+    /// below 1 TB reads "1,0 TB", not "1.024,0 GB" (#86).
+    /// Nil if used or total is missing.
+    static func capacity(used: UInt64?, total: UInt64?, locale: Locale = .current) -> String? {
+        guard let used, let total else { return nil }
+        let (scaled, index) = scaleToUnit(total)
         let divisor = pow(1024, Double(index))
         let format = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(1)).locale(locale)
-        return "\((Double(used) / divisor).formatted(format)) von \(scaled.formatted(format)) \(units[index])"
+        return "\((Double(used) / divisor).formatted(format)) von \(scaled.formatted(format)) \(byteUnits[index])"
     }
 
     /// "52 °C"; a missing value is "n/a".
@@ -102,16 +113,9 @@ enum StatusFormat {
     /// a missing value is "n/a".
     static func bytes(_ bytes: UInt64?, locale: Locale = .current) -> String {
         guard let bytes else { return notAvailable }
-        let units = ["B", "KB", "MB", "GB", "TB", "PB"]
-        var index = 0
-        var scaled = Double(bytes)
-        // 1023,96 MB rounds to "1 GB", not "1.024 MB".
-        while (scaled * 10).rounded() / 10 >= 1024, index < units.count - 1 {
-            scaled /= 1024
-            index += 1
-        }
+        let (scaled, index) = scaleToUnit(bytes)
         let number = scaled.formatted(.number.precision(.fractionLength(0...1)).locale(locale))
-        return "\(number) \(units[index])"
+        return "\(number) \(byteUnits[index])"
     }
 
     /// Throughput of an interface in MB/s (steps of 10^6, like the NAS web

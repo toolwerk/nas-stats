@@ -40,6 +40,13 @@ struct StatusFormatTests {
             StatusFormat.capacity(used: 20_904_000_000_000, total: 24_000_000_000_000, locale: de)
                 == "19,0 von 21,8 TB")
         #expect(StatusFormat.capacity(used: 512, total: 2048, locale: de) == "0,5 von 2,0 KB")
+        // Rounds before it picks the unit (#86).
+        #expect(
+            StatusFormat.capacity(used: 549_755_813_888, total: 1_099_470_000_000, locale: de)
+                == "0,5 von 1,0 TB")
+        #expect(
+            StatusFormat.capacity(used: 0, total: 1_099_400_000_000, locale: de)
+                == "0,0 von 1.023,9 GB")
         #expect(StatusFormat.capacity(used: nil, total: 2048, locale: de) == nil)
         #expect(StatusFormat.capacity(used: 1, total: nil, locale: de) == nil)
     }
