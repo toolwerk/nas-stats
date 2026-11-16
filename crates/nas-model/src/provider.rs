@@ -55,6 +55,20 @@ impl ProviderError {
                 | ProviderError::CertificateChanged { .. }
         )
     }
+
+    /// Whether the NAS gave no answer: no connection, a time-out, or HTTP
+    /// 502, 503 or 504, which a reverse proxy sends when the NAS behind it
+    /// is gone.
+    ///
+    /// Other errors (a refused login, missing rights, a changed certificate,
+    /// an unreadable answer, any other HTTP status) came from the NAS
+    /// itself and do not count.
+    pub fn is_no_answer(&self) -> bool {
+        matches!(
+            self,
+            ProviderError::Unreachable(_) | ProviderError::Timeout | ProviderError::Http(502..=504)
+        )
+    }
 }
 
 /// Read-only access to one NAS.
@@ -134,5 +148,32 @@ mod tests {
         ];
         assert!(stopping.iter().all(ProviderError::stops_polling));
         assert!(!continuing.iter().any(ProviderError::stops_polling));
+    }
+
+    #[test]
+    fn only_no_connection_timeout_and_gateway_errors_are_no_answer() {
+        let no_answer = [
+            ProviderError::Unreachable("x".into()),
+            ProviderError::Timeout,
+            ProviderError::Http(502),
+            ProviderError::Http(503),
+            ProviderError::Http(504),
+        ];
+        let answer = [
+            ProviderError::LoginFailed,
+            ProviderError::SecondFactorRequired,
+            ProviderError::PermissionDenied,
+            ProviderError::CertificateChanged {
+                old: "aa".into(),
+                new: "bb".into(),
+            },
+            ProviderError::Parse("x".into()),
+            ProviderError::Http(401),
+            ProviderError::Http(500),
+            ProviderError::Http(501),
+            ProviderError::Http(505),
+        ];
+        assert!(no_answer.iter().all(ProviderError::is_no_answer));
+        assert!(!answer.iter().any(ProviderError::is_no_answer));
     }
 }

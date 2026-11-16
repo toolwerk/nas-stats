@@ -26,7 +26,8 @@
 //! Every finished query goes into the history archive: the samples of a
 //! snapshot, and the events found with the thresholds set (standard: disk
 //! 50 °C, volume 80 and 90 %), "unreachable" 15 minutes after the last
-//! snapshot without an answer.
+//! snapshot without an answer (no connection, time-out, HTTP 502/503/504 of
+//! a proxy).
 //! An error of the archive never stops a query or the callback. The archive
 //! lives in a file ([`NasCore::with_history`]) or in memory.
 //!
@@ -244,7 +245,7 @@ impl PollSink for Sink {
 }
 
 /// Writes one finished query: after a success the snapshot and the events
-/// it opens, raises or closes by `thresholds`; after no answer (unreachable, time-out) an
+/// it opens, raises or closes by `thresholds`; after no answer (unreachable, time-out, HTTP 502/503/504 of a proxy) an
 /// "unreachable" event when the last snapshot is 15 minutes old. Without
 /// any snapshot nothing.
 fn archive(
@@ -257,12 +258,10 @@ fn archive(
         return Ok(());
     };
     let changes = if let Some(error) = &state.error {
-        // Only a NAS that gave no answer is unreachable; a refused login or
-        // an odd answer still came from it.
-        if !matches!(
-            error,
-            ProviderError::Unreachable(_) | ProviderError::Timeout
-        ) {
+        // Only a NAS that gave no answer is unreachable (no connection,
+        // time-out, HTTP 502/503/504 of a proxy); a refused login or an odd
+        // answer still came from it.
+        if !error.is_no_answer() {
             return Ok(());
         }
         let open = open_events(store, &state.nas_id)?;
@@ -2099,6 +2098,52 @@ mod tests {
             .await
             .expect("refused");
         assert!(state.blocked);
+        assert!(h.core.events(None, 0, i64::MAX).expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_gateway_error_15_minutes_after_the_last_snapshot_opens_unreachable() {
+        for status in [502, 503, 504] {
+            let backend = FakeBackend::answering(vec![
+                Ok(model_snapshot(10.0)),
+                Err(ProviderError::Http(status)),
+            ]);
+            let h = harness(backend);
+            h.core
+                .add_nas(config("nas-1"), "u".into(), "p".into())
+                .expect("add");
+            h.core.clone().refresh("nas-1".into()).await.expect("first");
+            h.set_time(T0 + 3 * MIN_INTERVAL_SECS);
+            h.core
+                .clone()
+                .refresh("nas-1".into())
+                .await
+                .expect("failed");
+            let events = h.core.events(None, T0, T0 + DAY).expect("events");
+            assert_eq!(events.len(), 1, "HTTP {status}");
+            assert_eq!(events[0].kind, crate::records::EventKind::Unreachable);
+            assert_eq!(events[0].started_at, T0);
+            assert_eq!(events[0].ended_at, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_http_error_of_the_nas_itself_is_no_unreachable_nas() {
+        let backend = FakeBackend::answering(vec![
+            Ok(model_snapshot(10.0)),
+            Err(ProviderError::Http(500)),
+        ]);
+        let h = harness(backend);
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        h.core.clone().refresh("nas-1".into()).await.expect("first");
+        h.set_time(T0 + 3 * MIN_INTERVAL_SECS);
+        h.core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("failed");
         assert!(h.core.events(None, 0, i64::MAX).expect("events").is_empty());
     }
 
