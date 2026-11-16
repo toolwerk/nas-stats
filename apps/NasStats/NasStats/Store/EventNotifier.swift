@@ -16,6 +16,8 @@ protocol NotificationPoster: AnyObject {
     func isDenied() async -> Bool
     /// Whether the system shows notifications of the app now.
     func isAuthorized() async -> Bool
+    /// Gives every pending notification a new delay (`nil`: at once).
+    func reschedulePending(delay: TimeInterval?)
 }
 
 /// Turns the open events of the core (#10) into notifications (#39): one
@@ -27,6 +29,7 @@ final class EventNotifier {
     /// What the notifier remembers of an open event.
     struct Notified: Codable, Equatable {
         var nasId: String
+        var category: NotificationCategory
         /// Already critical when last seen; a rise to critical notifies again.
         var critical: Bool
         /// Whether a notification went out; not while its kind was off.
@@ -98,12 +101,37 @@ final class EventNotifier {
                 if enabled {
                     post(event, id: id, name: name, settings: settings)
                 }
-                notified[id] = Notified(nasId: nasId, critical: critical, posted: enabled)
+                notified[id] = Notified(
+                    nasId: nasId,
+                    category: NotificationCategory(event.kind),
+                    critical: critical,
+                    posted: enabled
+                )
             }
         }
         let ended = notified.filter { $0.value.nasId == nasId && !openIds.contains($0.key) }
         withdraw(Array(ended.keys))
         save()
+    }
+
+    /// Follows a change of the settings: a kind switched off withdraws its
+    /// notifications, its events stay silent; changed quiet hours move the
+    /// pending notifications to their new end, or release them at once.
+    func apply(_ settings: NotificationSettings, previous: NotificationSettings) {
+        let silenced = notified.filter { $0.value.posted && !settings.isEnabled($0.value.category) }
+        if !silenced.isEmpty {
+            poster.withdraw(ids: silenced.keys.sorted())
+            for id in silenced.keys {
+                notified[id]?.posted = false
+            }
+            save()
+        }
+        if settings.quietHours != previous.quietHours {
+            let delay = settings.quietHours.enabled
+                ? settings.quietHours.delay(at: clock(), calendar: calendar)
+                : nil
+            poster.reschedulePending(delay: delay)
+        }
     }
 
     /// Withdraws every notification of a removed NAS and forgets its events.

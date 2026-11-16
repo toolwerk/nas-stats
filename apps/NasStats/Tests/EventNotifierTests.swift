@@ -17,6 +17,8 @@ final class FakePoster: NotificationPoster {
     private(set) var authorizationRequests = 0
     var denied = false
     var authorized = true
+    /// Delay of every `reschedulePending` call.
+    private(set) var rescheduled: [TimeInterval?] = []
 
     func post(id: String, group: String, title: String, body: String, delay: TimeInterval?) {
         posts.append(Post(id: id, group: group, title: title, body: body, delay: delay))
@@ -33,6 +35,10 @@ final class FakePoster: NotificationPoster {
     func isDenied() async -> Bool { denied }
 
     func isAuthorized() async -> Bool { authorized }
+
+    func reschedulePending(delay: TimeInterval?) {
+        rescheduled.append(delay)
+    }
 }
 
 @MainActor
@@ -139,6 +145,35 @@ struct EventNotifierTests {
         settings.quietHours.enabled = true
         notifier.update(nasId: Self.nas, name: "Keller", open: [Self.event()], settings: settings)
         #expect(poster.posts.first?.delay == 8 * 3600.0)
+    }
+
+    @Test func switchingAKindOffWithdrawsItsNotifications() async {
+        let notifier = await notifier()
+        let disk = Self.event()
+        let ups = Self.event(.upsOnBattery, subject: nil, text: "USV im Akkubetrieb")
+        notifier.update(nasId: Self.nas, name: "Keller", open: [disk, ups], settings: .init())
+        var off = NotificationSettings()
+        off.disabled = [.disks]
+        notifier.apply(off, previous: .init())
+        #expect(poster.withdrawn == [EventNotifier.id(of: disk)])
+
+        // Switched on again, the event stays silent and is not withdrawn twice.
+        notifier.apply(.init(), previous: off)
+        notifier.update(nasId: Self.nas, name: "Keller", open: [disk, ups], settings: .init())
+        #expect(poster.posts.count == 2)
+        #expect(poster.withdrawn.count == 1)
+        #expect(poster.rescheduled.isEmpty)
+    }
+
+    @Test func changedQuietHoursMovePendingNotifications() async {
+        let notifier = await notifier(at: Self.berlin(23))
+        var quiet = NotificationSettings()
+        quiet.quietHours.enabled = true
+        var later = quiet
+        later.quietHours.endMinute = 8 * 60
+        notifier.apply(later, previous: quiet)
+        notifier.apply(.init(), previous: later)
+        #expect(poster.rescheduled == [9 * 3600.0, nil])
     }
 
     @Test func withoutPermissionAnEventWaitsUntilItIsGiven() async {

@@ -35,6 +35,20 @@ final class SystemNotificationPoster: NSObject, NotificationPoster, UNUserNotifi
         center.removeDeliveredNotifications(withIdentifiers: ids)
     }
 
+    func reschedulePending(delay: TimeInterval?) {
+        Task {
+            for request in await center.pendingNotificationRequests() {
+                let trigger = delay.flatMap {
+                    $0 > 0 ? UNTimeIntervalNotificationTrigger(timeInterval: $0, repeats: false) : nil
+                }
+                // The same id replaces the pending request.
+                try? await center.add(UNNotificationRequest(
+                    identifier: request.identifier, content: request.content, trigger: trigger
+                ))
+            }
+        }
+    }
+
     func requestAuthorization() async {
         do {
             _ = try await center.requestAuthorization(options: [.alert, .sound])

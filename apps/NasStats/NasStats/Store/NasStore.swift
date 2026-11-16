@@ -59,6 +59,7 @@ final class NasStore {
         didSet {
             guard notificationSettings != oldValue else { return }
             notificationSettings.save(to: defaults)
+            notifier?.apply(notificationSettings, previous: oldValue)
         }
     }
 
