@@ -208,19 +208,27 @@ fn check_nas(raw: RawNas) -> Result<NasConfig, ConfigError> {
     })
 }
 
-/// A TOML error as line and message, without the text of the file. On a
-/// line of a password even the message stays out, as it may quote the value.
+/// A TOML error as line and message, without the text of the file. Only
+/// messages that quote a field name pass; any other may quote a value,
+/// e.g. a password, and becomes a plain "invalid".
 fn syntax_error(text: &str, e: &toml::de::Error) -> ConfigError {
-    let Some(span) = e.span() else {
-        return ConfigError(format!("TOML: {}", e.message()));
+    let message = e.message();
+    let names_a_field = ["unknown field", "missing field", "duplicate key"]
+        .iter()
+        .any(|start| message.starts_with(start));
+    let message = if names_a_field {
+        message
+    } else {
+        "ungültiger Wert oder ungültige Schreibweise"
     };
-    let start = span.start.min(text.len());
-    let line_no = text[..start].matches('\n').count() + 1;
-    let line = text.lines().nth(line_no - 1).unwrap_or_default();
-    if line.trim_start().starts_with("password") {
-        return ConfigError(format!("Zeile {line_no}: password ist kein gültiger Text"));
+    match e.span() {
+        Some(span) => {
+            let start = span.start.min(text.len());
+            let line_no = text[..start].matches('\n').count() + 1;
+            ConfigError(format!("Zeile {line_no}: {message}"))
+        }
+        None => ConfigError(format!("TOML: {message}")),
     }
-    ConfigError(format!("Zeile {line_no}: {}", e.message()))
 }
 
 #[cfg(test)]
@@ -303,6 +311,15 @@ mod tests {
             nas("a").replace("password = \"geheim-123\"", "password = 1234567"),
             nas("a").replace("password = \"geheim-123\"", "password = \"\""),
             format!("{}\nunbekannt = 1\n", nas("a")),
+            nas("a").replace("password = \"geheim-123\"", "\"password\" = 1234567"),
+            nas("a").replace(
+                "password = \"geheim-123\"",
+                "user2 = 1\npassword = [\"geheim-123\"]",
+            ),
+            format!(
+                "nas = [{{ id = \"a\", provider = \"qnap\", base_url = \"https://x\", \
+                 fingerprint = \"{FP}\", user = \"u\", password = 1234567 }}]"
+            ),
         ];
         for text in cases {
             let message = error(&text);
