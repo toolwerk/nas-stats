@@ -187,6 +187,12 @@ impl Planner {
         self.lock().schedule.restore_snapshot(nas_id, snapshot)
     }
 
+    /// Takes a snapshot of another device when it is newer
+    /// ([`Schedule::take_newer_snapshot`]); `true` when the NAS took it.
+    pub fn take_newer_snapshot(&self, nas_id: &str, snapshot: Snapshot) -> bool {
+        self.lock().schedule.take_newer_snapshot(nas_id, snapshot)
+    }
+
     /// Hands back the remembered time of the last query and the block
     /// ([`Schedule::restore_poll`]); `false` for an unknown NAS.
     pub fn restore_poll(&self, nas_id: &str, last_attempt_at: Option<i64>, blocked: bool) -> bool {
