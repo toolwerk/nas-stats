@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Settings of iPhone (tab) and Mac (window of the menu bar) (#21): the
-/// NAS, iCloud Keychain (#113), query interval, thresholds,
-/// notifications (#39), demo mode and
-/// the privacy note.
+/// NAS, iCloud Keychain (#113), the collector on the NAS (#124), query
+/// interval, thresholds, notifications (#39), demo mode and the privacy
+/// note.
 struct SettingsView: View {
     @Environment(NasStore.self) private var store
     @State private var confirmingStopSharing = false
@@ -16,6 +16,7 @@ struct SettingsView: View {
     #else
     @State private var addingNas = false
     #endif
+    @State private var addingCollector = false
 
     var body: some View {
         NavigationStack {
@@ -24,6 +25,13 @@ struct SettingsView: View {
                 .navigationDestination(for: UUID.self) { id in
                     NasSettingsView(id: id)
                 }
+                .navigationDestination(for: CollectorRoute.self) { _ in
+                    CollectorSettingsView()
+                }
+        }
+        .sheet(isPresented: $addingCollector) {
+            AddCollectorView()
+                .environment(store)
         }
         #if os(macOS)
         .frame(width: 460, height: 640)
@@ -40,6 +48,7 @@ struct SettingsView: View {
         return Form {
             nasSection
             iCloudSection
+            collectorSection
             Section {
                 Picker("Intervall", selection: $store.queryIntervalMinutes) {
                     ForEach(NasStore.intervalChoices, id: \.self) { minutes in
@@ -64,7 +73,7 @@ struct SettingsView: View {
                 Text("Zeigt drei erfundene NAS. Die Werte sind erfunden und stammen von keinem echten Gerät.")
             }
             Section {
-                Text("Keine Telemetrie. Zustand und Verlauf bleiben auf dem Gerät. Zugangsdaten liegen im Schlüsselbund, geteilt nur mit „Zugänge über iCloud-Schlüsselbund teilen“.")
+                Text("Keine Telemetrie. Zustand und Verlauf bleiben auf dem Gerät. Zugangsdaten liegen im Schlüsselbund, geteilt nur mit „Zugänge über iCloud-Schlüsselbund teilen“. Den Sammel-Container fragt NAS Stats nur im Heimnetz ab.")
                     .font(.footnote)
                 LabeledContent("Core") {
                     Text(verbatim: coreVersion())
@@ -151,6 +160,38 @@ struct SettingsView: View {
                         .foregroundStyle(.red)
                 }
             }
+        }
+    }
+
+    // MARK: - Collector
+
+    /// The collector on the NAS (#124): pair, or its state with a link to
+    /// its page.
+    private var collectorSection: some View {
+        Section {
+            if store.collector.paired != nil {
+                NavigationLink(value: CollectorRoute()) {
+                    HStack {
+                        Circle()
+                            .fill(CollectorStatus.color(of: store.collector))
+                            .frame(width: 10, height: 10)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Sammel-Container")
+                            Text(CollectorStatus.text(of: store.collector))
+                                .font(.footnote)
+                                .foregroundStyle(store.collector.error == nil ? Color.secondary : Color.red)
+                        }
+                    }
+                }
+            } else {
+                Button("Container koppeln …", systemImage: "plus") {
+                    addingCollector = true
+                }
+            }
+        } header: {
+            Text("Sammel-Container")
+        } footer: {
+            Text("Holt den Verlauf aus der Zeit, in der die App nicht lief, vom Sammel-Container auf dem NAS. Nur im Heimnetz.")
         }
     }
 
