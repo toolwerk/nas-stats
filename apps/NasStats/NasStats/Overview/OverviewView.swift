@@ -25,9 +25,7 @@ struct OverviewView: View {
                 }
             }
             .navigationDestination(for: String.self) { id in
-                NasDetailPlaceholder(
-                    name: store.entries.first { $0.id == id }?.displayName ?? "NAS"
-                )
+                NasDetailView(id: id)
             }
             .sheet(isPresented: $addingNas) {
                 AddNasView()

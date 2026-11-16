@@ -78,6 +78,10 @@ struct NasDetailContentTests {
         #expect(entry(problem: nil).statusLevel == .ok)
         #expect(entry(problem: .timeout).statusLevel == .offline)
         #expect(entry(problem: .unreachable).statusLevel == .offline)
+        // A critical NAS stays critical when it stops answering (#17).
+        var blocked = entry(problem: .unreachable)
+        blocked.blocked = true
+        #expect(blocked.statusLevel == .critical)
         // A refused login is no silence: as health, here critical.
         #expect(entry(problem: .loginFailed, stops: true).statusLevel == .critical)
         // An error without a block lifts to warning.
