@@ -15,5 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The planner of the core queries from now on.
         store.start()
     }
+
+    /// ⌘, of the app menu (#28).
+    func showSettings() {
+        statusItem?.showSettings()
+    }
 }
 #endif

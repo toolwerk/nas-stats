@@ -50,4 +50,4 @@ Das iOS-Icon hat keinen Alphakanal (`sips -g hasAlpha` zeigt `no`), sonst lehnt 
 
 ## Was noch fehlt
 
-Eine Einreichung im Store ist erst nach dem Verlauf (#19), der Ereignis-Chronik (#20) und dem Mac-Hauptfenster (#28) sinnvoll; der Mac zeigt bisher nur ein vorläufiges Einstellungsfenster. TestFlight geht schon vorher.
+Eine Einreichung im Store ist erst nach dem Verlauf (#19), der Ereignis-Chronik (#20) und dem Mac-Hauptfenster (#28) sinnvoll; alle drei sind umgesetzt. TestFlight geht schon vorher.
