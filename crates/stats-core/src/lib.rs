@@ -18,7 +18,9 @@
 //!
 //! [`archive_poll`] writes a finished query into the archive, with the
 //! events it opens or closes; the app and the collector on the NAS (#46)
-//! share it.
+//! share it. The collector hands its history out as an [`Export`]
+//! ([`HistoryStore::export`]), the app takes it over with
+//! [`HistoryStore::import`].
 //!
 //! The polling planner decides when each NAS is queried: [`Schedule`] holds
 //! the rules without a runtime, [`Planner`] runs them on tokio and hands
@@ -37,12 +39,16 @@
 //!   query and moves the next automatic one an interval later.
 
 mod archive;
+mod export;
 mod forecast;
 mod history;
 mod planner;
 mod schedule;
 
 pub use archive::archive_poll;
+pub use export::{
+    EXPORT_VERSION, Export, ExportBackupRun, ExportBucket, ExportSample, ImportCount,
+};
 pub use forecast::{FORECAST_DAYS, Forecast, MAX_FORECAST_DAYS, MIN_FORECAST_DAYS, forecast};
 pub use history::{
     EventRecord, HistoryError, HistoryStore, Point, Range, Resolution, SCHEMA_VERSION, Series,

@@ -16,6 +16,9 @@ use nas_model::{
 };
 use rusqlite::{Connection, Transaction, params};
 
+use crate::export::{
+    EXPORT_VERSION, Export, ExportBackupRun, ExportBucket, ExportSample, ImportCount,
+};
 use crate::forecast::{Forecast, forecast, window_start};
 
 /// Version of the schema this build writes and reads.
@@ -102,6 +105,9 @@ pub enum HistoryError {
     /// The file was written by a newer build.
     #[error("history schema {found} is newer than {supported}")]
     SchemaTooNew { found: i64, supported: i64 },
+    /// An export this build cannot read, e.g. of another version.
+    #[error("export not readable: {0}")]
+    Format(String),
 }
 
 type Result<T> = std::result::Result<T, HistoryError>;
@@ -541,6 +547,231 @@ impl HistoryStore {
         Ok(())
     }
 
+    /// Last time the NAS answered, Unix seconds UTC (time of its newest
+    /// snapshot); `None` for an unknown NAS.
+    pub fn last_seen(&self, nas_id: &str) -> Result<Option<i64>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT last_seen FROM nas WHERE id = ?1")?;
+        let mut rows = stmt.query(params![nas_id])?;
+        Ok(match rows.next()? {
+            Some(row) => Some(row.get(0)?),
+            None => None,
+        })
+    }
+
+    /// The history of a NAS since `since` (`None`: all of it) for the
+    /// collector (#46), until `now`. Each time span comes in the finest
+    /// resolution that is complete there:
+    ///
+    /// - raw samples taken after `since`, from the first full hour of raw
+    ///   samples on (an hour that pruning may have cut is not full);
+    /// - before that, hourly values that end after `since`, from the first
+    ///   full day of hourly values on (likewise);
+    /// - daily values that end after `since`, of every day: the app rolls up
+    ///   only the days its raw samples touch, so the days of the hourly
+    ///   values need theirs too;
+    /// - backup runs started after `since` minus 7 days, so a run that
+    ///   finished later is sent again with its end.
+    ///
+    /// An unknown NAS gives an empty export.
+    pub fn export(&self, nas_id: &str, since: Option<i64>, now: i64) -> Result<Export> {
+        let since = since.unwrap_or(0);
+        let first = |sql: &str| -> Result<Option<i64>> {
+            Ok(self
+                .conn
+                .query_row(sql, params![nas_id], |row| row.get(0))?)
+        };
+        // The first hour (day) is complete unless pruning may have cut it.
+        let complete = |first: i64, len: i64, keep: i64| {
+            let start = bucket(first, len);
+            if start >= now - keep {
+                start
+            } else {
+                ceil(first, len)
+            }
+        };
+        let raw_from = first("SELECT MIN(at) FROM samples WHERE nas_id = ?1")?
+            .map(|at| complete(at, HOUR, RAW_KEEP));
+        let first_hour = first("SELECT MIN(start) FROM samples_hourly WHERE nas_id = ?1")?
+            .map(|start| complete(start, DAY, HOURLY_KEEP));
+        // Hourly values begin at the day of the raw samples at the latest,
+        // so a NAS younger than a day still gets its first hours.
+        let hourly_from = match (first_hour, raw_from) {
+            (Some(hour), Some(raw)) => Some(hour.min(bucket(raw, DAY))),
+            (hour, None) => hour,
+            (None, Some(raw)) => Some(bucket(raw, DAY)),
+        };
+
+        let mut samples = Vec::new();
+        if let Some(raw_from) = raw_from {
+            let mut stmt = self.conn.prepare_cached(
+                "SELECT metric, key, at, value FROM samples
+                 WHERE nas_id = ?1 AND at >= ?2 AND at > ?3
+                 ORDER BY metric, key, at",
+            )?;
+            let rows = stmt.query_map(params![nas_id, raw_from, since], |row| {
+                Ok(ExportSample {
+                    metric: row.get(0)?,
+                    key: row.get(1)?,
+                    at: row.get(2)?,
+                    value: row.get(3)?,
+                })
+            })?;
+            samples = rows.collect::<rusqlite::Result<_>>()?;
+        }
+        let hourly = match hourly_from {
+            Some(from) => self.export_buckets(
+                Resolution::Hourly,
+                nas_id,
+                from,
+                raw_from.unwrap_or(i64::MAX),
+                since,
+            )?,
+            None => Vec::new(),
+        };
+        // Every daily value, also of days with hourly values: the app rolls
+        // up only the days its raw samples touch.
+        let daily = self.export_buckets(Resolution::Daily, nas_id, i64::MIN, i64::MAX, since)?;
+
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT task_id, started_at, finished_at, result, message FROM backup_runs
+             WHERE nas_id = ?1 AND started_at > ?2
+             ORDER BY started_at, task_id",
+        )?;
+        let rows = stmt.query_map(params![nas_id, since.saturating_sub(7 * DAY)], |row| {
+            Ok(ExportBackupRun {
+                task_id: row.get(0)?,
+                started_at: row.get(1)?,
+                finished_at: row.get(2)?,
+                result: row.get(3)?,
+                message: row.get(4)?,
+            })
+        })?;
+        let backup_runs = rows.collect::<rusqlite::Result<_>>()?;
+
+        Ok(Export {
+            version: EXPORT_VERSION,
+            nas_id: nas_id.to_owned(),
+            until: now,
+            samples,
+            hourly,
+            daily,
+            backup_runs,
+        })
+    }
+
+    /// Hourly or daily values starting in `[from, to)` that end after
+    /// `since`.
+    fn export_buckets(
+        &self,
+        resolution: Resolution,
+        nas_id: &str,
+        from: i64,
+        to: i64,
+        since: i64,
+    ) -> Result<Vec<ExportBucket>> {
+        let table = resolution.table();
+        let len = resolution.bucket_secs().unwrap_or(0);
+        let mut stmt = self.conn.prepare_cached(&format!(
+            "SELECT metric, key, start, min, mean, max, count FROM {table}
+             WHERE nas_id = ?1 AND start >= ?2 AND start < ?3 AND start + ?4 > ?5
+             ORDER BY metric, key, start"
+        ))?;
+        let rows = stmt.query_map(params![nas_id, from, to, len, since], |row| {
+            Ok(ExportBucket {
+                metric: row.get(0)?,
+                key: row.get(1)?,
+                start: row.get(2)?,
+                min: row.get(3)?,
+                mean: row.get(4)?,
+                max: row.get(5)?,
+                count: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Takes over an export of the collector (#46) under the id `nas_id`
+    /// of the app, whatever id the NAS has at the collector. Daily and
+    /// hourly values replace stored ones only when they count more samples;
+    /// raw samples and backup runs are written like the app's own, so hours
+    /// and days are rolled up again and old values pruned relative to
+    /// `now`. Rows with an unknown metric or result and values that are not
+    /// finite are skipped. An export of another version is
+    /// [`HistoryError::Format`] and changes nothing.
+    pub fn import(&mut self, export: &Export, nas_id: &str, now: i64) -> Result<ImportCount> {
+        if export.version != EXPORT_VERSION {
+            return Err(HistoryError::Format(format!(
+                "version {} instead of {EXPORT_VERSION}",
+                export.version
+            )));
+        }
+        let mut count = ImportCount::default();
+        let tx = self.conn.transaction()?;
+        for (resolution, rows, counter) in [
+            (Resolution::Daily, &export.daily, &mut count.daily),
+            (Resolution::Hourly, &export.hourly, &mut count.hourly),
+        ] {
+            let table = resolution.table();
+            let mut stmt = tx.prepare_cached(&format!(
+                "INSERT INTO {table} (nas_id, metric, key, start, min, mean, max, count)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT (nas_id, metric, key, start) DO UPDATE SET
+                     min = excluded.min,
+                     mean = excluded.mean,
+                     max = excluded.max,
+                     count = excluded.count
+                 WHERE excluded.count > {table}.count"
+            ))?;
+            for row in rows {
+                let finite = [row.min, row.mean, row.max].iter().all(|v| v.is_finite());
+                if metric_from(&row.metric).is_none() || !finite || row.count == 0 {
+                    continue;
+                }
+                let changed = stmt.execute(params![
+                    nas_id, row.metric, row.key, row.start, row.min, row.mean, row.max, row.count
+                ])?;
+                *counter += u32::try_from(changed).unwrap_or(0);
+            }
+        }
+
+        let samples: Vec<Sample> = export
+            .samples
+            .iter()
+            .filter(|row| row.value.is_finite())
+            .filter_map(|row| {
+                Some(Sample {
+                    nas_id: nas_id.to_owned(),
+                    metric: metric_from(&row.metric)?,
+                    key: (!row.key.is_empty()).then(|| row.key.clone()),
+                    at: row.at,
+                    value: row.value,
+                })
+            })
+            .collect();
+        write_in(&tx, &samples, now)?;
+        count.samples = u32::try_from(samples.len()).unwrap_or(u32::MAX);
+
+        let runs: Vec<BackupRun> = export
+            .backup_runs
+            .iter()
+            .filter_map(|row| {
+                Some(BackupRun {
+                    task_id: row.task_id.clone(),
+                    started_at: row.started_at,
+                    finished_at: row.finished_at,
+                    result: result_from(&row.result).ok()?,
+                    message: row.message.clone(),
+                })
+            })
+            .collect();
+        upsert_runs(&tx, nas_id, &runs)?;
+        count.backup_runs = u32::try_from(runs.len()).unwrap_or(u32::MAX);
+        tx.commit()?;
+        Ok(count)
+    }
+
     /// Rows `(key, point)` sorted by key and time. `key: None` means all
     /// keys.
     fn query(
@@ -614,6 +845,29 @@ fn migrate(conn: &mut Connection) -> Result<()> {
 /// Start of the bucket of length `len` that contains `at`.
 fn bucket(at: i64, len: i64) -> i64 {
     at - at.rem_euclid(len)
+}
+
+/// Start of the first bucket of length `len` that begins at or after `at`.
+fn ceil(at: i64, len: i64) -> i64 {
+    let start = bucket(at, len);
+    if start == at { at } else { start + len }
+}
+
+/// Every metric, to read a stored name back.
+const METRICS: [Metric; 8] = [
+    Metric::VolumeUsed,
+    Metric::VolumeTotal,
+    Metric::DiskTemp,
+    Metric::Cpu,
+    Metric::Mem,
+    Metric::NetRx,
+    Metric::NetTx,
+    Metric::SysTemp,
+];
+
+/// The metric of a stored name; `None` for a name this build does not know.
+fn metric_from(name: &str) -> Option<Metric> {
+    METRICS.into_iter().find(|metric| metric.as_str() == name)
 }
 
 fn upsert_nas(tx: &Transaction, snapshot: &Snapshot) -> Result<()> {
@@ -1590,6 +1844,294 @@ mod tests {
         remove();
     }
 
+    /// Collector archive of `nas_id` with a snapshot every 30 minutes from
+    /// `T0` to `end`, and one backup run per day.
+    fn collector(nas_id: &str, end: i64) -> HistoryStore {
+        let mut store = HistoryStore::in_memory().expect("store opens");
+        let mut step = 0;
+        let mut at = T0;
+        while at <= end {
+            let mut snap = snapshot(nas_id, at, step);
+            if at % DAY == 0 {
+                snap.backups.push(BackupTask {
+                    id: "b1".into(),
+                    name: "Nachts".into(),
+                    kind: BackupKind::Hbs3,
+                    last_run: Some(at),
+                    last_result: Some(BackupResult::Ok),
+                    next_run: None,
+                });
+            }
+            store
+                .write_snapshot(&snap, at)
+                .expect("snapshot is written");
+            step += 1;
+            at += 30 * 60;
+        }
+        store
+    }
+
+    const ALL_METRICS: [Metric; 8] = METRICS;
+
+    #[test]
+    fn export_and_import_give_the_same_history_under_the_app_id() {
+        let end = T0 + 100 * DAY;
+        let source = collector("col-1", end);
+        let export = source.export("col-1", None, end).expect("export");
+        assert_eq!(export.version, EXPORT_VERSION);
+        assert_eq!(export.nas_id, "col-1");
+        assert_eq!(export.until, end);
+        // Raw samples from the first full hour on, hourly values before.
+        let raw_from = export.samples.iter().map(|s| s.at).min().expect("raw");
+        assert_eq!(raw_from % HOUR, 0);
+        assert!(export.hourly.iter().all(|h| h.start < raw_from));
+        assert!(
+            export
+                .hourly
+                .iter()
+                .all(|h| h.start % DAY == 0 || h.start >= T0 + 10 * DAY)
+        );
+
+        let json = serde_json::to_string(&export).expect("export serializes");
+        let back: Export = serde_json::from_str(&json).expect("export parses");
+        let mut app = HistoryStore::in_memory().expect("store opens");
+        let count = app.import(&back, "app-7", end).expect("import");
+        assert_eq!(count.samples as usize, export.samples.len());
+        assert_eq!(count.hourly as usize, export.hourly.len());
+        assert_eq!(count.daily as usize, export.daily.len());
+        assert_eq!(count.backup_runs, 101);
+
+        for metric in ALL_METRICS {
+            for range in [Range::Day, Range::Week, Range::Month, Range::Year] {
+                let mine = app.history("app-7", metric, range, end).expect("app");
+                let theirs = source.history("col-1", metric, range, end).expect("source");
+                assert!(!mine.is_empty(), "{metric:?} {range:?}");
+                assert_eq!(mine, theirs, "{metric:?} {range:?}");
+            }
+        }
+        assert_eq!(
+            app.backup_runs("app-7", T0, end).expect("runs"),
+            source.backup_runs("col-1", T0, end).expect("runs")
+        );
+        assert!(
+            app.history("col-1", Metric::Cpu, Range::Day, end)
+                .expect("history")
+                .is_empty()
+        );
+
+        // A second import of the same export changes nothing.
+        let before = counts(&app);
+        let again = app.import(&back, "app-7", end).expect("import again");
+        assert_eq!(counts(&app), before);
+        assert_eq!((again.hourly, again.daily), (0, 0));
+    }
+
+    #[test]
+    fn export_since_sends_only_what_is_newer() {
+        let end = T0 + 20 * DAY;
+        let source = collector("col-1", end);
+        let since = end - 2 * HOUR - 60;
+        let export = source.export("col-1", Some(since), end).expect("export");
+        // Two hours and a minute: 5 snapshots of 8 values each.
+        assert_eq!(export.samples.len(), 5 * 8);
+        assert!(export.samples.iter().all(|s| s.at > since));
+        assert!(export.hourly.is_empty());
+        // The day of `since` and today, 8 values each.
+        assert!(export.daily.iter().all(|d| d.start + DAY > since));
+        assert_eq!(export.daily.len(), 2 * 8);
+        // Backup runs from 7 days before `since` on, one each midnight.
+        assert!(
+            export
+                .backup_runs
+                .iter()
+                .all(|r| r.started_at > since - 7 * DAY)
+        );
+        assert_eq!(export.backup_runs.len(), 8);
+    }
+
+    #[test]
+    fn young_nas_sends_all_its_raw_samples() {
+        let mut source = HistoryStore::in_memory().expect("store opens");
+        let start = T0 + 12 * HOUR + 3 * 60;
+        for step in 0..4 {
+            let at = start + step * 30 * 60;
+            source
+                .write_snapshot(&snapshot("col-1", at, step), at)
+                .expect("snapshot is written");
+        }
+        let now = start + 2 * HOUR;
+        let export = source.export("col-1", None, now).expect("export");
+        // Nothing is pruned yet, so the first hour is complete as raw samples.
+        assert_eq!(export.samples.len(), 4 * 8);
+        assert!(export.hourly.is_empty());
+
+        let mut app = HistoryStore::in_memory().expect("store opens");
+        app.import(&export, "app-1", now).expect("import");
+        for range in [Range::Day, Range::Week, Range::Year] {
+            assert_eq!(
+                app.history("app-1", Metric::Cpu, range, now).expect("app"),
+                source
+                    .history("col-1", Metric::Cpu, range, now)
+                    .expect("source"),
+                "{range:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_nas_gives_an_empty_export() {
+        let source = collector("col-1", T0 + DAY);
+        let export = source.export("other", None, T0 + DAY).expect("export");
+        assert_eq!(export.nas_id, "other");
+        assert!(export.samples.is_empty());
+        assert!(export.hourly.is_empty());
+        assert!(export.daily.is_empty());
+        assert!(export.backup_runs.is_empty());
+    }
+
+    fn bucket_row(metric: &str, start: i64, mean: f64, count: u32) -> ExportBucket {
+        ExportBucket {
+            metric: metric.into(),
+            key: String::new(),
+            start,
+            min: mean,
+            mean,
+            max: mean,
+            count,
+        }
+    }
+
+    fn empty_export() -> Export {
+        Export {
+            version: EXPORT_VERSION,
+            nas_id: "col-1".into(),
+            until: T0,
+            samples: Vec::new(),
+            hourly: Vec::new(),
+            daily: Vec::new(),
+            backup_runs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn import_replaces_buckets_only_with_more_samples() {
+        let now = T0 + 2 * DAY;
+        let mut app = HistoryStore::in_memory().expect("store opens");
+        let mut first = empty_export();
+        first.daily = vec![bucket_row("cpu", T0, 10.0, 5)];
+        first.hourly = vec![bucket_row("cpu", T0 + DAY, 10.0, 5)];
+        app.import(&first, "app-1", now).expect("first import");
+
+        let read = |app: &HistoryStore, resolution: Resolution, start: i64| {
+            app.points("app-1", Metric::Cpu, None, resolution, start, start)
+                .expect("points")[0]
+                .clone()
+        };
+        // Fewer samples: the stored values stay.
+        let mut fewer = empty_export();
+        fewer.daily = vec![bucket_row("cpu", T0, 99.0, 3)];
+        fewer.hourly = vec![bucket_row("cpu", T0 + DAY, 99.0, 5)];
+        let count = app.import(&fewer, "app-1", now).expect("import");
+        assert_eq!((count.daily, count.hourly), (0, 0));
+        assert_eq!(read(&app, Resolution::Daily, T0).mean, 10.0);
+        assert_eq!(read(&app, Resolution::Hourly, T0 + DAY).mean, 10.0);
+
+        // More samples: replaced.
+        let mut more = empty_export();
+        more.daily = vec![bucket_row("cpu", T0, 20.0, 6)];
+        more.hourly = vec![bucket_row("cpu", T0 + DAY, 30.0, 12)];
+        let count = app.import(&more, "app-1", now).expect("import");
+        assert_eq!((count.daily, count.hourly), (1, 1));
+        assert_eq!(read(&app, Resolution::Daily, T0).mean, 20.0);
+        let hour = read(&app, Resolution::Hourly, T0 + DAY);
+        assert_eq!((hour.mean, hour.count), (30.0, 12));
+    }
+
+    #[test]
+    fn import_skips_unknown_rows_and_refuses_another_version() {
+        let now = T0 + DAY;
+        let mut app = HistoryStore::in_memory().expect("store opens");
+        let mut export = empty_export();
+        export.samples = vec![
+            ExportSample {
+                metric: "later.metric".into(),
+                key: String::new(),
+                at: T0,
+                value: 1.0,
+            },
+            ExportSample {
+                metric: "cpu".into(),
+                key: String::new(),
+                at: T0,
+                value: 12.0,
+            },
+            ExportSample {
+                metric: "disk.temp".into(),
+                key: "disk-1".into(),
+                at: T0,
+                value: 35.0,
+            },
+        ];
+        export.daily = vec![bucket_row("later.metric", T0, 1.0, 1)];
+        export.backup_runs = vec![
+            ExportBackupRun {
+                task_id: "b1".into(),
+                started_at: T0,
+                finished_at: Some(T0 + 60),
+                result: "ok".into(),
+                message: None,
+            },
+            ExportBackupRun {
+                task_id: "b2".into(),
+                started_at: T0,
+                finished_at: None,
+                result: "later".into(),
+                message: None,
+            },
+        ];
+        let count = app.import(&export, "app-1", now).expect("import");
+        assert_eq!(
+            count,
+            ImportCount {
+                samples: 2,
+                hourly: 0,
+                daily: 0,
+                backup_runs: 1
+            }
+        );
+        let cpu = app
+            .history("app-1", Metric::Cpu, Range::Day, now)
+            .expect("cpu");
+        assert_eq!(cpu[0].key, None);
+        let disk = app
+            .history("app-1", Metric::DiskTemp, Range::Day, now)
+            .expect("disk");
+        assert_eq!(disk[0].key.as_deref(), Some("disk-1"));
+
+        let before = counts(&app);
+        export.version = 2;
+        assert!(matches!(
+            app.import(&export, "app-1", now),
+            Err(HistoryError::Format(_))
+        ));
+        assert_eq!(counts(&app), before);
+    }
+
+    #[test]
+    fn last_seen_is_the_newest_snapshot() {
+        let mut store = HistoryStore::in_memory().expect("store opens");
+        assert_eq!(store.last_seen("nas-1").expect("last seen"), None);
+        for at in [T0 + HOUR, T0] {
+            store
+                .write_snapshot(&snapshot("nas-1", at, 0), at)
+                .expect("snapshot is written");
+        }
+        assert_eq!(
+            store.last_seen("nas-1").expect("last seen"),
+            Some(T0 + HOUR)
+        );
+    }
+
     #[test]
     fn stored_names_match_serde() {
         for provider in [
@@ -1617,5 +2159,9 @@ mod tests {
             assert_eq!(health_from(health_str(level)).expect("known"), level);
         }
         assert!(matches!(result_from("later"), Err(HistoryError::Value(_))));
+        for metric in METRICS {
+            assert_eq!(metric_from(metric.as_str()), Some(metric));
+        }
+        assert_eq!(metric_from("later"), None);
     }
 }
