@@ -52,9 +52,7 @@ struct HistoryView: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                if store.entries.count > 1 {
-                    ToolbarItem(placement: .primaryAction) { nasMenu }
-                }
+                ToolbarItem(placement: .primaryAction) { nasMenu }
             }
         }
     }
@@ -256,8 +254,13 @@ private struct VolumeChartView: View {
     /// Lower edge of the axis: the lowest value less some room, so the
     /// band does not hug the bottom.
     private var lowerBound: Double {
-        let lowest = chart.line.points.map(\.min).min() ?? 0
+        let lowest = (chart.line.points.map(\.min) + chart.forecast.map(\.percent)).min() ?? 0
         return Swift.max(0, ((lowest - 5) / 10).rounded(.down) * 10)
+    }
+
+    /// 100 %, or more where a volume reports more used than its size.
+    private var upperBound: Double {
+        Swift.max(100, chart.line.points.map(\.max).max() ?? 100)
     }
 
     var body: some View {
@@ -282,7 +285,7 @@ private struct VolumeChartView: View {
                         .foregroundStyle(.tint)
                 }
             }
-            ForEach(chart.forecast, id: \.at) { point in
+            ForEach(Array(chart.forecast.enumerated()), id: \.offset) { _, point in
                 LineMark(
                     x: .value("Zeit", point.at),
                     y: .value("Prognose", point.percent),
@@ -295,7 +298,7 @@ private struct VolumeChartView: View {
                 .foregroundStyle(.red)
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
         }
-        .chartYScale(domain: lowerBound...100)
+        .chartYScale(domain: lowerBound...upperBound)
         .chartYAxisLabel("%")
         .frame(height: 180)
     }
