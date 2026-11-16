@@ -245,9 +245,10 @@ impl PollSink for Sink {
 }
 
 /// Writes one finished query: after a success the snapshot and the events
-/// it opens, raises or closes by `thresholds`; after no answer (unreachable, time-out, HTTP 502/503/504 of a proxy) an
-/// "unreachable" event when the last snapshot is 15 minutes old. Without
-/// any snapshot nothing.
+/// it opens, raises or closes by `thresholds`; after no answer
+/// (unreachable, time-out, HTTP 502/503/504 of a proxy) an "unreachable"
+/// event when the last snapshot is 15 minutes old. Without any snapshot
+/// nothing.
 fn archive(
     store: &mut HistoryStore,
     state: &PollState,
