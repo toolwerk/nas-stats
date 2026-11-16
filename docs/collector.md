@@ -4,7 +4,7 @@ Die Apps fragen ein NAS nur ab, solange sie laufen. Ohne laufenden Mac hat der V
 
 Was der Container tut:
 
-- Er fragt jedes eingetragene NAS höchstens alle 5 Minuten ab, mit demselben Rust-Core wie die Apps, und speichert Messwerte und Backup-Läufe in `history.sqlite`. Stunden- und Tageswerte, Aufbewahrungsfristen und Prognose sind dieselben wie in der App.
+- Er fragt jedes eingetragene NAS höchstens alle 5 Minuten ab, mit demselben Rust-Core wie die Apps, und speichert Messwerte und Backup-Läufe in `history.sqlite`. Stunden- und Tageswerte und Aufbewahrungsfristen sind dieselben wie in der App; die Prognose rechnet die App aus dem übernommenen Verlauf.
 - Er greift nur lesend zu: keine Befehle ans NAS, keine Änderung der Konfiguration.
 - Nach einer abgelehnten Anmeldung meldet er sich nicht erneut an, auch nicht nach einem Neustart, bis der Zugang in der Konfiguration geändert ist. Sonst sperrt das NAS womöglich die IP-Adresse.
 - Er gibt Messwerte und Backup-Läufe über eine Schnittstelle im Heimnetz heraus (HTTPS, Port 8743, mit Schlüssel). Ereignisse und Mitteilungen bleiben bei der App.
@@ -95,11 +95,12 @@ Lehnt das NAS die Anmeldung ab (falsches Passwort, 2-Stufen-Verifizierung, geän
 1. In `collector.toml` Benutzer, Passwort, Adresse oder Fingerabdruck korrigieren.
 2. Den Container neu starten.
 
-Ein geänderter Zugang hebt die Sperre auf. War der Zugang richtig und die Ursache auf dem NAS (z. B. 2-Stufen-Verifizierung inzwischen abgeschaltet), den gespeicherten Stand löschen und neu starten:
+Ein geänderter Zugang hebt die Sperre auf. War der Zugang richtig und die Ursache auf dem NAS (z. B. 2-Stufen-Verifizierung inzwischen abgeschaltet), den gespeicherten Stand bei gestopptem Container löschen; im laufenden Container schriebe die nächste Abfrage eines anderen NAS ihn sofort neu:
 
 ```bash
-docker exec nas-collector rm /data/poll-state.json
-docker restart nas-collector
+docker stop nas-collector
+docker run --rm --volumes-from nas-collector --entrypoint rm nas-collector:latest /data/poll-state.json
+docker start nas-collector
 ```
 
 ## Datenordner
