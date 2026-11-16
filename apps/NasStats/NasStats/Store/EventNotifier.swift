@@ -16,8 +16,9 @@ protocol NotificationPoster: AnyObject {
     func isDenied() async -> Bool
     /// Whether the system shows notifications of the app now.
     func isAuthorized() async -> Bool
-    /// Gives every pending notification a new delay (`nil`: at once).
-    func reschedulePending(delay: TimeInterval?)
+    /// Gives every pending notification for which `keep` holds at that
+    /// moment a new delay (`nil`: at once).
+    func reschedulePending(delay: TimeInterval?, keep: @escaping @MainActor (String) -> Bool)
 }
 
 /// Turns the open events of the core (#10) into notifications (#39): one
@@ -95,9 +96,9 @@ final class EventNotifier {
                     known.posted = true
                 }
                 notified[id] = known
-            } else if authorized {
+            } else if authorized || !enabled {
                 // An event that begins while its kind is off stays silent,
-                // also after switching it on.
+                // also after switching it on; also without permission.
                 if enabled {
                     post(event, id: id, name: name, settings: settings)
                 }
@@ -130,7 +131,10 @@ final class EventNotifier {
             let delay = settings.quietHours.enabled
                 ? settings.quietHours.delay(at: clock(), calendar: calendar)
                 : nil
-            poster.reschedulePending(delay: delay)
+            // Only what is still open: an event may end meanwhile.
+            poster.reschedulePending(delay: delay) { [weak self] id in
+                self?.notified[id]?.posted == true
+            }
         }
     }
 

@@ -35,16 +35,28 @@ final class SystemNotificationPoster: NSObject, NotificationPoster, UNUserNotifi
         center.removeDeliveredNotifications(withIdentifiers: ids)
     }
 
-    func reschedulePending(delay: TimeInterval?) {
-        Task {
-            for request in await center.pendingNotificationRequests() {
-                let trigger = delay.flatMap {
-                    $0 > 0 ? UNTimeIntervalNotificationTrigger(timeInterval: $0, repeats: false) : nil
-                }
+    /// The running `reschedulePending`; a newer call replaces it.
+    private var rescheduling: Task<Void, Never>?
+
+    func reschedulePending(delay: TimeInterval?, keep: @escaping @MainActor (String) -> Bool) {
+        rescheduling?.cancel()
+        rescheduling = Task {
+            let pending = await center.pendingNotificationRequests()
+            guard !Task.isCancelled else { return }
+            let trigger = delay.flatMap {
+                $0 > 0 ? UNTimeIntervalNotificationTrigger(timeInterval: $0, repeats: false) : nil
+            }
+            // No suspension from here on: a withdrawal cannot slip between
+            // the check and the new request.
+            for request in pending where keep(request.identifier) {
                 // The same id replaces the pending request.
-                try? await center.add(UNNotificationRequest(
+                center.add(UNNotificationRequest(
                     identifier: request.identifier, content: request.content, trigger: trigger
-                ))
+                )) { error in
+                    if let error {
+                        Self.log.error("Notification not moved: \(String(describing: error), privacy: .public)")
+                    }
+                }
             }
         }
     }

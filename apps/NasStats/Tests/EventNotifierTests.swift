@@ -36,8 +36,12 @@ final class FakePoster: NotificationPoster {
 
     func isAuthorized() async -> Bool { authorized }
 
-    func reschedulePending(delay: TimeInterval?) {
+    /// `keep` of the last `reschedulePending` call.
+    private(set) var keep: ((String) -> Bool)?
+
+    func reschedulePending(delay: TimeInterval?, keep: @escaping @MainActor (String) -> Bool) {
         rescheduled.append(delay)
+        self.keep = keep
     }
 }
 
@@ -174,6 +178,32 @@ struct EventNotifierTests {
         notifier.apply(later, previous: quiet)
         notifier.apply(.init(), previous: later)
         #expect(poster.rescheduled == [9 * 3600.0, nil])
+    }
+
+    @Test func reschedulingKeepsOnlyWhatIsStillOpen() async {
+        let notifier = await notifier(at: Self.berlin(23))
+        var quiet = NotificationSettings()
+        quiet.quietHours.enabled = true
+        let event = Self.event()
+        notifier.update(nasId: Self.nas, name: "Keller", open: [event], settings: quiet)
+        notifier.apply(.init(), previous: quiet)
+        #expect(poster.keep?(EventNotifier.id(of: event)) == true)
+        // Ended before the poster gets to it: not posted again.
+        notifier.update(nasId: Self.nas, name: "Keller", open: [], settings: .init())
+        #expect(poster.keep?(EventNotifier.id(of: event)) == false)
+    }
+
+    @Test func withoutPermissionASwitchedOffKindStillStaysSilent() async {
+        poster.authorized = false
+        let notifier = await notifier()
+        let event = Self.event()
+        var off = NotificationSettings()
+        off.disabled = [.disks]
+        notifier.update(nasId: Self.nas, name: "Keller", open: [event], settings: off)
+        poster.authorized = true
+        await notifier.refreshAuthorization()
+        notifier.update(nasId: Self.nas, name: "Keller", open: [event], settings: .init())
+        #expect(poster.posts.isEmpty)
     }
 
     @Test func withoutPermissionAnEventWaitsUntilItIsGiven() async {
