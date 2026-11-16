@@ -88,7 +88,9 @@ final class NasStore {
 
     @ObservationIgnored private var queryErrors: [String: String] = [:]
     @ObservationIgnored private var log: QueryLog
-    /// Snapshot of the test query of the add dialog, until the core has one.
+    /// Snapshot of the test query of the add dialog, until the core has one;
+    /// the real core takes it over in `addNas` at once, so its findings
+    /// follow the thresholds.
     @ObservationIgnored private var testSnapshots: [String: Snapshot] = [:]
     @ObservationIgnored private var started = false
     /// Lives as long as the store; ends once the store is gone.

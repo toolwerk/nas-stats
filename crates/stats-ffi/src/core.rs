@@ -151,6 +151,10 @@ pub struct NasCore {
     entries: Mutex<BTreeMap<String, Arc<Entry>>>,
     /// Never locked together with `entries` or a status: copy it first.
     thresholds: Mutex<model::Thresholds>,
+    /// Snapshot of the last [`NasCore::test_connection`], as read; the next
+    /// [`NasCore::add_nas`] of that NAS takes it over. Never locked
+    /// together with another lock.
+    last_test: Mutex<Option<model::Snapshot>>,
     connect: Connector,
     clock: Clock,
 }
@@ -161,6 +165,7 @@ impl NasCore {
         Self {
             entries: Mutex::new(BTreeMap::new()),
             thresholds: Mutex::new(model::Thresholds::default()),
+            last_test: Mutex::new(None),
             connect,
             clock,
         }
@@ -251,7 +256,9 @@ impl NasCore {
     /// Registers a NAS; sends nothing for a new id. An entry with the same
     /// id is replaced: its snapshot stays, the error, the time of the last
     /// query and a block are cleared, and its old session is logged out in
-    /// the background.
+    /// the background. The snapshot of the last [`NasCore::test_connection`]
+    /// of this NAS becomes its snapshot, unless it already has a newer one,
+    /// so its findings follow the thresholds like any other.
     pub fn add_nas(
         &self,
         config: NasConfig,
@@ -259,10 +266,21 @@ impl NasCore {
         password: String,
     ) -> Result<(), FfiError> {
         let backend = (self.connect)(&config, user, password)?;
+        let tested = {
+            let mut last_test = lock(&self.last_test);
+            match last_test.as_ref() {
+                Some(t) if t.nas.id == config.id => last_test.take(),
+                _ => None,
+            }
+        };
         let mut entries = lock(&self.entries);
-        let raw = entries
+        let old = entries
             .get(&config.id)
             .and_then(|old| lock(&old.status).raw.clone());
+        let raw = match (old, tested) {
+            (Some(old), Some(tested)) if tested.observed_at <= old.observed_at => Some(old),
+            (old, tested) => tested.or(old),
+        };
         let replaced = entries.insert(
             config.id,
             Arc::new(Entry {
@@ -403,7 +421,9 @@ impl NasCore {
             let backend = (self.connect)(&config, user, password)?;
             let result = backend.snapshot().await;
             let _ = backend.logout().await;
-            Ok(Snapshot::real(result?, &self.thresholds()))
+            let raw = result?;
+            *lock(&self.last_test) = Some(raw.clone());
+            Ok(Snapshot::real(raw, &self.thresholds()))
         })
         .await
     }
@@ -1175,6 +1195,35 @@ mod tests {
         let state = restarted.core.states().remove(0);
         assert!(state.snapshot.is_some());
         assert!(finding_kinds(&state).is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_test_snapshot_follows_the_thresholds_after_adding() {
+        let backend = FakeBackend::answering(vec![Ok(hot_snapshot())]);
+        let h = harness(backend.clone());
+        let tested = h
+            .core
+            .clone()
+            .test_connection(config("nas-1"), "u".into(), "p".into())
+            .await
+            .expect("test");
+        assert_eq!(tested.findings.len(), 1);
+        // Another NAS does not take it over.
+        h.core
+            .add_nas(config("nas-2"), "u".into(), "p".into())
+            .expect("add");
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        let states = h.core.states();
+        assert_eq!(states[1].snapshot, None);
+        assert_eq!(states[0].snapshot.as_ref(), Some(&tested));
+        assert_eq!(states[0].last_attempt_at, None);
+
+        h.core.set_thresholds(thresholds(55.0));
+        assert!(finding_kinds(&h.core.states()[0]).is_empty());
+        assert!(h.core.saved_state("nas-1".into()).expect("saved").is_some());
+        assert_eq!(backend.queries(), 1);
     }
 
     #[tokio::test]
