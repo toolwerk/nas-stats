@@ -107,12 +107,21 @@ impl Api {
             let reported = state
                 .as_ref()
                 .and_then(|state| state.snapshot.as_ref())
-                .map(|snapshot| &snapshot.nas);
+                .map(|snapshot| (snapshot.nas.name.clone(), snapshot.nas.model.clone()));
+            // After a restart the planner has no snapshot yet: the archive
+            // knows what the NAS reported last.
+            let (name, model) = match reported {
+                Some(reported) => reported,
+                None => store
+                    .name_and_model(&nas.id)
+                    .map_err(internal)?
+                    .unwrap_or_default(),
+            };
             list.push(CollectorNas {
                 id: nas.id.clone(),
                 provider: nas.provider,
-                name: reported.and_then(|n| n.name.clone()),
-                model: reported.and_then(|n| n.model.clone()),
+                name,
+                model,
                 base_url: nas.base_url.clone(),
                 fingerprint: nas.fingerprint.to_string(),
                 last_seen: store.last_seen(&nas.id).map_err(internal)?,
