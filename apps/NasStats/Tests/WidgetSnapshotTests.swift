@@ -19,7 +19,7 @@ struct WidgetSnapshotTests {
         let store = NasStore(
             accounts: NasAccounts(keychain: MemoryAccountStore(), core: FakeCore()),
             defaults: defaults,
-            demoSource: { demoSnapshots(now: $0) },
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
             pollInterval: nil
         )
         store.demoMode = true

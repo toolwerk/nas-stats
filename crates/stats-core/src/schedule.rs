@@ -288,6 +288,66 @@ impl Schedule {
         true
     }
 
+    /// Hands back a snapshot the app saved, e.g. after a restart. Only a
+    /// registered NAS without a snapshot takes it; error, time of the last
+    /// query and block stay as they are. `true` when it was taken.
+    pub fn restore_snapshot(&mut self, nas_id: &str, snapshot: Snapshot) -> bool {
+        match self.entries.get_mut(nas_id) {
+            Some(entry) if entry.state.snapshot.is_none() => {
+                entry.state.snapshot = Some(snapshot);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Hands back what the app remembers across launches, keeping what is
+    /// stricter: a known block stays, a later own query counts over an
+    /// older time, and a NAS with a query in flight is left alone. When
+    /// something changes the error is cleared. `false` for an unknown NAS.
+    pub fn restore_poll(
+        &mut self,
+        nas_id: &str,
+        last_attempt_at: Option<i64>,
+        blocked: bool,
+    ) -> bool {
+        let Some(entry) = self.entries.get_mut(nas_id) else {
+            return false;
+        };
+        let state = &mut entry.state;
+        if state.running || state.blocked {
+            return true;
+        }
+        let last_attempt_at = state.last_attempt_at.max(last_attempt_at);
+        if !blocked && last_attempt_at == state.last_attempt_at {
+            return true;
+        }
+        state.last_attempt_at = last_attempt_at;
+        state.blocked = blocked;
+        state.error = None;
+        state.error_at = None;
+        true
+    }
+
+    /// Takes a snapshot read elsewhere (e.g. a test query before adding
+    /// the NAS) unless the NAS already has one observed later. `true` when
+    /// it was taken; error, time of the last query and block stay.
+    pub fn offer_snapshot(&mut self, nas_id: &str, snapshot: Snapshot) -> bool {
+        let Some(entry) = self.entries.get_mut(nas_id) else {
+            return false;
+        };
+        if entry
+            .state
+            .snapshot
+            .as_ref()
+            .is_some_and(|kept| kept.observed_at >= snapshot.observed_at)
+        {
+            return false;
+        }
+        entry.state.snapshot = Some(snapshot);
+        true
+    }
+
     /// State of one NAS.
     pub fn state(&self, nas_id: &str) -> Option<PollState> {
         self.entries.get(nas_id).map(|entry| entry.state.clone())
@@ -339,6 +399,69 @@ mod tests {
         schedule
             .finish("nas-1", generation, now, result)
             .expect("result recorded");
+    }
+
+    #[test]
+    fn restored_snapshot_fills_only_an_empty_entry() {
+        let mut schedule = Schedule::new(300);
+        assert!(!schedule.restore_snapshot("nas-1", snapshot(T0)));
+        schedule.add("nas-1", Some(T0 - 60), true);
+        assert!(schedule.restore_snapshot("nas-1", snapshot(T0)));
+        let state = schedule.state("nas-1").expect("registered");
+        assert_eq!(state.snapshot, Some(snapshot(T0)));
+        assert_eq!(state.last_attempt_at, Some(T0 - 60));
+        assert!(state.blocked);
+        assert!(!schedule.restore_snapshot("nas-1", snapshot(T0 + 1)));
+        assert_eq!(
+            schedule.state("nas-1").expect("registered").snapshot,
+            Some(snapshot(T0))
+        );
+    }
+
+    #[test]
+    fn offered_snapshot_wins_unless_the_kept_one_is_newer() {
+        let mut schedule = Schedule::new(300);
+        assert!(!schedule.offer_snapshot("nas-1", snapshot(T0)));
+        schedule.add("nas-1", None, false);
+        assert!(schedule.offer_snapshot("nas-1", snapshot(T0)));
+        assert!(!schedule.offer_snapshot("nas-1", snapshot(T0)));
+        assert!(!schedule.offer_snapshot("nas-1", snapshot(T0 - 1)));
+        assert!(schedule.offer_snapshot("nas-1", snapshot(T0 + 1)));
+        assert_eq!(
+            schedule.state("nas-1").expect("registered").snapshot,
+            Some(snapshot(T0 + 1))
+        );
+    }
+
+    #[test]
+    fn restored_poll_keeps_the_stricter_state_and_skips_a_running_query() {
+        let mut schedule = Schedule::new(300);
+        assert!(!schedule.restore_poll("nas-1", Some(T0), true));
+        schedule.add("nas-1", None, false);
+        assert!(schedule.restore_poll("nas-1", Some(T0 - 60), false));
+        assert_eq!(schedule.due(T0), Vec::<String>::new());
+        // An older time does not move it back.
+        assert!(schedule.restore_poll("nas-1", Some(T0 - 3_600), false));
+        let state = schedule.state("nas-1").expect("registered");
+        assert_eq!(state.last_attempt_at, Some(T0 - 60));
+        // A running query is left alone.
+        let generation = schedule.begin("nas-1", T0 + 300).expect("query starts");
+        assert!(schedule.restore_poll("nas-1", Some(T0), true));
+        assert!(!schedule.state("nas-1").expect("registered").blocked);
+        schedule
+            .finish(
+                "nas-1",
+                generation,
+                T0 + 300,
+                Err(ProviderError::LoginFailed),
+            )
+            .expect("result recorded");
+        // A known block stays.
+        assert!(schedule.restore_poll("nas-1", Some(T0), false));
+        let state = schedule.state("nas-1").expect("registered");
+        assert!(state.blocked);
+        assert_eq!(state.last_attempt_at, Some(T0 + 300));
+        assert!(state.error.is_some());
     }
 
     #[test]

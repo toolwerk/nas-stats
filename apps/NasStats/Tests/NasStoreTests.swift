@@ -17,6 +17,8 @@ final class FakeCore: NasCoreProtocol {
         var updatedPasswords: [String] = []
         /// NAS id of every `restoreState` call.
         var restored: [String] = []
+        /// Thresholds of every `setThresholds` call.
+        var thresholds: [Thresholds] = []
     }
 
     private let presets: Mutex<[String: NasState]>
@@ -107,9 +109,35 @@ final class FakeCore: NasCoreProtocol {
         }
     }
 
+    func setThresholds(thresholds: Thresholds) {
+        log.withLock { $0.thresholds.append(thresholds) }
+    }
+
     func testConnection(config: NasConfig, user: String, password: String) async throws -> Snapshot {
         throw FfiError.Internal(detail: "not used")
     }
+
+    // History, events and the planner (#60) are not used by the store yet.
+
+    func refreshNow(nasId: String) async throws -> NasState {
+        throw FfiError.Internal(detail: "not used")
+    }
+
+    func restorePoll(nasId: String, lastAttemptAt: Int64?, blocked: Bool) throws {}
+
+    func startPlanner(listener: StateListener) {}
+
+    func stopPlanner() {}
+
+    func setInterval(secs: Int64) {}
+
+    func history(nasId: String, metric: Metric, range: HistoryRange) throws -> [HistorySeries] { [] }
+
+    func events(nasId: String?, from: Int64, to: Int64) throws -> [NasEvent] { [] }
+
+    func forecast(nasId: String, volumeId: String) throws -> Forecast? { nil }
+
+    func backupRuns(nasId: String, from: Int64, to: Int64) throws -> [BackupRun] { [] }
 
     func updateCredentials(nasId: String, user: String, password: String) async throws {
         log.withLock {
@@ -200,14 +228,6 @@ struct NasStoreTests {
         snapshot.worstHealth = health
         // The demo snapshot has findings, which would outrank `health`.
         snapshot.findings = []
-        // Only the given health counts: no fill level or disk temperature
-        // that crosses a threshold (#21).
-        for index in snapshot.volumes.indices {
-            snapshot.volumes[index].usedPercent = nil
-        }
-        for index in snapshot.disks.indices {
-            snapshot.disks[index].temperatureC = nil
-        }
         return snapshot
     }
 
@@ -239,7 +259,7 @@ struct NasStoreTests {
         let store = NasStore(
             accounts: NasAccounts(keychain: keychain, core: core),
             defaults: defaults,
-            demoSource: { demoSnapshots(now: $0) },
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
             pollInterval: nil,
             clock: { [clock] in clock.now }
         )
@@ -258,7 +278,7 @@ struct NasStoreTests {
         NasStore(
             accounts: NasAccounts(keychain: keychain, core: core),
             defaults: defaults,
-            demoSource: { demoSnapshots(now: $0) },
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
             pollInterval: nil,
             clock: { [clock] in clock.now },
             lastStates: lastStates
@@ -645,7 +665,7 @@ struct NasStoreTests {
         let store = NasStore(
             accounts: NasAccounts(keychain: MemoryAccountStore([Self.account("Keller")]), core: FakeCore()),
             defaults: defaults,
-            demoSource: { _ in [] },
+            demoSource: { _, _ in [] },
             pollInterval: nil
         )
         #expect(store.entries.map(\.displayName) == ["Keller"])
@@ -706,25 +726,11 @@ struct NasStoreTests {
 
     // MARK: - Settings (#21)
 
-    /// A snapshot with one volume at `fill` percent and one disk at `temp` °C.
-    static func snapshot(_ id: String, fill: Double?, temp: Double?) -> Snapshot {
-        var snapshot = snapshot(id, health: .ok)
-        snapshot.volumes = Array(snapshot.volumes.prefix(1))
-        snapshot.disks = Array(snapshot.disks.prefix(1))
-        if !snapshot.volumes.isEmpty {
-            snapshot.volumes[0].usedPercent = fill
-        }
-        if !snapshot.disks.isEmpty {
-            snapshot.disks[0].temperatureC = temp
-        }
-        return snapshot
-    }
-
     func makeStore(_ keychain: MemoryAccountStore, core: FakeCore) -> NasStore {
         NasStore(
             accounts: NasAccounts(keychain: keychain, core: core),
             defaults: defaults,
-            demoSource: { demoSnapshots(now: $0) },
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
             pollInterval: nil,
             clock: { [clock] in clock.now }
         )
@@ -756,36 +762,46 @@ struct NasStoreTests {
         #expect(store.queryIntervalMinutes == 5)
     }
 
-    @Test func theFillThresholdsColourTheNas() throws {
-        let a = Self.account("Keller")
-        let id = a.account.id.uuidString
-        let snapshot = Self.snapshot(id, fill: 85, temp: 30)
-        try #require(snapshot.volumes.count == 1)
-        let store = makeStore(MemoryAccountStore(), core: FakeCore())
-        var entry = NasEntry(id: id, baseUrl: a.account.baseUrl, snapshot: snapshot)
-        #expect(entry.health == .warning)
-        entry.thresholds.fill = FillThresholds(warning: 90, critical: 95)
-        #expect(entry.health == .ok)
-        entry.thresholds.fill = FillThresholds(warning: 75, critical: 85)
-        #expect(entry.health == .critical)
-        // The store hands its thresholds to every entry.
-        store.thresholds.fill = FillThresholds(warning: 90, critical: 95)
-        store.demoMode = true
-        #expect(store.entries.allSatisfy { $0.thresholds.fill.warning == 90 })
+    @Test func theCoreGetsTheThresholdsAtStartAndAfterAChange() {
+        AlertThresholds(fill: FillThresholds(warning: 70, critical: 85), diskTempWarningC: 45)
+            .save(to: defaults)
+        let core = FakeCore()
+        let store = makeStore(MemoryAccountStore(), core: core)
+        #expect(core.calls.thresholds == [
+            Thresholds(diskTempWarningC: 45, fillWarningPercent: 70, fillCriticalPercent: 85),
+        ])
+        store.thresholds.diskTempWarningC = 55
+        #expect(core.calls.thresholds.last
+            == Thresholds(diskTempWarningC: 55, fillWarningPercent: 70, fillCriticalPercent: 85))
+        #expect(core.calls.thresholds.count == 2)
+        // The same thresholds again change nothing.
+        store.thresholds.diskTempWarningC = 55
+        #expect(core.calls.thresholds.count == 2)
     }
 
-    @Test func aHotDiskIsAWarning() throws {
-        let id = UUID().uuidString
-        let snapshot = Self.snapshot(id, fill: 10, temp: 52)
-        try #require(snapshot.disks.count == 1)
-        var entry = NasEntry(id: id, baseUrl: "https://nas.demo.invalid", snapshot: snapshot)
-        #expect(entry.health == .warning)
-        entry.thresholds.diskTempWarningC = 55
-        #expect(entry.health == .ok)
-        // A missing temperature does not count.
-        entry.snapshot = Self.snapshot(id, fill: nil, temp: nil)
-        entry.thresholds = .standard
-        #expect(entry.health == .ok)
+    @Test func changedThresholdsReachTheFindingsOfTheCore() throws {
+        let store = makeStore(MemoryAccountStore(), core: FakeCore())
+        store.demoMode = true
+        func keller() throws -> NasEntry {
+            try #require(store.entries.first { $0.id == "demo-keller" })
+        }
+        #expect(try keller().findings.map(\.text) == ["Platte 3 bei 52 °C", "DataVol1 bei 87 %"])
+        #expect(try keller().health == .warning)
+
+        // Hotter disks allowed, critical from 85 %.
+        store.thresholds = AlertThresholds(
+            fill: FillThresholds(warning: 75, critical: 85), diskTempWarningC: 55
+        )
+        #expect(try keller().findings.map(\.text) == ["DataVol1 bei 87 %"])
+        #expect(try keller().findings.first?.level == .critical)
+        #expect(try keller().health == .critical)
+        #expect(store.entries.first?.id == "demo-keller")
+        #expect(store.entries.allSatisfy { $0.thresholds == store.thresholds })
+
+        store.thresholds = AlertThresholds(
+            fill: FillThresholds(warning: 90, critical: 95), diskTempWarningC: 60
+        )
+        #expect(try keller().findings.isEmpty)
     }
 
     @Test func theThresholdsOutliveARestart() {
@@ -831,6 +847,41 @@ struct NasStoreTests {
         }
         #expect(throws: FfiError.self) {
             try store.rename(id: UUID(), to: "Fremd")
+        }
+    }
+
+    @Test func switchingICloudMovesTheEntryBothWays() async throws {
+        let a = Self.account("Keller")
+        let keychain = MemoryAccountStore([a])
+        let core = FakeCore()
+        let store = await started(keychain, core: core)
+        let calls = core.calls
+        let id = a.account.id
+
+        for syncs in [true, false] {
+            try store.setSyncsViaICloud(id: id, to: syncs)
+            let stored = try #require(try keychain.loadAll().first)
+            #expect(stored.account.syncsViaICloud == syncs)
+            #expect(stored.password == "demo")
+            #expect(store.accounts.accounts.first?.syncsViaICloud == syncs)
+            #expect(core.calls.added == calls.added)
+            #expect(core.calls.updated == calls.updated)
+            #expect(core.calls.refreshed == calls.refreshed)
+        }
+    }
+
+    @Test func aRefusedICloudSwitchKeepsTheSetting() async throws {
+        let a = Self.account("Keller")
+        let keychain = MemoryAccountStore([a])
+        let store = await started(keychain, core: FakeCore())
+        keychain.refuseSave.withLock { $0 = true }
+        #expect(throws: MemoryAccountStore.Refused.self) {
+            try store.setSyncsViaICloud(id: a.account.id, to: true)
+        }
+        #expect(try keychain.loadAll().first?.account.syncsViaICloud == false)
+        #expect(store.accounts.accounts.first?.syncsViaICloud == false)
+        #expect(throws: FfiError.self) {
+            try store.setSyncsViaICloud(id: UUID(), to: true)
         }
     }
 
@@ -890,29 +941,6 @@ struct NasStoreTests {
         #expect(store.accounts.accounts.first?.fingerprint == a.account.fingerprint)
         #expect(store.entries.first?.localError == "Ungültige Angabe: kaputt")
         #expect(core.calls.refreshed.count == 1)
-    }
-
-    @Test func theStoreThresholdsColourAndSortRealNas() async throws {
-        let (a, b) = (Self.account("Anton"), Self.account("Berta"))
-        let core = FakeCore(states: [
-            NasState(
-                nasId: a.account.id.uuidString,
-                snapshot: Self.snapshot(a.account.id.uuidString, fill: 10, temp: 30),
-                problem: nil, lastAttemptAt: 100, blocked: false
-            ),
-            NasState(
-                nasId: b.account.id.uuidString,
-                snapshot: Self.snapshot(b.account.id.uuidString, fill: 85, temp: 30),
-                problem: nil, lastAttemptAt: 100, blocked: false
-            ),
-        ])
-        let store = await started(MemoryAccountStore([a, b]), core: core)
-        #expect(store.entries.map(\.displayName) == ["Berta", "Anton"])
-        #expect(store.entries.map(\.health) == [.warning, .ok])
-
-        store.thresholds.fill = FillThresholds(warning: 90, critical: 95)
-        #expect(store.entries.map(\.displayName) == ["Anton", "Berta"])
-        #expect(store.entries.map(\.health) == [.ok, .ok])
     }
 
     @Test func aFailedResumeIsNotRetriedByItself() async throws {

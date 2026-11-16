@@ -122,7 +122,7 @@ private func previewStore(demo: Bool) -> NasStore {
     return NasStore(
         accounts: NasAccounts(keychain: PreviewAccountStore()),
         defaults: defaults,
-        demoSource: { demoSnapshots(now: $0) },
+        demoSource: { demoSnapshots(now: $0, thresholds: $1) },
         pollInterval: nil
     )
 }

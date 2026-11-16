@@ -312,7 +312,7 @@ private struct NasDetailPreview: View {
         return NasStore(
             accounts: NasAccounts(),
             defaults: defaults,
-            demoSource: { demoSnapshots(now: $0) },
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
             pollInterval: nil)
     }()
 

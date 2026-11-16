@@ -2,8 +2,12 @@ import Foundation
 import Testing
 
 /// Calls the Rust core over the generated bindings and decodes every record
-/// of the demo snapshot field by field (#12).
+/// of the demo snapshot field by field (#12), and the records of history,
+/// events, forecast, backup runs and the planner callback (#60).
 struct StatsFFITests {
+    /// 14 November 2026, 14:05 UTC.
+    static let demoNow: Int64 = 1_794_665_100
+
     @Test func demoSnapshotDecodesEveryRecord() throws {
         let snapshot = demoSnapshot()
         #expect(snapshot.demo)
@@ -98,13 +102,17 @@ struct StatsFFITests {
     @Test func demoSnapshotsAreTheThreeDemoNas() {
         // 14 November 2026, 14:05 UTC.
         let now: Int64 = 1_794_665_100
-        let snapshots = demoSnapshots(now: now)
+        let snapshots = demoSnapshots(now: now, thresholds: standardThresholds())
         #expect(snapshots.map(\.nas.id) == ["demo-keller", "demo-buero", "demo-homelab"])
         #expect(snapshots.allSatisfy { $0.demo && $0.observedAt == now })
-        #expect(snapshots == demoSnapshots(now: now))
+        #expect(snapshots == demoSnapshots(now: now, thresholds: standardThresholds()))
         #expect(snapshots[0].findings.map(\.text) == ["Platte 3 bei 52 °C", "DataVol1 bei 87 %"])
         #expect(snapshots[1].findings.isEmpty)
         #expect(snapshots[2].findings.isEmpty)
+    }
+
+    @Test func standardThresholdsAreThoseOfTheSettings() {
+        #expect(standardThresholds() == AlertThresholds.standard.core)
     }
 
     @Test func demoSnapshotCarriesFindings() {
@@ -163,5 +171,101 @@ struct StatsFFITests {
         #expect(problem.oldFingerprint == nil)
         #expect(problem.newFingerprint == nil)
         #expect(problem.httpStatus == nil)
+    }
+
+    @Test func demoCoreDecodesHistoryEventsForecastAndRuns() throws {
+        let now = Self.demoNow
+        let core = NasCore.demo(now: now)
+        #expect(core.states().map(\.nasId) == ["demo-buero", "demo-homelab", "demo-keller"])
+
+        let used = try core.history(nasId: "demo-keller", metric: .volumeUsed, range: .month)
+        let datavol1 = try #require(used.first { $0.key == "demo-keller-datavol1" })
+        #expect(datavol1.points.count == 31)
+        let first = try #require(datavol1.points.first)
+        #expect(first.at == 1_792_072_800)
+        #expect(first.min == 18_400_557_763_432)
+        #expect(first.mean == first.min)
+        #expect(first.max == first.min)
+        #expect(first.count == 1)
+        let last = try #require(datavol1.points.last)
+        #expect(last.at == 1_794_664_800)
+        #expect(last.mean == 18_990_000_000_000)
+        #expect(datavol1.points.map(\.at) == datavol1.points.map(\.at).sorted())
+        let cpu = try core.history(nasId: "demo-keller", metric: .cpu, range: .year)
+        #expect(cpu.count == 1)
+        #expect(cpu.first?.key == nil)
+        #expect(try core.history(nasId: "nope", metric: .cpu, range: .day).isEmpty)
+
+        let events = try core.events(nasId: nil, from: now - 2 * 86_400, to: now)
+        #expect(events.map(\.kind) == [.diskTemperature, .volumeFill, .upsOnBattery, .unreachable])
+        let disk = events[0]
+        #expect(disk.nasId == "demo-keller")
+        #expect(disk.subject == "demo-keller-disk3")
+        #expect(disk.level == .warning)
+        #expect(disk.text == "Platte 3 bei 52 °C")
+        #expect(disk.startedAt == now - 25 * 60)
+        #expect(disk.endedAt == nil)
+        let gone = events[3]
+        #expect(gone.nasId == "demo-homelab")
+        #expect(gone.subject == nil)
+        #expect(gone.level == .critical)
+        #expect(gone.text == "Homelab nicht erreichbar")
+        #expect(gone.startedAt == 1_794_539_400)
+        #expect(gone.endedAt == 1_794_540_480)
+        #expect(try core.events(nasId: "demo-buero", from: now - 2 * 86_400, to: now).isEmpty)
+
+        let forecast = try #require(try core.forecast(nasId: "demo-keller", volumeId: "demo-keller-datavol1"))
+        #expect(forecast.daysToFull.rounded() == 143)
+        #expect(forecast.fullAt > now + 142 * 86_400)
+        #expect(forecast.growthPerDay > 0)
+        #expect(try core.forecast(nasId: "demo-keller", volumeId: "nope") == nil)
+
+        let runs = try core.backupRuns(nasId: "demo-keller", from: now - 2 * 86_400, to: now)
+        #expect(runs.count == 2)
+        let run = try #require(runs.last)
+        #expect(run.taskId == "demo-keller-backup-offsite")
+        #expect(run.startedAt == 1_794_632_700)
+        #expect(run.finishedAt == 1_794_634_500)
+        #expect(run.result == .ok)
+        #expect(run.message == nil)
+    }
+
+    @Test func startedPlannerCallsBackWithoutRefresh() async throws {
+        let core = NasCore.demo(now: Self.demoNow)
+        let listener = StateStream()
+        core.startPlanner(listener: listener)
+        defer { core.stopPlanner() }
+
+        let state = try await withThrowingTaskGroup(of: NasState?.self) { group in
+            group.addTask { await listener.states.first { $0.snapshot != nil } }
+            group.addTask {
+                try await Task.sleep(for: .seconds(10))
+                return nil
+            }
+            let first = try await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+        let received = try #require(state, "no callback within 10 s")
+        let snapshot = try #require(received.snapshot)
+        #expect(snapshot.demo)
+        #expect(snapshot.nas.id == received.nasId)
+        #expect(received.problem == nil)
+        #expect(received.lastAttemptAt != nil)
+        #expect(!received.blocked)
+    }
+}
+
+/// Hands every state of the planner to an async stream.
+final class StateStream: StateListener {
+    let states: AsyncStream<NasState>
+    private let continuation: AsyncStream<NasState>.Continuation
+
+    init() {
+        (states, continuation) = AsyncStream.makeStream(of: NasState.self)
+    }
+
+    func stateChanged(state: NasState) {
+        continuation.yield(state)
     }
 }
