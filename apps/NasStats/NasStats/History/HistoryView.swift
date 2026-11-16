@@ -30,12 +30,14 @@ struct HistoryView: View {
         let days: Int
         let observedAt: Int64?
         let demo: Bool
+        /// History taken over from the collector (#124).
+        let revision: Int
     }
 
     private var loadKey: LoadKey {
         LoadKey(
             nasId: entry?.id, days: range.days, observedAt: entry?.snapshot?.observedAt,
-            demo: store.demoMode)
+            demo: store.demoMode, revision: store.historyRevision)
     }
 
     var body: some View {

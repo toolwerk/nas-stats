@@ -198,6 +198,8 @@ targets:
       - path: NasStats/History
       # Events tab (#20): its content model is tested, the view compiles along.
       - path: NasStats/Events
+      # Collector (#124): pairing and sync, used by the store.
+      - path: NasStats/Collector
       - path: Shared
       - path: Generated/stats_ffi.swift
         optional: true

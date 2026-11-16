@@ -112,6 +112,12 @@ final class NasStore {
 
     /// List, passwords and registration with the core (#14).
     @ObservationIgnored let accounts: NasAccounts
+    /// Pairing with the collector on the NAS and import of its history
+    /// (#124).
+    @ObservationIgnored let collector: CollectorSync
+    /// Rises when history came into the archive without a new snapshot
+    /// (import of the collector), so the history screen loads again.
+    private(set) var historyRevision = 0
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let demoSource: (Int64, Thresholds) -> [Snapshot]
     /// Core with history and events of the demo data set, for a time.
@@ -144,6 +150,9 @@ final class NasStore {
     /// The request for permission of `requestNotifications`; the tests wait
     /// for it.
     @ObservationIgnored private(set) var permissionRequest: Task<Void, Never>?
+    /// The last sync with the collector started after a query; the tests
+    /// wait for it.
+    @ObservationIgnored private(set) var collectorTask: Task<Void, Never>?
 
     private static let logger = Logger(subsystem: "net.staude.nasstats", category: "store")
 
@@ -154,6 +163,9 @@ final class NasStore {
     ///   kept across launches; by default nowhere.
     /// - Parameter notifier: Notifies the open events after every query;
     ///   by default none.
+    /// - Parameter collectorStore: Where the paired collector is kept; by
+    ///   default in memory, without one.
+    /// - Parameter listCollectorNas: Lists the NAS of the collector.
     init(
         accounts: NasAccounts,
         defaults: UserDefaults,
@@ -161,12 +173,23 @@ final class NasStore {
         demoCore: @escaping (Int64) -> any NasCoreProtocol = { NasCore.demo(now: $0) },
         clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) },
         lastStates: LastStates = LastStates(fileURL: nil),
-        notifier: EventNotifier? = nil
+        notifier: EventNotifier? = nil,
+        collectorStore: any CollectorStore = MemoryCollectorStore(),
+        listCollectorNas: @escaping CollectorSync.ListNas = {
+            try await collectorNas(baseUrl: $0, fingerprint: $1, token: $2)
+        }
     ) {
         self.clock = clock
         self.lastStates = lastStates
         self.notifier = notifier
         self.accounts = accounts
+        self.collector = CollectorSync(
+            store: collectorStore,
+            accounts: accounts,
+            defaults: defaults,
+            clock: clock,
+            listNas: listCollectorNas
+        )
         self.defaults = defaults
         self.demoSource = demoSource
         self.demoCore = demoCore
@@ -234,6 +257,9 @@ final class NasStore {
         }
         // The list shows the stored NAS at once, before the first query.
         rebuild()
+        collector.onImport = { [weak self] ids in
+            self?.imported(ids)
+        }
         // Every state of the planner, on the main actor; ends with the store.
         Task { [weak self] in
             for await state in stream {
@@ -278,7 +304,8 @@ final class NasStore {
             defaults: defaults,
             demoSource: { demoSnapshots(now: $0, thresholds: $1) },
             lastStates: LastStates(fileURL: isPreview ? nil : LastStates.liveURL),
-            notifier: isPreview ? nil : EventNotifier(poster: SystemNotificationPoster(), defaults: defaults)
+            notifier: isPreview ? nil : EventNotifier(poster: SystemNotificationPoster(), defaults: defaults),
+            collectorStore: isPreview ? MemoryCollectorStore() : CollectorKeychain()
         )
         // Previews never touch the files of the real app.
         guard !isPreview else {
@@ -387,6 +414,7 @@ final class NasStore {
         round = Task {
             await self.query(ids)
             self.round = nil
+            self.syncCollector()
         }
         if let round {
             await Self.wait(for: round)
@@ -453,6 +481,7 @@ final class NasStore {
             lastStates.save(savedStates)
         }
         notifier?.forget(nasId: id.uuidString)
+        collector.forget(appNasId: id)
         rebuild()
     }
 
@@ -478,10 +507,37 @@ final class NasStore {
     /// returned. No query: the NAS and their state stay as they are.
     @discardableResult
     func setSharesAccessViaICloud(_ shares: Bool) throws -> Int {
-        let failed = try accounts.setSyncsViaICloud(all: shares)
+        var failed = try accounts.setSyncsViaICloud(all: shares)
+        // The collector follows the same setting (#124).
+        do {
+            try collector.setSyncsViaICloud(shares)
+        } catch {
+            failed += 1
+            let status = (error as? KeychainError).map { String($0.status) } ?? "-"
+            Self.logger.error("Collector iCloud Keychain setting not moved, OSStatus \(status, privacy: .public)")
+        }
         sharesAccessViaICloud = shares
         defaults.set(shares, forKey: Self.sharesAccessViaICloudKey)
         return failed
+    }
+
+    /// Pairs with the collector (#124); the keychain entry follows the
+    /// iCloud Keychain setting. Throws when the collector does not answer
+    /// with this key; nothing is stored then.
+    /// Syncs at once afterwards, without waiting for it.
+    func pairCollector(baseUrl: String, fingerprint: String, token: String) async throws {
+        try await collector.pair(
+            baseUrl: baseUrl, fingerprint: fingerprint, token: token,
+            syncsViaICloud: sharesAccessViaICloud
+        )
+        collectorTask = Task { await collector.sync() }
+    }
+
+    /// Takes a NAS of the collector over into a NAS of the app (`nil`: not
+    /// at all) and syncs at once, without waiting for it.
+    func assignCollectorNas(_ collectorNasId: String, to appNasId: UUID?) throws {
+        try collector.assign(collectorNasId, to: appNasId)
+        collectorTask = Task { await collector.sync() }
     }
 
     /// "Erneut versuchen": starts a blocked NAS again with its stored
@@ -625,6 +681,33 @@ final class NasStore {
         if state != nil {
             notifyEvents(of: key)
         }
+        if state?.snapshot != nil {
+            syncCollector()
+        }
+    }
+
+    /// Syncs with the collector when it is due, at most once per query
+    /// interval; never in demo mode and never awaited, so the collector
+    /// never holds up or changes the queries of the NAS.
+    private func syncCollector() {
+        guard !demoMode else { return }
+        let interval = queryIntervalSeconds
+        collectorTask = Task {
+            await collector.syncIfDue(interval: interval)
+        }
+    }
+
+    /// History of the collector came into the archive: forecasts and the
+    /// fill level of the last 30 days anew, and the history screen loads
+    /// again.
+    private func imported(_ ids: Set<String>) {
+        let states = accounts.core.states()
+        for id in ids {
+            guard let snapshot = states.first(where: { $0.nasId == id })?.snapshot else { continue }
+            derived[id] = Self.derive(id, snapshot: snapshot, core: accounts.core, now: clock())
+        }
+        historyRevision += 1
+        rebuild()
     }
 
     /// Hands the open events of a NAS to the notifier, after `refresh`
