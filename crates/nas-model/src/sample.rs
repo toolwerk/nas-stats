@@ -32,6 +32,18 @@ pub enum Metric {
 }
 
 impl Metric {
+    /// Every metric, in the order of the declaration.
+    pub const ALL: [Metric; 8] = [
+        Metric::VolumeUsed,
+        Metric::VolumeTotal,
+        Metric::DiskTemp,
+        Metric::Cpu,
+        Metric::Mem,
+        Metric::NetRx,
+        Metric::NetTx,
+        Metric::SysTemp,
+    ];
+
     /// Name as stored and serialized, e.g. `disk.temp`.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -65,17 +77,6 @@ pub struct Sample {
 mod tests {
     use super::*;
 
-    const ALL: [Metric; 8] = [
-        Metric::VolumeUsed,
-        Metric::VolumeTotal,
-        Metric::DiskTemp,
-        Metric::Cpu,
-        Metric::Mem,
-        Metric::NetRx,
-        Metric::NetTx,
-        Metric::SysTemp,
-    ];
-
     #[test]
     fn disk_temp_name() {
         assert_eq!(Metric::DiskTemp.as_str(), "disk.temp");
@@ -98,7 +99,7 @@ mod tests {
 
     #[test]
     fn as_str_matches_serde_name() {
-        for metric in ALL {
+        for metric in Metric::ALL {
             let json = serde_json::to_string(&metric).expect("metric serializes");
             assert_eq!(json, format!("\"{}\"", metric.as_str()));
         }
