@@ -20,16 +20,16 @@ Die App greift nur lesend zu. Sie sendet keine Befehle an ein NAS und ändert do
 
 ## Wo die Daten bleiben
 
-Alles bleibt auf Ihrem Gerät:
+Es gibt keinen Server von NAS Stats. Die Daten Ihrer NAS liegen auf Ihren Geräten:
 
-- Benutzername und Passwort der NAS liegen im Schlüsselbund von iOS oder macOS. Auf Wunsch teilt die App sie über den iCloud-Schlüsselbund mit Ihren anderen Geräten (Schalter in den Einstellungen, je Gerät); dann gelten dafür die Bedingungen von Apple.
+- Adresse, Benutzername und Passwort der NAS liegen im Schlüsselbund von iOS oder macOS. Standardmäßig teilt die App sie über den iCloud-Schlüsselbund mit Ihren anderen Geräten, damit Sie ein NAS nur einmal eintragen müssen; dafür gelten die Bedingungen von Apple. Der Schalter „Zugänge über iCloud-Schlüsselbund teilen“ in den Einstellungen (je Gerät) schaltet das aus.
 - Der letzte Stand jedes NAS, die Einstellungen und der Verlauf (Belegung, Temperaturen, Ereignisse) liegen in einer Datenbank und in Dateien im Container der App. Die Widgets lesen daraus.
-- Es gibt keinen Server von NAS Stats, keine Telemetrie, keine Analyse, keine Werbung und keine Weitergabe an Dritte.
+- Es gibt keine Telemetrie, keine Analyse, keine Werbung und keine Weitergabe an Dritte.
 
 ## Mit wem die App spricht
 
 - **Ihre eigenen NAS**, direkt über HTTPS. Beim ersten Kontakt merkt sich die App den Fingerabdruck des Zertifikats; ändert er sich, fragt sie nach.
-- **Apple**: Systemdienste für Mitteilungen, Widgets und, wenn Sie es einschalten, den iCloud-Schlüsselbund. NAS Stats nutzt sie nur über die Schnittstellen des Systems.
+- **Apple**: Systemdienste für Mitteilungen, Widgets und den iCloud-Schlüsselbund (solange Sie das Teilen der Zugänge nicht ausschalten). NAS Stats nutzt sie nur über die Schnittstellen des Systems.
 
 ## Löschen
 
