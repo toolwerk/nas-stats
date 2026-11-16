@@ -128,6 +128,24 @@ final class NasAccounts {
         accounts = Self.sorted(accounts.map { $0.id == id ? stored.account : $0 })
     }
 
+    /// Moves the keychain entry of a NAS to or from iCloud Keychain: it is
+    /// stored again with the new setting. The core does not know the
+    /// setting, so it is not touched. When the keychain refuses, the old
+    /// entry is put back and the list stays as it was.
+    func setSyncsViaICloud(id: UUID, syncs: Bool) throws {
+        let old = try storedAccount(id)
+        guard old.account.syncsViaICloud != syncs else { return }
+        var stored = old
+        stored.account.syncsViaICloud = syncs
+        do {
+            try keychain.save(stored)
+        } catch {
+            try? keychain.save(old)
+            throw error
+        }
+        accounts = Self.sorted(accounts.map { $0.id == id ? stored.account : $0 })
+    }
+
     /// Starts a blocked NAS again with its stored user and password ("Erneut
     /// versuchen"); see `updateCredentials`.
     func resume(id: UUID) async throws {

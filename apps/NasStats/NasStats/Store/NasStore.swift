@@ -285,6 +285,12 @@ final class NasStore {
         rebuild()
     }
 
+    /// Switches the iCloud Keychain setting of a NAS (#98). No query: the
+    /// NAS and its state stay as they are.
+    func setSyncsViaICloud(id: UUID, to syncs: Bool) throws {
+        try accounts.setSyncsViaICloud(id: id, syncs: syncs)
+    }
+
     /// "Erneut versuchen": starts a blocked NAS again with its stored
     /// credentials and queries it once. A step of the user, so no automatic
     /// retry; when it fails again, the NAS stays blocked.

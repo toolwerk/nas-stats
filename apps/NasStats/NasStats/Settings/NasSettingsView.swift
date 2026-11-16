@@ -64,6 +64,17 @@ struct NasSettingsView: View {
                     Text(verbatim: account.user)
                 }
             }
+            Section {
+                // Locked while an action runs: it stores the account with
+                // the setting it started with.
+                Toggle("Über iCloud-Schlüsselbund auf meine Geräte", isOn: Binding(
+                    get: { account.syncsViaICloud },
+                    set: setSync
+                ))
+                .disabled(busy)
+            } footer: {
+                Text("Ausschalten entfernt das NAS von Ihren anderen Geräten.")
+            }
             if let entry, entry.blocked || entry.localError != nil {
                 blockedSection(entry)
             }
@@ -86,7 +97,9 @@ struct NasSettingsView: View {
                 ) {
                     Button("NAS entfernen", role: .destructive, action: remove)
                 } message: {
-                    Text("Name und Zugang werden auf diesem Gerät gelöscht.")
+                    Text(account.syncsViaICloud
+                        ? "Name und Zugang werden auf allen Ihren Geräten gelöscht."
+                        : "Name und Zugang werden auf diesem Gerät gelöscht.")
                 }
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
@@ -151,6 +164,15 @@ struct NasSettingsView: View {
     }
 
     // MARK: - Actions
+
+    private func setSync(_ syncs: Bool) {
+        do {
+            try store.setSyncsViaICloud(id: id, to: syncs)
+            errorText = nil
+        } catch {
+            errorText = connectionErrorText(error)
+        }
+    }
 
     private func saveName() {
         // A running action stores the account with the name it started
