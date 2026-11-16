@@ -3,12 +3,15 @@ import Observation
 import os
 import WidgetKit
 
-/// The state of every NAS for all screens, the menu bar and later the
-/// widgets: queries the NAS of `NasAccounts` and holds the last state per
-/// NAS, worst first.
+/// The state of every NAS for all screens, the menu bar and the widgets:
+/// holds the last state per NAS of `NasAccounts`, worst first, with the
+/// forecast of every volume and the recent fill level of the fullest one,
+/// and hands out history and events of the core (#67).
 ///
-/// History, forecast and events follow with #67; the planner of the core
-/// replaces the simple poll loop then.
+/// The planner of the core queries the NAS when they are due and reports
+/// every finished query through `StoreListener`; the store itself queries
+/// only on `refreshAll` (return to the app, background task, "Aktualisieren")
+/// and after a change of the access.
 @MainActor
 @Observable
 final class NasStore {
@@ -22,9 +25,17 @@ final class NasStore {
         didSet {
             guard demoMode != oldValue else { return }
             defaults.set(demoMode, forKey: Self.demoModeKey)
+            if demoMode {
+                accounts.core.stopPlanner()
+                enterDemo()
+            } else {
+                demoCoreInstance = nil
+                demoDerived = [:]
+            }
             rebuild()
             if !demoMode, started {
                 requestNotifications()
+                accounts.core.startPlanner(listener: listener)
                 Task { await refreshAll() }
             }
         }
@@ -38,17 +49,20 @@ final class NasStore {
             guard thresholds != oldValue else { return }
             thresholds.save(to: defaults)
             accounts.core.setThresholds(thresholds: thresholds.core)
+            demoCoreInstance?.setThresholds(thresholds: thresholds.core)
             rebuild()
         }
     }
 
     /// Minutes between two queries of the same NAS, one of
     /// `intervalChoices`; never less than 5 (`minInterval`). Saved under
-    /// `queryInterval`; a change queries nothing by itself.
+    /// `queryInterval`; a change queries nothing by itself, the planner of
+    /// the core takes it over.
     var queryIntervalMinutes: Int {
         didSet {
             guard queryIntervalMinutes != oldValue else { return }
             defaults.set(queryIntervalMinutes, forKey: Self.queryIntervalKey)
+            accounts.core.setInterval(secs: queryIntervalSeconds)
             // The widget snapshot holds the age from which a state is old.
             onUpdate?(entries)
         }
@@ -100,8 +114,18 @@ final class NasStore {
     @ObservationIgnored let accounts: NasAccounts
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let demoSource: (Int64, Thresholds) -> [Snapshot]
-    @ObservationIgnored private let pollInterval: Duration?
+    /// Core with history and events of the demo data set, for a time.
+    @ObservationIgnored private let demoCore: (Int64) -> any NasCoreProtocol
+    /// The demo core while the demo mode is on; never has a planner.
+    @ObservationIgnored private var demoCoreInstance: (any NasCoreProtocol)?
     @ObservationIgnored private let clock: () -> Int64
+    /// Receives the states of the planner of the core.
+    @ObservationIgnored private let listener: StoreListener
+    /// Forecasts and recent fill level per NAS id, from the history of the
+    /// core; filled with every new snapshot, read by `rebuild`.
+    @ObservationIgnored private var derived: [String: Derived] = [:]
+    /// The same for the demo NAS, from the demo core.
+    @ObservationIgnored private var demoDerived: [String: Derived] = [:]
     @ObservationIgnored private let lastStates: LastStates
     /// Notifications of the open events (#39); `nil` notifies nothing.
     @ObservationIgnored private let notifier: EventNotifier?
@@ -115,8 +139,6 @@ final class NasStore {
     /// follow the thresholds.
     @ObservationIgnored private var testSnapshots: [String: Snapshot] = [:]
     @ObservationIgnored private var started = false
-    /// Lives as long as the store; ends once the store is gone.
-    @ObservationIgnored private var pollTask: Task<Void, Never>?
     /// The round of `refreshAll` running now; a second call waits for it.
     @ObservationIgnored private var round: Task<Void, Never>?
     /// The request for permission of `requestNotifications`; the tests wait
@@ -125,9 +147,9 @@ final class NasStore {
 
     private static let logger = Logger(subsystem: "net.staude.nasstats", category: "store")
 
-    /// - Parameter pollInterval: Time between two rounds of queries; `nil`
-    ///   queries only on `start`, `add`, `updateCredentials` and explicit
-    ///   `refreshAll` calls.
+    /// - Parameter demoCore: Core with the history and events of the demo
+    ///   data set at a time (Unix seconds UTC), made when the demo mode
+    ///   goes on.
     /// - Parameter lastStates: Where the last snapshot of every NAS is
     ///   kept across launches; by default nowhere.
     /// - Parameter notifier: Notifies the open events after every query;
@@ -136,7 +158,7 @@ final class NasStore {
         accounts: NasAccounts,
         defaults: UserDefaults,
         demoSource: @escaping (Int64, Thresholds) -> [Snapshot],
-        pollInterval: Duration?,
+        demoCore: @escaping (Int64) -> any NasCoreProtocol = { NasCore.demo(now: $0) },
         clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) },
         lastStates: LastStates = LastStates(fileURL: nil),
         notifier: EventNotifier? = nil
@@ -147,7 +169,9 @@ final class NasStore {
         self.accounts = accounts
         self.defaults = defaults
         self.demoSource = demoSource
-        self.pollInterval = pollInterval
+        self.demoCore = demoCore
+        let (stream, continuation) = AsyncStream.makeStream(of: NasState.self)
+        self.listener = StoreListener(continuation)
         self.log = defaults.data(forKey: Self.queryLogKey)
             .flatMap { try? JSONDecoder().decode(QueryLog.self, from: $0) } ?? QueryLog()
         self.demoMode = defaults.bool(forKey: Self.demoModeKey)
@@ -196,8 +220,33 @@ final class NasStore {
         if saved != before {
             lastStates.save(saved)
         }
+        // Forecasts of the restored states, from the archive of earlier
+        // launches.
+        let now = clock()
+        for state in accounts.core.states() {
+            guard let snapshot = state.snapshot,
+                  let id = UUID(uuidString: state.nasId), accounts.isRegistered(id)
+            else { continue }
+            derived[state.nasId] = Self.derive(state.nasId, snapshot: snapshot, core: accounts.core, now: now)
+        }
+        if demoMode {
+            enterDemo()
+        }
         // The list shows the stored NAS at once, before the first query.
         rebuild()
+        // Every state of the planner, on the main actor; ends with the store.
+        Task { [weak self] in
+            for await state in stream {
+                guard let self else { return }
+                // So `record` knows whether it may notify (#39).
+                await self.notifier?.refreshAuthorization()
+                self.receive(state)
+            }
+        }
+    }
+
+    deinit {
+        listener.finish()
     }
 
     /// `history.sqlite` in the container of the App Group, the archive of
@@ -208,9 +257,10 @@ final class NasStore {
             .appendingPathComponent("history.sqlite")
     }
 
-    /// The store of the app: the NAS from the keychain, the demo data of the
-    /// core, demo switch and settings in the defaults of the App Group and
-    /// a poll round every 5 minutes (each NAS at its `queryIntervalMinutes`).
+    /// The store of the app: the NAS from the keychain with the history
+    /// archive in the App Group, the demo data of the core, demo switch and
+    /// settings in the defaults of the App Group; the planner of the core
+    /// queries each NAS at its `queryIntervalMinutes`.
     /// Every new state goes into the widget snapshot of the App Group (#23).
     /// The archive of the core is `history.sqlite`, so the events and with
     /// them the notifications (#39) last across launches.
@@ -227,7 +277,6 @@ final class NasStore {
                 : NasAccounts(core: liveCore()),
             defaults: defaults,
             demoSource: { demoSnapshots(now: $0, thresholds: $1) },
-            pollInterval: .seconds(300),
             lastStates: LastStates(fileURL: isPreview ? nil : LastStates.liveURL),
             notifier: isPreview ? nil : EventNotifier(poster: SystemNotificationPoster(), defaults: defaults)
         )
@@ -278,28 +327,48 @@ final class NasStore {
 
     // MARK: - Start and queries
 
-    /// Queries the stored NAS (see `refreshAll`), then every
-    /// `pollInterval`. Runs once, later calls do nothing.
-    func start() async {
+    /// Hands the time of the last query and the blocks of earlier launches
+    /// to the core, sets the interval and starts its planner (not in demo
+    /// mode), which queries every NAS when it is due. Queries nothing
+    /// itself. Runs once, later calls do nothing.
+    func start() {
         guard !started else { return }
         started = true
         requestNotifications()
-        await refreshAll()
-        guard let pollInterval else { return }
-        pollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(for: pollInterval)
-                guard !Task.isCancelled, let self else { return }
-                await self.refreshAll()
-            }
+        let core = accounts.core
+        for account in accounts.accounts where accounts.isRegistered(account.id) {
+            let id = account.id.uuidString
+            try? core.restorePoll(nasId: id, lastAttemptAt: log.lastAttempts[id], blocked: log.blocked[id] != nil)
         }
+        core.setInterval(secs: queryIntervalSeconds)
+        if !demoMode {
+            core.startPlanner(listener: listener)
+        }
+    }
+
+    /// History of a metric of a NAS in a range ending now; in demo mode
+    /// from the demo data set. Errors of the core are thrown.
+    func history(nasId: String, metric: Metric, range: HistoryRange) throws -> [HistorySeries] {
+        try historyCore.history(nasId: nasId, metric: metric, range: range)
+    }
+
+    /// Events of one NAS (`nil`: of all) open at some time in `[from, to]`
+    /// (Unix seconds UTC), newest first; in demo mode from the demo data
+    /// set. Errors of the core are thrown.
+    func events(nasId: String?, from: Int64, to: Int64) throws -> [NasEvent] {
+        try historyCore.events(nasId: nasId, from: from, to: to)
+    }
+
+    /// The core that holds the history of the entries shown.
+    private var historyCore: any NasCoreProtocol {
+        demoMode ? (demoCoreInstance ?? accounts.core) : accounts.core
     }
 
     /// Queries every registered NAS in parallel, except those blocked or
     /// queried within the interval of the settings (at least 5 minutes),
     /// also in an earlier launch or by the test query of the add dialog. Does nothing in demo mode.
     /// While a round runs, a further call waits for it instead of starting
-    /// one of its own (start, return to the app, background task).
+    /// one of its own (return to the app, background task, "Aktualisieren").
     func refreshAll() async {
         guard !demoMode else { return }
         if let round {
@@ -334,15 +403,27 @@ final class NasStore {
 
     /// Stores a NAS after the test query of the add dialog. That query
     /// counts as its first: its snapshot shows until the core has its own,
-    /// and the next query follows with the poll round after the interval of
-    /// the settings.
+    /// and the planner queries it next after the interval of the settings.
     /// Throws when the keychain or the core refuses it; nothing changes then.
     /// The entry follows the iCloud Keychain setting of the settings.
     func add(_ stored: StoredAccount, snapshot: Snapshot? = nil) async throws {
         var stored = stored
         stored.account.syncsViaICloud = sharesAccessViaICloud
+        // The core registers a new NAS as due and wakes its planner at once;
+        // held until the test query counts, it does not query again.
+        let planning = started && !demoMode
+        if planning {
+            accounts.core.stopPlanner()
+        }
+        defer {
+            if planning {
+                accounts.core.startPlanner(listener: listener)
+                catchUp()
+            }
+        }
         try accounts.add(stored)
         let id = stored.account.id.uuidString
+        try? accounts.core.restorePoll(nasId: id, lastAttemptAt: clock(), blocked: false)
         queryErrors[id] = nil
         testSnapshots[id] = snapshot
         log.blocked[id] = nil
@@ -357,6 +438,7 @@ final class NasStore {
         try await accounts.remove(id: id)
         queryErrors[id.uuidString] = nil
         testSnapshots[id.uuidString] = nil
+        derived[id.uuidString] = nil
         log.blocked[id.uuidString] = nil
         log.lastAttempts[id.uuidString] = nil
         saveLog()
@@ -522,9 +604,13 @@ final class NasStore {
             if state.blocked {
                 log.blocked[key] = state.problem?.message ?? "Gesperrt"
             }
-            if state.snapshot != nil {
+            if let snapshot = state.snapshot {
                 testSnapshots[key] = nil
                 saveState(of: key)
+                // A query of `refreshAll` also comes through the listener.
+                if derived[key]?.observedAt != snapshot.observedAt {
+                    derived[key] = Self.derive(key, snapshot: snapshot, core: accounts.core, now: clock())
+                }
             }
         }
         saveLog()
@@ -538,7 +624,7 @@ final class NasStore {
     /// wrote them to the archive. Open to the end, because `startedAt` is
     /// the clock of the NAS. A failing archive notifies nothing. The demo
     /// mode queries nothing and so notifies nothing.
-    /// The callback of the planner (#67) must call this too.
+    /// States of the planner reach it through `record` as well.
     private func notifyEvents(of key: String) {
         guard let notifier, !demoMode else { return }
         guard let events = try? accounts.core.events(nasId: key, from: clock(), to: Int64.max) else { return }
@@ -549,6 +635,88 @@ final class NasStore {
             open: events.filter { $0.endedAt == nil },
             settings: notificationSettings
         )
+    }
+
+    /// Takes in every query the planner finished while it had no listener
+    /// (`add` holds it): a state whose last query is newer than the log.
+    private func catchUp() {
+        for state in accounts.core.states() {
+            guard let id = UUID(uuidString: state.nasId),
+                  let last = state.lastAttemptAt, last > (log.lastAttempts[state.nasId] ?? .min)
+            else { continue }
+            record(id, state: state, error: nil)
+        }
+    }
+
+    /// A state of the planner; only NAS of the store count.
+    private func receive(_ state: NasState) {
+        guard let id = UUID(uuidString: state.nasId) else { return }
+        record(id, state: state, error: nil)
+    }
+
+    /// Makes the demo core and the forecasts of the demo NAS, both at the
+    /// same time as the demo snapshots; the clock of the demo core runs on
+    /// from there.
+    private func enterDemo() {
+        let now = Int64(Date().timeIntervalSince1970)
+        let core = demoCore(now)
+        core.setThresholds(thresholds: thresholds.core)
+        demoCoreInstance = core
+        demoDerived = Dictionary(
+            demoSource(now, thresholds.core).map { snapshot in
+                (snapshot.nas.id, Self.derive(snapshot.nas.id, snapshot: snapshot, core: core, now: now))
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    /// What the store takes from the history of a NAS with a new snapshot.
+    struct Derived {
+        /// Time of the snapshot it was made for.
+        var observedAt: Int64?
+        var forecasts: [String: FillForecast] = [:]
+        var fullestVolumeHistory: [WidgetFillPoint] = []
+    }
+
+    /// Forecast of every volume that counts and the daily fill level of the
+    /// fullest one over the 30 days before `now`. A volume without a rising
+    /// trend or a failing core gives no forecast, never "kein Trend"; a
+    /// failing history gives none.
+    static func derive(_ nasId: String, snapshot: Snapshot, core: any NasCoreProtocol, now: Int64) -> Derived {
+        let volumes = NasEntry.capacityVolumes(of: snapshot)
+        var result = Derived(observedAt: snapshot.observedAt)
+        for volume in volumes {
+            guard let forecast = try? core.forecast(nasId: nasId, volumeId: volume.id) else { continue }
+            result.forecasts[volume.id] = .full(
+                days: forecast.daysToFull,
+                date: Date(timeIntervalSince1970: TimeInterval(forecast.fullAt))
+            )
+        }
+        // Volumes without a fill level are left out.
+        let fullest = volumes
+            .compactMap { volume in volume.usedPercent.map { (volume, $0) } }
+            .max { $0.1 < $1.1 }?.0
+        guard let fullest,
+              let used = try? core.history(nasId: nasId, metric: .volumeUsed, range: .year),
+              let total = try? core.history(nasId: nasId, metric: .volumeTotal, range: .year)
+        else { return result }
+        let totals = Dictionary(
+            (total.first { $0.key == fullest.id }?.points ?? []).map { ($0.at, $0.mean) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let since = now - 30 * 86_400
+        result.fullestVolumeHistory = (used.first { $0.key == fullest.id }?.points ?? [])
+            .filter { $0.at >= since }
+            .compactMap { point in
+                guard let size = totals[point.at] ?? fullest.totalBytes.map({ Double($0) }), size > 0 else {
+                    return nil
+                }
+                return WidgetFillPoint(
+                    day: Date(timeIntervalSince1970: TimeInterval(point.at)),
+                    percent: point.mean / size * 100
+                )
+            }
+        return result
     }
 
     /// Keeps the last snapshot of the core for the next launch; a failure
@@ -567,13 +735,16 @@ final class NasStore {
         if demoMode {
             let now = Int64(Date().timeIntervalSince1970)
             entries = demoSource(now, thresholds.core).map { snapshot in
-                NasEntry(
+                let derived = demoDerived[snapshot.nas.id]
+                return NasEntry(
                     id: snapshot.nas.id,
                     name: snapshot.nas.name,
                     baseUrl: snapshot.nas.baseUrl,
                     provider: snapshot.nas.provider,
                     snapshot: snapshot,
-                    thresholds: thresholds
+                    thresholds: thresholds,
+                    forecasts: derived?.forecasts ?? [:],
+                    fullestVolumeHistory: derived?.fullestVolumeHistory ?? []
                 )
             }
         } else {
@@ -599,12 +770,34 @@ final class NasStore {
                     localError: accounts.registrationErrors[account.id]
                         ?? (state?.problem == nil ? log.blocked[id] : nil),
                     queryError: queryErrors[id],
-                    thresholds: thresholds
+                    thresholds: thresholds,
+                    forecasts: derived[id]?.forecasts ?? [:],
+                    fullestVolumeHistory: derived[id]?.fullestVolumeHistory ?? []
                 )
             }
         }
         entries.sort(by: NasEntry.ordered)
         onUpdate?(entries)
+    }
+}
+
+/// Hands every state of the planner of the core to the store. Called on a
+/// thread of the core while it holds a lock, so it only passes the state on
+/// and returns: no call into the core, no waiting for the main actor.
+final class StoreListener: StateListener {
+    private let continuation: AsyncStream<NasState>.Continuation
+
+    init(_ continuation: AsyncStream<NasState>.Continuation) {
+        self.continuation = continuation
+    }
+
+    func stateChanged(state: NasState) {
+        continuation.yield(state)
+    }
+
+    /// Ends the stream of the store; later states are dropped.
+    func finish() {
+        continuation.finish()
     }
 }
 

@@ -42,7 +42,7 @@ struct NasCard: View {
                         percent: volume.usedPercent,
                         usedBytes: volume.usedBytes,
                         totalBytes: volume.totalBytes,
-                        forecast: nil,
+                        forecast: entry.forecast(for: volume.id),
                         thresholds: entry.thresholds.fill
                     )
                 }

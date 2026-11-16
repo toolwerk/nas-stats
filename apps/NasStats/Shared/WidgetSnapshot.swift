@@ -146,7 +146,7 @@ struct WidgetNas: Codable, Equatable, Sendable, Identifiable {
     /// Time of the last snapshot; `nil` before the first answer.
     var observedAt: Date?
     /// Daily fill level of the fullest volume over the last 30 days, oldest
-    /// first. Empty until the core delivers the history (#67).
+    /// first. Empty without history in the core.
     var fullestVolumeHistory: [WidgetFillPoint]
 }
 
@@ -157,7 +157,7 @@ struct WidgetVolume: Codable, Equatable, Sendable, Identifiable {
     var usedPercent: Double?
     var usedBytes: UInt64?
     var totalBytes: UInt64?
-    /// Forecast to run full; `nil` until the core delivers it (#67).
+    /// Forecast to run full; `nil` without a rising trend or history.
     var forecast: FillForecast?
 }
 

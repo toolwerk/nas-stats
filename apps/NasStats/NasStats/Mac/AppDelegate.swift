@@ -12,8 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let store = NasStore.live()
         self.store = store
         statusItem = StatusItemController(store: store)
-        // The 5-minute loop of the store; the planner of #11 replaces it with #67.
-        Task { await store.start() }
+        // The planner of the core queries from now on.
+        store.start()
     }
 }
 #endif
