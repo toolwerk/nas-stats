@@ -165,8 +165,15 @@ struct NasEntry: Identifiable, Sendable {
     }
 
     /// Why the NAS has no current state, as one line; `nil` without error.
+    /// A NAS that did not answer or timed out is "Nicht erreichbar", away
+    /// from home that is the normal case; the settings show the exact
+    /// message.
     var problemLine: String? {
-        localError ?? problem?.message ?? queryError
+        if let localError { return localError }
+        if let kind = problem?.kind, kind == .unreachable || kind == .timeout {
+            return "Nicht erreichbar"
+        }
+        return problem?.message ?? queryError
     }
 
     /// Volumes whose fill level counts, as in the core

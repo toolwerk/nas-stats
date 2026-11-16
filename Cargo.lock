@@ -1726,6 +1726,7 @@ dependencies = [
  "nas-http",
  "nas-model",
  "provider-qnap",
+ "serde_json",
  "thiserror",
  "tokio",
  "uniffi",

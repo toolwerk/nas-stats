@@ -14,6 +14,10 @@
 //!   certificate the core no longer queries the NAS until the app changes
 //!   the credentials or adds the NAS again.
 //! - The last snapshot stays after every error.
+//!
+//! So the app can show the last state after a restart, it saves the
+//! snapshot of every NAS with [`NasCore::saved_state`] and hands it back
+//! with [`NasCore::restore_state`].
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -103,6 +107,8 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[derive(Debug, Default)]
 struct Status {
     snapshot: Option<Snapshot>,
+    /// The snapshot as read, for [`NasCore::saved_state`].
+    raw: Option<model::Snapshot>,
     problem: Option<NasProblem>,
     last_attempt_at: Option<i64>,
     blocked: bool,
@@ -202,6 +208,7 @@ impl NasCore {
         let mut status = lock(&entry.status);
         match result {
             Ok(snapshot) => {
+                status.raw = Some(snapshot.clone());
                 status.snapshot = Some(Snapshot::real(snapshot));
                 status.problem = None;
             }
@@ -239,9 +246,13 @@ impl NasCore {
     ) -> Result<(), FfiError> {
         let backend = (self.connect)(&config, user, password)?;
         let mut entries = lock(&self.entries);
-        let snapshot = entries
+        let (snapshot, raw) = entries
             .get(&config.id)
-            .and_then(|old| lock(&old.status).snapshot.clone());
+            .map(|old| {
+                let old = lock(&old.status);
+                (old.snapshot.clone(), old.raw.clone())
+            })
+            .unwrap_or_default();
         let replaced = entries.insert(
             config.id,
             Arc::new(Entry {
@@ -249,6 +260,7 @@ impl NasCore {
                 poll: tokio::sync::Mutex::new(()),
                 status: Mutex::new(Status {
                     snapshot,
+                    raw,
                     ..Status::default()
                 }),
             }),
@@ -322,6 +334,44 @@ impl NasCore {
             .iter()
             .map(|(id, entry)| lock(&entry.status).record(id))
             .collect()
+    }
+
+    /// The last snapshot read from the NAS as JSON, for the app to save;
+    /// `None` before the first successful query. Sends nothing.
+    pub fn saved_state(&self, nas_id: String) -> Result<Option<String>, FfiError> {
+        let entry = self.entry(&nas_id)?;
+        let raw = lock(&entry.status).raw.clone();
+        raw.map(|raw| {
+            serde_json::to_string(&raw).map_err(|e| FfiError::Internal {
+                detail: e.to_string(),
+            })
+        })
+        .transpose()
+    }
+
+    /// Hands back a snapshot saved with [`NasCore::saved_state`], e.g.
+    /// after a restart of the app. A NAS that already has a snapshot keeps
+    /// it. The error, the time of the last query and a block stay as they
+    /// are, so the next [`NasCore::refresh`] queries as before. Sends
+    /// nothing. JSON that does not parse or belongs to another NAS is
+    /// `InvalidInput`.
+    pub fn restore_state(&self, nas_id: String, json: String) -> Result<(), FfiError> {
+        let entry = self.entry(&nas_id)?;
+        let raw: model::Snapshot =
+            serde_json::from_str(&json).map_err(|e| FfiError::InvalidInput {
+                detail: e.to_string(),
+            })?;
+        if raw.nas.id != nas_id {
+            return Err(FfiError::InvalidInput {
+                detail: format!("saved state of {} given for {nas_id}", raw.nas.id),
+            });
+        }
+        let mut status = lock(&entry.status);
+        if status.snapshot.is_none() {
+            status.snapshot = Some(Snapshot::real(raw.clone()));
+            status.raw = Some(raw);
+        }
+        Ok(())
     }
 
     /// Queries a NAS once without registering it, e.g. before saving it,
@@ -917,6 +967,112 @@ mod tests {
                 .await,
             Err(FfiError::UnknownNas { id: "nope".into() })
         );
+    }
+
+    #[tokio::test]
+    async fn a_saved_state_comes_back_in_a_new_core() {
+        let backend = FakeBackend::answering(vec![Ok(model_snapshot(10.0))]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        assert_eq!(h.core.saved_state("nas-1".into()).expect("saved"), None);
+        let state = h.core.clone().refresh("nas-1".into()).await.expect("state");
+        let json = h
+            .core
+            .saved_state("nas-1".into())
+            .expect("saved")
+            .expect("json");
+
+        let restarted = harness(FakeBackend::answering(Vec::new()));
+        restarted
+            .core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        restarted
+            .core
+            .restore_state("nas-1".into(), json.clone())
+            .expect("restore");
+        let restored = restarted.core.states().remove(0);
+        assert_eq!(restored.snapshot, state.snapshot);
+        assert_eq!(restored.problem, None);
+        assert_eq!(restored.last_attempt_at, None);
+        assert!(!restored.blocked);
+        assert_eq!(
+            restarted.core.saved_state("nas-1".into()).expect("saved"),
+            Some(json)
+        );
+    }
+
+    #[tokio::test]
+    async fn restoring_refuses_other_nas_and_broken_json() {
+        let backend = FakeBackend::answering(vec![Ok(model_snapshot(10.0))]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        h.core
+            .add_nas(config("nas-2"), "u".into(), "p".into())
+            .expect("add");
+        h.core.clone().refresh("nas-1".into()).await.expect("state");
+        let json = h
+            .core
+            .saved_state("nas-1".into())
+            .expect("saved")
+            .expect("json");
+
+        assert!(matches!(
+            h.core.restore_state("nas-2".into(), json.clone()),
+            Err(FfiError::InvalidInput { .. })
+        ));
+        assert!(matches!(
+            h.core.restore_state("nas-2".into(), "{\"nas\":".into()),
+            Err(FfiError::InvalidInput { .. })
+        ));
+        assert!(matches!(
+            h.core.restore_state("nas-9".into(), json),
+            Err(FfiError::UnknownNas { .. })
+        ));
+        assert!(matches!(
+            h.core.saved_state("nas-9".into()),
+            Err(FfiError::UnknownNas { .. })
+        ));
+        assert_eq!(h.core.states()[1].snapshot, None);
+        assert_eq!(backend.queries(), 1);
+    }
+
+    #[tokio::test]
+    async fn restoring_keeps_a_newer_snapshot() {
+        let backend =
+            FakeBackend::answering(vec![Ok(model_snapshot(10.0)), Ok(model_snapshot(20.0))]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        h.core.clone().refresh("nas-1".into()).await.expect("first");
+        let old = h
+            .core
+            .saved_state("nas-1".into())
+            .expect("saved")
+            .expect("json");
+        h.set_time(T0 + MIN_INTERVAL_SECS);
+        h.core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("second");
+
+        h.core
+            .restore_state("nas-1".into(), old.clone())
+            .expect("restore");
+        let state = h.core.states().remove(0);
+        assert_eq!(cpu(&state), Some(20.0));
+        assert_eq!(state.last_attempt_at, Some(T0 + MIN_INTERVAL_SECS));
+        assert_ne!(
+            h.core.saved_state("nas-1".into()).expect("saved"),
+            Some(old)
+        );
+        assert_eq!(backend.queries(), 2);
     }
 
     #[tokio::test]

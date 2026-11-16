@@ -14,6 +14,7 @@ nas-demo = { workspace = true }
 nas-model = { workspace = true }
 nas-http = { workspace = true }
 provider-qnap = { path = "../provider-qnap" }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
 uniffi = { workspace = true }

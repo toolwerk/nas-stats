@@ -6,6 +6,7 @@ struct NasStatsApp: App {
     /// State of every NAS; its accounts come from the keychain and are
     /// registered with the core.
     @State private var store: NasStore
+    @Environment(\.scenePhase) private var scenePhase
 
     init() {
         let store = NasStore.live()
@@ -30,6 +31,26 @@ struct NasStatsApp: App {
                 }
             }
             .environment(store)
+        }
+        // Back in the app, due NAS are queried at once (the poll loop
+        // sleeps while the app is suspended); leaving it asks iOS for an
+        // occasional query in the background.
+        .onChange(of: scenePhase) { _, phase in
+            switch phase {
+            case .active:
+                Task { await store.refreshAll() }
+            case .background:
+                let minutes = store.queryIntervalMinutes
+                Task { await BackgroundRefresh.schedule(intervalMinutes: minutes) }
+            default:
+                break
+            }
+        }
+        .backgroundTask(.appRefresh(BackgroundRefresh.identifier)) { [store] in
+            // The next run first, so one that ends early still has a successor.
+            let minutes = await MainActor.run { store.queryIntervalMinutes }
+            await BackgroundRefresh.schedule(intervalMinutes: minutes)
+            await store.refreshAll()
         }
         #else
         // Menu bar only; LSUIElement keeps the app out of the Dock. The

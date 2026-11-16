@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>net.staude.nasstats.refresh</string>
+	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -27,12 +31,16 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Frank Neumann-Staude</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>NAS Stats liest den Zustand Ihrer NAS im lokalen Netz.</string>
+	<string>NAS Stats fragt Ihre NAS im Heimnetz direkt ab, um Speicher, Platten und Warnungen zu zeigen. Die Daten bleiben auf Ihrem Gerät.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<true/>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 </dict>
