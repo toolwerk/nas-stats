@@ -3,7 +3,12 @@ import SwiftUI
 /// Start screen of the iOS app (#17): the state of all NAS in one sentence
 /// and one card per NAS, worst first. Pull to refresh queries only NAS
 /// whose interval has passed (at least 5 minutes); a tap opens the detail.
+/// The Mac main window (#28) shows it too and opens the detail itself.
 struct OverviewView: View {
+    /// Set: a tap on a card hands its id here instead of pushing the detail
+    /// onto the own stack (Mac main window, #28).
+    var onOpenNas: ((String) -> Void)? = nil
+
     @Environment(NasStore.self) private var store
     @State private var addingNas = false
 
@@ -47,10 +52,14 @@ struct OverviewView: View {
                             .foregroundStyle(.red)
                     }
                     ForEach(store.entries) { entry in
-                        NavigationLink(value: entry.id) {
-                            NasCard(entry: entry, now: now, intervalMinutes: store.queryIntervalMinutes)
+                        let card = NasCard(entry: entry, now: now, intervalMinutes: store.queryIntervalMinutes)
+                        if let onOpenNas {
+                            Button { onOpenNas(entry.id) } label: { card }
+                                .buttonStyle(.plain)
+                        } else {
+                            NavigationLink(value: entry.id) { card }
+                                .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
                     coreVersionText
                         .frame(maxWidth: .infinity)
