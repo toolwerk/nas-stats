@@ -1294,7 +1294,8 @@ fn upsert_runs(tx: &Transaction, nas_id: &str, runs: &[BackupRun]) -> Result<()>
 /// A rebuilt hour or day replaces a stored one only when it counts at least
 /// as many samples: an hour taken over from another device (#37) with more
 /// samples than this one has raw is kept, never mixed with its own, so a
-/// repeated transfer counts nothing twice.
+/// repeated transfer counts nothing twice. Raw samples of both devices add
+/// up: each is stored once by its time.
 fn write_in(tx: &Transaction, samples: &[Sample], now: i64) -> Result<()> {
     let mut hours = BTreeSet::new();
     {
