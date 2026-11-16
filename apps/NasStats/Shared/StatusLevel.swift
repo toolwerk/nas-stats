@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// State of a NAS or one of its parts, as shown by the status dot (#16).
-enum StatusLevel: Sendable, CaseIterable {
+enum StatusLevel: String, Codable, Sendable, CaseIterable {
     case ok
     case warning
     case critical
@@ -47,7 +47,7 @@ struct FillThresholds: Codable, Sendable, Equatable {
 }
 
 /// Forecast for a volume to run full.
-enum FillForecast: Sendable, Equatable {
+enum FillForecast: Codable, Sendable, Equatable {
     case noTrend
     case full(days: Double, date: Date?)
 }
