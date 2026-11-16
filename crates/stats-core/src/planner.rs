@@ -193,7 +193,16 @@ impl Planner {
 
     /// Starts a query if the schedule allows it.
     fn begin(self: &Arc<Self>, nas_id: &str, now: i64) -> Option<InFlight> {
-        let mut inner = self.lock();
+        self.begin_locked(&mut self.lock(), nas_id, now)
+    }
+
+    /// [`Planner::begin`] under a lock the caller already holds.
+    fn begin_locked(
+        self: &Arc<Self>,
+        inner: &mut Inner,
+        nas_id: &str,
+        now: i64,
+    ) -> Option<InFlight> {
         let provider = inner.providers.get(nas_id).cloned()?;
         let generation = inner.schedule.begin(nas_id, now)?;
         Some(InFlight {
@@ -216,11 +225,17 @@ impl Planner {
     /// own action.
     pub async fn refresh_now(self: &Arc<Self>, nas_id: &str) -> Result<PollState, Manual> {
         let now = self.now();
-        match self.lock().schedule.manual(nas_id, now) {
-            Manual::Go => {}
-            other => return Err(other),
-        }
-        let query = self.begin(nas_id, now).ok_or(Manual::Unknown)?;
+        // Decision and start under one lock, so that an automatic query
+        // starting in between cannot turn `Running` into `Unknown`.
+        let query = {
+            let mut inner = self.lock();
+            match inner.schedule.manual(nas_id, now) {
+                Manual::Go => {}
+                other => return Err(other),
+            }
+            self.begin_locked(&mut inner, nas_id, now)
+                .ok_or(Manual::Unknown)?
+        };
         query.run().await.ok_or(Manual::Unknown)
     }
 
