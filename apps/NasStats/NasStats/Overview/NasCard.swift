@@ -13,7 +13,7 @@ struct NasCard: View {
         if let problem = entry.problemLine {
             lines.append((problem, entry.statusLevel))
         }
-        for finding in entry.snapshot?.findings ?? [] {
+        for finding in entry.findings {
             lines.append((finding.text, finding.level == .critical ? .critical : .warning))
         }
         return lines
@@ -40,7 +40,8 @@ struct NasCard: View {
                         percent: volume.usedPercent,
                         usedBytes: volume.usedBytes,
                         totalBytes: volume.totalBytes,
-                        forecast: nil
+                        forecast: nil,
+                        thresholds: entry.thresholds.fill
                     )
                 }
                 MetricsRow(
@@ -50,7 +51,8 @@ struct NasCard: View {
                     upsChargePercent: snapshot.ups?.chargePercent,
                     upsOnBattery: snapshot.ups?.state == .onBattery,
                     lastBackup: entry.lastBackupAt,
-                    now: now
+                    now: now,
+                    diskTempWarningC: entry.thresholds.diskTempWarningC
                 )
             }
         }

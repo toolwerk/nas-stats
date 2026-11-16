@@ -19,6 +19,9 @@ struct OverviewTests {
         snapshot.demo = false
         snapshot.worstHealth = health
         snapshot.findings = findings
+        // No fill level or disk temperature that crosses a threshold.
+        snapshot.volumes = []
+        snapshot.disks = []
         snapshot.observedAt = Self.now - minutesAgo * 60
         return NasEntry(id: id, baseUrl: "https://\(id).invalid", snapshot: snapshot)
     }
@@ -30,7 +33,7 @@ struct OverviewTests {
         )
     }
 
-    private let warm = Finding(kind: .diskTemperature, level: .warning, subject: nil, text: "Platte 3 bei 52 °C")
+    private let warm = Finding(kind: .alert, level: .warning, subject: nil, text: "Lüfter laut")
 
     @Test func allHealthy() {
         #expect(OverviewSummary.sentence([entry("a"), entry("b"), entry("c")], demo: false) == "Alle 3 NAS gesund")
@@ -119,5 +122,45 @@ struct OverviewTests {
         #expect(e.capacityVolumes.map(\.name) == ["tank", "apps"])
         #expect(e.vendorLabel == "TrueNAS")
         #expect(NasEntry(id: "x", baseUrl: "https://x.invalid").capacityVolumes.isEmpty)
+    }
+
+    @Test func demoKellerFindingsWithStandardThresholds() throws {
+        let keller = try #require(demoSnapshots(now: Self.now).first)
+        let e = NasEntry(id: keller.nas.id, baseUrl: keller.nas.baseUrl, snapshot: keller)
+        #expect(e.findings.map(\.text) == ["Platte 3 bei 52 °C", "DataVol1 bei 87 %"])
+        #expect(e.health == .warning)
+    }
+
+    @Test func thresholdsOfTheSettingsReplaceThoseOfTheCore() throws {
+        let keller = try #require(demoSnapshots(now: Self.now).first)
+        var e = NasEntry(id: keller.nas.id, baseUrl: keller.nas.baseUrl, snapshot: keller)
+        // Hotter disks allowed, fill warning earlier, critical at 85.
+        e.thresholds = AlertThresholds(fill: FillThresholds(warning: 75, critical: 85), diskTempWarningC: 55)
+        #expect(e.findings.map(\.text) == ["DataVol1 bei 87 %"])
+        #expect(e.findings.first?.level == .critical)
+        #expect(e.health == .critical)
+
+        e.thresholds = AlertThresholds(fill: FillThresholds(warning: 90, critical: 95), diskTempWarningC: 60)
+        #expect(e.findings.isEmpty)
+        #expect(e.health == .ok)
+    }
+
+    @Test func otherFindingsOfTheCoreStay() throws {
+        var snapshot = try #require(demoSnapshots(now: Self.now).first)
+        snapshot.findings.append(Finding(kind: .upsOnBattery, level: .critical, subject: nil, text: "USV auf Batterie"))
+        let e = NasEntry(id: "a", baseUrl: "https://a.invalid", snapshot: snapshot)
+        #expect(e.findings.map(\.text) == ["USV auf Batterie", "Platte 3 bei 52 °C", "DataVol1 bei 87 %"])
+    }
+
+    @Test func aPoolDoesNotCountNextToItsVolume() throws {
+        var snapshot = try #require(demoSnapshots(now: Self.now).first)
+        snapshot.findings = []
+        snapshot.disks = []
+        // The pool is full, the volume in it is not.
+        for index in snapshot.volumes.indices {
+            snapshot.volumes[index].usedPercent = snapshot.volumes[index].kind == .pool ? 95 : 50
+        }
+        let e = NasEntry(id: "a", baseUrl: "https://a.invalid", snapshot: snapshot)
+        #expect(e.findings.isEmpty)
     }
 }

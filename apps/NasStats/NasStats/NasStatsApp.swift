@@ -21,12 +21,20 @@ struct NasStatsApp: App {
     var body: some Scene {
         #if os(iOS)
         WindowGroup {
-            OverviewView()
-                .environment(store)
+            TabView {
+                Tab("Übersicht", systemImage: "externaldrive") {
+                    OverviewView()
+                }
+                Tab("Einstellungen", systemImage: "gearshape") {
+                    SettingsView()
+                }
+            }
+            .environment(store)
         }
         #else
         // Menu bar only; LSUIElement keeps the app out of the Dock. The
-        // status item and its windows come from `StatusItemController`.
+        // status item and its windows (also the settings, #21) come from
+        // `StatusItemController`.
         Settings {
             EmptyView()
         }
@@ -40,6 +48,16 @@ struct NasStatsApp: App {
 }
 
 extension StoreHealth {
+    /// Traffic light colour of the settings list.
+    var color: Color {
+        switch self {
+        case .critical: .red
+        case .warning: .orange
+        case .ok: .green
+        case .unknown: .gray
+        }
+    }
+
     /// Symbol for the menu, where colours do not show.
     var symbol: String {
         switch self {

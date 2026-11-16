@@ -1,9 +1,8 @@
 import SwiftUI
 
 /// Start screen of the iOS app (#17): the state of all NAS in one sentence
-/// and one card per NAS, worst first. Pull to refresh queries only NAS last
-/// queried 5 minutes ago or longer; a tap opens the detail. The tab bar
-/// follows with #19.
+/// and one card per NAS, worst first. Pull to refresh queries only NAS
+/// whose interval has passed (at least 5 minutes); a tap opens the detail.
 struct OverviewView: View {
     @Environment(NasStore.self) private var store
     @State private var addingNas = false

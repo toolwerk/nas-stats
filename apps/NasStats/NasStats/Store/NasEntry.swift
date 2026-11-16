@@ -59,6 +59,8 @@ struct NasEntry: Identifiable, Sendable {
     var localError: String?
     /// Error thrown by the last query (not a `problem` of the NAS).
     var queryError: String?
+    /// Thresholds of the settings for fill level and disk temperature.
+    var thresholds: AlertThresholds = .standard
 
     /// Model of the last snapshot, else of the test query.
     var displayModel: String? { snapshot?.nas.model ?? model }
@@ -70,23 +72,74 @@ struct NasEntry: Identifiable, Sendable {
         name ?? snapshot?.nas.name ?? NasAddress.host(of: baseUrl) ?? baseUrl
     }
 
-    /// Worst level of the findings of the core (thresholds included), else
-    /// the health the NAS reports; an error lifts it to at least warning,
-    /// a NAS waiting for the user (block, refused registration) is
-    /// critical. A NAS silent for hours never shows green.
+    /// Worst level of `findings`, else the health the NAS reports; an
+    /// error lifts it to at least warning, a NAS waiting for the user
+    /// (block, refused registration) is critical. A NAS silent for hours
+    /// never shows green.
     var health: StoreHealth {
         if blocked || problem?.stopsPolling == true || localError != nil {
             return .critical
         }
         let reported = StoreHealth(snapshot?.worstHealth)
-        let base = (snapshot?.findings ?? []).map { StoreHealth($0.level) }.min()
+        let base = findings.map { StoreHealth($0.level) }.min()
             .map { min($0, reported) } ?? reported
         return problem == nil && queryError == nil ? base : min(base, .warning)
     }
 
+    /// What needs attention, critical first: the findings of the core, but
+    /// fill level and disk temperature checked against the thresholds of
+    /// the settings (#21) instead of the standard ones of the core, with
+    /// the same texts.
+    var findings: [Finding] {
+        guard let snapshot else { return [] }
+        var all = snapshot.findings.filter { $0.kind != .diskTemperature && $0.kind != .volumeFill }
+        for disk in snapshot.disks {
+            if let temp = disk.temperatureC, temp >= thresholds.diskTempWarningC {
+                all.append(Finding(
+                    kind: .diskTemperature, level: .warning, subject: disk.id,
+                    text: "\(disk.name) bei \(Int(temp.rounded(.down))) °C"
+                ))
+            }
+        }
+        for volume in capacityVolumes {
+            let level: Health
+            switch thresholds.fill.level(for: volume.usedPercent) {
+            case .critical: level = .critical
+            case .warning: level = .warning
+            default: continue
+            }
+            let percent = Int((volume.usedPercent ?? 0).rounded(.down))
+            all.append(Finding(
+                kind: .volumeFill, level: level, subject: volume.id,
+                text: "\(volume.name) bei \(percent) %"
+            ))
+        }
+        // Order of the rules of the core, critical first; stable within.
+        return all.enumerated()
+            .sorted { lhs, rhs in
+                let l = (lhs.element.level == .critical ? 0 : 1, Self.rank(lhs.element.kind), lhs.offset)
+                let r = (rhs.element.level == .critical ? 0 : 1, Self.rank(rhs.element.kind), rhs.offset)
+                return l < r
+            }
+            .map(\.element)
+    }
+
+    /// Place of a rule in the order of the core.
+    private static func rank(_ kind: FindingKind) -> Int {
+        switch kind {
+        case .alert: 0
+        case .diskHealth, .diskTemperature: 1
+        case .volumeHealth: 2
+        case .volumeFill: 3
+        case .fanHealth: 4
+        case .upsOnBattery: 5
+        case .backupFailed, .backupOverdue: 6
+        }
+    }
+
     /// State for the status dot: "Nicht erreichbar" when the NAS did not
-    /// answer, nothing blocks it and its last state was not critical (a
-    /// critical NAS stays red), else from `health`.
+    /// answer and its last state was not critical (a critical NAS stays
+    /// red), else from `health`.
     var statusLevel: StatusLevel {
         if let kind = problem?.kind, kind == .unreachable || kind == .timeout,
            health != .critical {
