@@ -14,7 +14,7 @@ use std::path::Path;
 use nas_model::{
     BackupResult, BackupRun, Event, EventKind, Health, Metric, ProviderKind, Sample, Snapshot,
 };
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::export::{
     EXPORT_VERSION, Export, ExportBackupRun, ExportBucket, ExportSample, ImportCount,
@@ -768,8 +768,31 @@ impl HistoryStore {
                 })
             })
             .collect();
+        // Only samples that are new or have another value count; a follow-up
+        // import overlaps the last one by an hour.
+        {
+            let mut stored = tx.prepare_cached(
+                "SELECT value FROM samples
+                 WHERE nas_id = ?1 AND metric = ?2 AND key = ?3 AND at = ?4",
+            )?;
+            for sample in samples.iter().filter(|s| s.key.as_deref() != Some("")) {
+                let value: Option<f64> = stored
+                    .query_row(
+                        params![
+                            nas_id,
+                            sample.metric.as_str(),
+                            sample.key.as_deref().unwrap_or(""),
+                            sample.at
+                        ],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if value != Some(sample.value) {
+                    count.samples += 1;
+                }
+            }
+        }
         write_in(&tx, &samples, now)?;
-        count.samples = u32::try_from(samples.len()).unwrap_or(u32::MAX);
 
         let runs: Vec<BackupRun> = export
             .backup_runs
@@ -784,8 +807,31 @@ impl HistoryStore {
                 })
             })
             .collect();
-        upsert_runs(&tx, nas_id, &runs)?;
-        count.backup_runs = u32::try_from(runs.len()).unwrap_or(u32::MAX);
+        // Only runs that are new or change count.
+        {
+            let mut stored = tx.prepare_cached(
+                "SELECT finished_at, result, message FROM backup_runs
+                 WHERE nas_id = ?1 AND task_id = ?2 AND started_at = ?3",
+            )?;
+            let mut read = |run: &BackupRun| {
+                stored
+                    .query_row(params![nas_id, run.task_id, run.started_at], |row| {
+                        Ok((
+                            row.get::<_, Option<i64>>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    })
+                    .optional()
+            };
+            for run in &runs {
+                let before = read(run)?;
+                upsert_runs(&tx, nas_id, std::slice::from_ref(run))?;
+                if read(run)? != before {
+                    count.backup_runs += 1;
+                }
+            }
+        }
         tx.commit()?;
         Ok(count)
     }
@@ -1941,7 +1987,7 @@ mod tests {
         let before = counts(&app);
         let again = app.import(&back, "app-7", end).expect("import again");
         assert_eq!(counts(&app), before);
-        assert_eq!((again.hourly, again.daily), (0, 0));
+        assert_eq!(again, ImportCount::default());
     }
 
     #[test]

@@ -644,12 +644,12 @@ impl From<stats_core::CollectorNas> for CollectorNas {
 pub struct CollectorImport {
     /// Time of the export, Unix seconds UTC: `since` of the next import.
     pub until: i64,
-    /// Raw samples written.
+    /// Raw samples that were new or had another value.
     pub samples: u32,
     /// Hourly and daily values written or replaced.
     pub hourly: u32,
     pub daily: u32,
-    /// Backup runs written.
+    /// Backup runs that were new or changed.
     pub backup_runs: u32,
 }
 

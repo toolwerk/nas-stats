@@ -94,7 +94,8 @@ pub struct ExportBackupRun {
     pub message: Option<String>,
 }
 
-/// What an import took over: rows written or changed, per kind.
+/// What an import took over: rows that were new or changed, per kind;
+/// rows already stored with the same values do not count.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ImportCount {
     pub samples: u32,
