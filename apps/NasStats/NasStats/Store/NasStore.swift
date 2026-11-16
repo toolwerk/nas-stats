@@ -28,12 +28,14 @@ final class NasStore {
         }
     }
 
-    /// Thresholds of the settings (#21); they colour the entries and their
-    /// order, also in demo mode. Saved under `thresholds` in the defaults.
+    /// Thresholds of the settings (#21); the core computes the findings of
+    /// every entry with them (#85), also in demo mode. Saved under
+    /// `thresholds` in the defaults.
     var thresholds: AlertThresholds {
         didSet {
             guard thresholds != oldValue else { return }
             thresholds.save(to: defaults)
+            accounts.core.setThresholds(thresholds: thresholds.core)
             rebuild()
         }
     }
@@ -77,7 +79,7 @@ final class NasStore {
     /// List, passwords and registration with the core (#14).
     @ObservationIgnored let accounts: NasAccounts
     @ObservationIgnored private let defaults: UserDefaults
-    @ObservationIgnored private let demoSource: (Int64) -> [Snapshot]
+    @ObservationIgnored private let demoSource: (Int64, Thresholds) -> [Snapshot]
     @ObservationIgnored private let pollInterval: Duration?
     @ObservationIgnored private let clock: () -> Int64
     @ObservationIgnored private let lastStates: LastStates
@@ -102,7 +104,7 @@ final class NasStore {
     init(
         accounts: NasAccounts,
         defaults: UserDefaults,
-        demoSource: @escaping (Int64) -> [Snapshot],
+        demoSource: @escaping (Int64, Thresholds) -> [Snapshot],
         pollInterval: Duration?,
         clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) },
         lastStates: LastStates = LastStates(fileURL: nil)
@@ -116,8 +118,11 @@ final class NasStore {
         self.log = defaults.data(forKey: Self.queryLogKey)
             .flatMap { try? JSONDecoder().decode(QueryLog.self, from: $0) } ?? QueryLog()
         self.demoMode = defaults.bool(forKey: Self.demoModeKey)
-        self.thresholds = AlertThresholds.load(from: defaults)
+        let thresholds = AlertThresholds.load(from: defaults)
+        self.thresholds = thresholds
         self.queryIntervalMinutes = Self.storedInterval(in: defaults)
+        // Before the first state, so restored ones get the same findings.
+        accounts.core.setThresholds(thresholds: thresholds.core)
         // The last state of an earlier launch shows until the first answer;
         // one the core refuses (other format after an update) is dropped,
         // as is one of a NAS no longer stored (e.g. removed on another
@@ -154,7 +159,7 @@ final class NasStore {
         let store = NasStore(
             accounts: NasAccounts(),
             defaults: UserDefaults(suiteName: AppGroup.id) ?? .standard,
-            demoSource: { demoSnapshots(now: $0) },
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
             pollInterval: .seconds(300),
             lastStates: LastStates(fileURL: isPreview ? nil : LastStates.liveURL)
         )
@@ -417,7 +422,7 @@ final class NasStore {
     private func rebuild() {
         if demoMode {
             let now = Int64(Date().timeIntervalSince1970)
-            entries = demoSource(now).map { snapshot in
+            entries = demoSource(now, thresholds.core).map { snapshot in
                 NasEntry(
                     id: snapshot.nas.id,
                     name: snapshot.nas.name,

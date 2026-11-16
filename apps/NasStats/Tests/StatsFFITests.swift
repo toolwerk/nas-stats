@@ -98,13 +98,17 @@ struct StatsFFITests {
     @Test func demoSnapshotsAreTheThreeDemoNas() {
         // 14 November 2026, 14:05 UTC.
         let now: Int64 = 1_794_665_100
-        let snapshots = demoSnapshots(now: now)
+        let snapshots = demoSnapshots(now: now, thresholds: standardThresholds())
         #expect(snapshots.map(\.nas.id) == ["demo-keller", "demo-buero", "demo-homelab"])
         #expect(snapshots.allSatisfy { $0.demo && $0.observedAt == now })
-        #expect(snapshots == demoSnapshots(now: now))
+        #expect(snapshots == demoSnapshots(now: now, thresholds: standardThresholds()))
         #expect(snapshots[0].findings.map(\.text) == ["Platte 3 bei 52 °C", "DataVol1 bei 87 %"])
         #expect(snapshots[1].findings.isEmpty)
         #expect(snapshots[2].findings.isEmpty)
+    }
+
+    @Test func standardThresholdsAreThoseOfTheSettings() {
+        #expect(standardThresholds() == AlertThresholds.standard.core)
     }
 
     @Test func demoSnapshotCarriesFindings() {
