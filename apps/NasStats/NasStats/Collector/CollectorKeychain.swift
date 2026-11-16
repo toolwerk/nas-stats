@@ -78,6 +78,8 @@ final class MemoryCollectorStore: CollectorStore {
     private let item: Mutex<StoredCollector?>
     /// `save` and `delete` throw while set.
     let refuseSave = Mutex(false)
+    /// `load` throws while set.
+    let refuseLoad = Mutex(false)
 
     struct Refused: Error {}
 
@@ -87,7 +89,10 @@ final class MemoryCollectorStore: CollectorStore {
 
     var stored: StoredCollector? { item.withLock { $0 } }
 
-    func load() throws -> StoredCollector? { stored }
+    func load() throws -> StoredCollector? {
+        if refuseLoad.withLock({ $0 }) { throw Refused() }
+        return stored
+    }
 
     func save(_ collector: StoredCollector) throws {
         if refuseSave.withLock({ $0 }) { throw Refused() }

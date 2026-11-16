@@ -75,7 +75,7 @@ Fingerabdruck des Containers und Schlüssel für die App:
 docker exec nas-collector nas-collector pairing
 ```
 
-Beim ersten Start legt der Container dafür ein selbstsigniertes Zertifikat (`tls/`) und einen zufälligen Schlüssel (`token`) im Datenordner an, nur für ihn lesbar. Die App vertraut genau diesem Zertifikat und schickt den Schlüssel bei jeder Anfrage mit. Wer neu koppeln will, löscht `tls/` oder `token` im Datenordner und startet den Container neu; danach muss jede App neu gekoppelt werden.
+Beim ersten Start legt der Container dafür ein selbstsigniertes Zertifikat (`tls/`) und einen zufälligen Schlüssel (`token`) im Datenordner an, nur für ihn lesbar. Die App vertraut genau diesem Zertifikat und schickt den Schlüssel bei jeder Anfrage mit. Wer neu koppeln will, löscht `tls/` oder `token` im Datenordner und startet den Container neu; danach muss die App neu gekoppelt werden (Einstellungen › Sammel-Container › Neu koppeln). Mit „Zugänge über iCloud-Schlüsselbund teilen“ genügt das auf einem Gerät, die anderen übernehmen die neue Kopplung.
 
 Prüfen von einem Rechner im Heimnetz:
 

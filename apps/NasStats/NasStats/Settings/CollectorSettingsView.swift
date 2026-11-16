@@ -95,7 +95,7 @@ struct CollectorSettingsView: View {
             nasSection
             Section {
                 Button("Jetzt abgleichen", action: syncNow)
-                    .disabled(busy || collector.running)
+                    .disabled(busy || collector.running || store.demoMode)
                 Button("Neu koppeln …") {
                     pairingAgain = true
                 }
@@ -206,13 +206,8 @@ struct CollectorSettingsView: View {
     // MARK: - Actions
 
     private func syncNow() {
-        guard !busy else { return }
-        busy = true
         errorText = nil
-        Task {
-            defer { busy = false }
-            await collector.sync()
-        }
+        store.syncCollectorNow()
     }
 
     private func remove() {

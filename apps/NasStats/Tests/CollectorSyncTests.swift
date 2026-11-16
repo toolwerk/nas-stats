@@ -258,6 +258,31 @@ struct CollectorSyncTests {
         #expect(sync.state.stopped == nil)
     }
 
+    @Test func anUnreadableKeychainKeepsStopAndProgress() async throws {
+        let a = Self.account("Keller")
+        let core = FakeCore()
+        core.importResult.withLock { $0 = CollectorImport(until: 5_000, samples: 1, hourly: 0, daily: 0, backupRuns: 0) }
+        fake.list.withLock { $0 = [Self.nas("1")] }
+        let store = MemoryCollectorStore(Self.collector())
+        await sync(store, accounts: [a], core: core).sync()
+        fake.failure.withLock { $0 = .LoginFailed }
+        clock.advance(minutes: 5)
+        await sync(store, accounts: [a], core: core).sync()
+
+        // Launch before the first unlock: the keychain refuses.
+        store.refuseLoad.withLock { $0 = true }
+        let later = sync(store, accounts: [a], core: core)
+        #expect(later.state.stopped != nil)
+        store.refuseLoad.withLock { $0 = false }
+        clock.advance(minutes: 5)
+        await later.syncIfDue(interval: 300)
+
+        #expect(later.paired != nil)
+        #expect(later.state.stopped != nil)
+        #expect(later.state.progress[a.account.id.uuidString]?.until == 5_000)
+        #expect(fake.calls.withLock { $0 } == 2)
+    }
+
     @Test func aPairingRemovedOnAnotherDeviceGoesHereToo() async throws {
         let store = MemoryCollectorStore(Self.collector())
         let sync = sync(store, accounts: [Self.account("Keller")])

@@ -148,7 +148,7 @@ struct SettingsView: View {
                 }
                 Button("Abbrechen", role: .cancel) {}
             } message: {
-                Text("Die NAS verschwinden von Ihren anderen Geräten und bleiben nur auf diesem.")
+                Text("Die NAS und die Kopplung mit dem Sammel-Container verschwinden von Ihren anderen Geräten und bleiben nur auf diesem.")
             }
         } header: {
             Text("iCloud")

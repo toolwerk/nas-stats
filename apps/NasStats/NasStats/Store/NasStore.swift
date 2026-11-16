@@ -530,6 +530,14 @@ final class NasStore {
             baseUrl: baseUrl, fingerprint: fingerprint, token: token,
             syncsViaICloud: sharesAccessViaICloud
         )
+        guard !demoMode else { return }
+        startCollectorTask { await $0.sync() }
+    }
+
+    /// "Jetzt abgleichen": syncs at once, not in demo mode; also after a
+    /// refused key, as a step of the user.
+    func syncCollectorNow() {
+        guard !demoMode else { return }
         startCollectorTask { await $0.sync() }
     }
 
@@ -537,6 +545,8 @@ final class NasStore {
     /// at all) and syncs at once, without waiting for it.
     func assignCollectorNas(_ collectorNasId: String, to appNasId: UUID?) throws {
         try collector.assign(collectorNasId, to: appNasId)
+        // A stopped collector waits for a new pairing or "Jetzt abgleichen".
+        guard !demoMode, collector.state.stopped == nil else { return }
         startCollectorTask { await $0.sync() }
     }
 

@@ -60,6 +60,9 @@ final class CollectorSync {
     private(set) var running = false
     /// Set by a call of `sync` while one runs.
     @ObservationIgnored private var again = false
+    /// The keychain could not be read at the last try; `paired` is not
+    /// known then, so neither stop nor progress may go.
+    @ObservationIgnored private var readFailed = false
     private(set) var state: SyncState
 
     /// Called with the ids of the NAS of the app that got new values.
@@ -87,8 +90,15 @@ final class CollectorSync {
         self.listNas = listNas
         self.state = defaults.data(forKey: Self.stateKey)
             .flatMap { try? JSONDecoder().decode(SyncState.self, from: $0) } ?? SyncState()
-        self.paired = Self.load(from: store)
-        liftStaleStop()
+        do {
+            self.paired = try store.load()
+        } catch {
+            Self.log.error("Collector not read: \(String(describing: error), privacy: .public)")
+            self.readFailed = true
+        }
+        if !readFailed {
+            liftStaleStop()
+        }
         self.error = state.stopped
     }
 
@@ -145,6 +155,7 @@ final class CollectorSync {
     /// new choice of the user is not lost.
     @discardableResult
     func sync() async -> Set<String> {
+        reloadFromStore()
         guard paired != nil else { return [] }
         guard !running else {
             again = true
@@ -238,6 +249,7 @@ final class CollectorSync {
     /// first import may take long, the caller starts it.
     func pair(baseUrl: String, fingerprint: String, token: String, syncsViaICloud: Bool) async throws {
         _ = try await listNas(baseUrl, fingerprint, token)
+        reloadFromStore()
         var collector = StoredCollector(
             baseUrl: baseUrl, fingerprint: fingerprint, token: token, syncsViaICloud: syncsViaICloud
         )
@@ -263,6 +275,7 @@ final class CollectorSync {
     /// Takes a NAS of the collector over into `appNasId`, or not at all
     /// with `nil`. Takes effect with the next sync.
     func assign(_ collectorNasId: String, to appNasId: UUID?) throws {
+        reloadFromStore()
         guard var collector = paired else { return }
         if let appNasId {
             collector.assignments = collector.assignments.filter { $0.value != appNasId }
@@ -292,6 +305,7 @@ final class CollectorSync {
     /// Moves the keychain entry to or from iCloud Keychain; on failure the
     /// old entry is put back.
     func setSyncsViaICloud(_ syncs: Bool) throws {
+        reloadFromStore()
         guard let old = paired, old.syncsViaICloud != syncs else { return }
         var collector = old
         collector.syncsViaICloud = syncs
@@ -306,6 +320,7 @@ final class CollectorSync {
 
     /// A NAS of the app is gone: its choice and progress go too.
     func forget(appNasId: UUID) {
+        reloadFromStore()
         state.progress[appNasId.uuidString] = nil
         saveState()
         guard var collector = paired, collector.assignments.values.contains(appNasId) else { return }
@@ -329,6 +344,15 @@ final class CollectorSync {
             stored = try store.load()
         } catch {
             Self.log.error("Collector not read: \(String(describing: error), privacy: .public)")
+            readFailed = true
+            return
+        }
+        if readFailed {
+            // First successful read: as at a launch.
+            readFailed = false
+            paired = stored
+            liftStaleStop()
+            error = state.stopped
             return
         }
         guard stored != paired else { return }
@@ -381,14 +405,5 @@ final class CollectorSync {
     private func saveState() {
         guard let data = try? JSONEncoder().encode(state) else { return }
         defaults.set(data, forKey: Self.stateKey)
-    }
-
-    private static func load(from store: any CollectorStore) -> StoredCollector? {
-        do {
-            return try store.load()
-        } catch {
-            log.error("Collector not read: \(String(describing: error), privacy: .public)")
-            return nil
-        }
     }
 }
