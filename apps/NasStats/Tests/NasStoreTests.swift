@@ -32,6 +32,8 @@ final class FakeCore: NasCoreProtocol {
     let failRefresh = Mutex(false)
     /// `refresh` waits a little while set, so calls overlap.
     let slowRefresh = Mutex(false)
+    /// What `events` returns per NAS id, as the archive would.
+    let presetEvents = Mutex<[String: [NasEvent]]>([:])
     /// Saved state → snapshot; `restoreState` refuses any other JSON.
     private let restorable: Mutex<[String: Snapshot]>
 
@@ -117,7 +119,7 @@ final class FakeCore: NasCoreProtocol {
         throw FfiError.Internal(detail: "not used")
     }
 
-    // History, events and the planner (#60) are not used by the store yet.
+    // History and the planner (#60) are not used by the store yet.
 
     func refreshNow(nasId: String) async throws -> NasState {
         throw FfiError.Internal(detail: "not used")
@@ -133,7 +135,11 @@ final class FakeCore: NasCoreProtocol {
 
     func history(nasId: String, metric: Metric, range: HistoryRange) throws -> [HistorySeries] { [] }
 
-    func events(nasId: String?, from: Int64, to: Int64) throws -> [NasEvent] { [] }
+    func events(nasId: String?, from: Int64, to: Int64) throws -> [NasEvent] {
+        presetEvents.withLock { events in
+            nasId.map { events[$0] ?? [] } ?? events.values.flatMap { $0 }
+        }
+    }
 
     func forecast(nasId: String, volumeId: String) throws -> Forecast? { nil }
 
@@ -291,6 +297,102 @@ struct NasStoreTests {
             clock: { [clock] in clock.now },
             lastStates: lastStates
         )
+    }
+
+    @Test func aQueryNotifiesTheOpenEventsAndRemoveWithdrawsThem() async throws {
+        let a = Self.account("Keller")
+        let id = a.account.id.uuidString
+        let core = FakeCore(states: [Self.state(a, health: .warning)])
+        let open = NasEvent(
+            nasId: id, kind: .diskTemperature, subject: "3", level: .warning,
+            text: "Platte 3 bei 52 °C", startedAt: 1_000, endedAt: nil
+        )
+        let ended = NasEvent(
+            nasId: id, kind: .upsOnBattery, subject: nil, level: .warning,
+            text: "USV im Akkubetrieb", startedAt: 900, endedAt: 950
+        )
+        core.presetEvents.withLock { $0[id] = [open, ended] }
+        let poster = FakePoster()
+        let store = NasStore(
+            accounts: NasAccounts(keychain: MemoryAccountStore([a]), core: core),
+            defaults: defaults,
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
+            pollInterval: nil,
+            clock: { [clock] in clock.now },
+            notifier: EventNotifier(poster: poster, defaults: defaults)
+        )
+        await store.start()
+        #expect(poster.posts.map(\.id) == [EventNotifier.id(of: open)])
+        #expect(poster.posts.first?.title == "Keller")
+
+        // The same state on the next query notifies nothing new.
+        clock.advance(minutes: 5)
+        await store.refreshAll()
+        #expect(core.calls.refreshed == [id, id])
+        #expect(poster.posts.count == 1)
+
+        try await store.remove(id: a.account.id)
+        #expect(poster.withdrawn == [EventNotifier.id(of: open)])
+    }
+
+    @Test func switchingAKindOffWithdrawsItsNotification() async throws {
+        let a = Self.account("Keller")
+        let id = a.account.id.uuidString
+        let core = FakeCore(states: [Self.state(a, health: .warning)])
+        let open = NasEvent(
+            nasId: id, kind: .diskTemperature, subject: "3", level: .warning,
+            text: "Platte 3 bei 52 °C", startedAt: 1_000, endedAt: nil
+        )
+        core.presetEvents.withLock { $0[id] = [open] }
+        let poster = FakePoster()
+        let store = NasStore(
+            accounts: NasAccounts(keychain: MemoryAccountStore([a]), core: core),
+            defaults: defaults,
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
+            pollInterval: nil,
+            clock: { [clock] in clock.now },
+            notifier: EventNotifier(poster: poster, defaults: defaults)
+        )
+        await store.start()
+        store.notificationSettings.disabled = [.disks]
+        #expect(poster.withdrawn == [EventNotifier.id(of: open)])
+    }
+
+    @Test func onceAllowedTheOpenEventsNotifyWithoutAQuery() async throws {
+        let a = Self.account("Keller")
+        let id = a.account.id.uuidString
+        let core = FakeCore(states: [Self.state(a, health: .warning)])
+        let open = NasEvent(
+            nasId: id, kind: .diskTemperature, subject: "3", level: .warning,
+            text: "Platte 3 bei 52 °C", startedAt: 1_000, endedAt: nil
+        )
+        core.presetEvents.withLock { $0[id] = [open] }
+        // The user decides only after the first query.
+        let poster = FakePoster()
+        poster.authorized = false
+        let store = NasStore(
+            accounts: NasAccounts(keychain: MemoryAccountStore([a]), core: core),
+            defaults: defaults,
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
+            pollInterval: nil,
+            clock: { [clock] in clock.now },
+            notifier: EventNotifier(poster: poster, defaults: defaults)
+        )
+        await store.start()
+        await store.permissionRequest?.value
+        #expect(poster.posts.isEmpty)
+
+        poster.grantsOnRequest = true
+        try await store.add(Self.account("Büro"))
+        await store.permissionRequest?.value
+        #expect(poster.posts.map(\.id) == [EventNotifier.id(of: open)])
+        #expect(core.calls.refreshed == [id])
+    }
+
+    @Test func theNotificationSettingsAreSaved() async throws {
+        let store = await started(MemoryAccountStore(), core: FakeCore())
+        store.notificationSettings.disabled = [.ups]
+        #expect(NotificationSettings.load(from: defaults).disabled == [.ups])
     }
 
     @Test func theLastStateComesBackAfterARestart() async throws {
