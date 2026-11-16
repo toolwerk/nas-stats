@@ -103,16 +103,21 @@ struct EventsContent: Equatable {
         let resolved = event.endedAt != nil
         let seconds = max(0, (event.endedAt ?? now) - event.startedAt)
         let duration = StatusFormat.uptime(UInt64(seconds))
-        let category = NotificationCategory(event.kind)
         return EventRow(
             id: EventNotifier.id(of: event),
             title: event.text,
             detail: "\(name) · " + (resolved ? "erledigt nach \(duration)" : "offen seit \(duration)"),
             time: time,
             resolved: resolved,
-            level: category == .unreachable ? .offline : StatusLevel(event.level),
-            symbol: category.symbol
+            level: level(of: event),
+            symbol: NotificationCategory(event.kind).symbol
         )
+    }
+
+    /// Colour of an event: „nicht erreichbar“ grey, else its level; also
+    /// for the event line of the Mac popover (#28).
+    static func level(of event: NasEvent) -> StatusLevel {
+        NotificationCategory(event.kind) == .unreachable ? .offline : StatusLevel(event.level)
     }
 
     private static func title(of day: Date, now: Date, calendar: Calendar, locale: Locale) -> String {
