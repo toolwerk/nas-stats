@@ -350,6 +350,37 @@ struct NasStoreTests {
         #expect(poster.withdrawn == [EventNotifier.id(of: open)])
     }
 
+    @Test func onceAllowedTheOpenEventsNotifyWithoutAQuery() async throws {
+        let a = Self.account("Keller")
+        let id = a.account.id.uuidString
+        let core = FakeCore(states: [Self.state(a, health: .warning)])
+        let open = NasEvent(
+            nasId: id, kind: .diskTemperature, subject: "3", level: .warning,
+            text: "Platte 3 bei 52 °C", startedAt: 1_000, endedAt: nil
+        )
+        core.presetEvents.withLock { $0[id] = [open] }
+        // The user decides only after the first query.
+        let poster = FakePoster()
+        poster.authorized = false
+        let store = NasStore(
+            accounts: NasAccounts(keychain: MemoryAccountStore([a]), core: core),
+            defaults: defaults,
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
+            pollInterval: nil,
+            clock: { [clock] in clock.now },
+            notifier: EventNotifier(poster: poster, defaults: defaults)
+        )
+        await store.start()
+        await store.permissionRequest?.value
+        #expect(poster.posts.isEmpty)
+
+        poster.grantsOnRequest = true
+        try await store.add(Self.account("Büro"))
+        await store.permissionRequest?.value
+        #expect(poster.posts.map(\.id) == [EventNotifier.id(of: open)])
+        #expect(core.calls.refreshed == [id])
+    }
+
     @Test func theNotificationSettingsAreSaved() async throws {
         let store = await started(MemoryAccountStore(), core: FakeCore())
         store.notificationSettings.disabled = [.ups]

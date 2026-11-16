@@ -28,8 +28,14 @@ final class FakePoster: NotificationPoster {
         withdrawn += ids
     }
 
+    /// The user allows notifications when asked.
+    var grantsOnRequest = false
+
     func requestAuthorization() async {
         authorizationRequests += 1
+        if grantsOnRequest {
+            authorized = true
+        }
     }
 
     func isDenied() async -> Bool { denied }

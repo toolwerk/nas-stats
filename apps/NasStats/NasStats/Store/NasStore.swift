@@ -111,6 +111,9 @@ final class NasStore {
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     /// The round of `refreshAll` running now; a second call waits for it.
     @ObservationIgnored private var round: Task<Void, Never>?
+    /// The request for permission of `requestNotifications`; the tests wait
+    /// for it.
+    @ObservationIgnored private(set) var permissionRequest: Task<Void, Never>?
 
     /// - Parameter pollInterval: Time between two rounds of queries; `nil`
     ///   queries only on `start`, `add`, `updateCredentials` and explicit
@@ -393,10 +396,20 @@ final class NasStore {
     }
 
     /// Asks for notifications once there is a NAS to query (not in demo
-    /// mode); the system asks the user only the first time.
+    /// mode); the system asks the user only the first time. Once given,
+    /// the open events in the archive notify at once, without a query: the
+    /// first query of a launch often ends while the user still decides.
     private func requestNotifications() {
         guard let notifier, !demoMode, !accounts.accounts.isEmpty else { return }
-        Task { await notifier.requestAuthorization() }
+        permissionRequest = Task {
+            await notifier.requestAuthorization()
+            let before = notifier.authorized
+            await notifier.refreshAuthorization()
+            guard notifier.authorized, !before else { return }
+            for account in accounts.accounts where accounts.isRegistered(account.id) {
+                notifyEvents(of: account.id.uuidString)
+            }
+        }
     }
 
     /// The stored interval; a missing or unknown value is 5 minutes.
