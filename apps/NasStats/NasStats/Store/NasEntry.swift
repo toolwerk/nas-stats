@@ -97,8 +97,7 @@ struct NasEntry: Identifiable, Sendable {
     /// answer and its last state was not critical (a critical NAS stays
     /// red), else from `health`.
     var statusLevel: StatusLevel {
-        if let kind = problem?.kind, kind == .unreachable || kind == .timeout,
-           health != .critical {
+        if problem?.noAnswer == true, health != .critical {
             return .offline
         }
         return switch health {
@@ -121,12 +120,13 @@ struct NasEntry: Identifiable, Sendable {
     }
 
     /// Why the NAS has no current state, as one line; `nil` without error.
-    /// A NAS that did not answer or timed out is "Nicht erreichbar", away
-    /// from home that is the normal case; the settings show the exact
+    /// A NAS that did not answer (no connection, time-out, HTTP 502/503/504
+    /// of a proxy; the core decides, `NasProblem.noAnswer`) is "Nicht
+    /// erreichbar", away from home that is the normal case; the settings show the exact
     /// message.
     var problemLine: String? {
         if let localError { return localError }
-        if let kind = problem?.kind, kind == .unreachable || kind == .timeout {
+        if problem?.noAnswer == true {
             return "Nicht erreichbar"
         }
         return problem?.message ?? queryError

@@ -168,6 +168,7 @@ struct StatsFFITests {
         #expect(problem.kind == .unreachable)
         #expect(!problem.message.isEmpty)
         #expect(!problem.stopsPolling)
+        #expect(problem.noAnswer)
         #expect(problem.oldFingerprint == nil)
         #expect(problem.newFingerprint == nil)
         #expect(problem.httpStatus == nil)
