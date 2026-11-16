@@ -79,4 +79,12 @@ struct StatusFormatTests {
         #expect(age(47 * 3600) == "vor 47 h")
         #expect(age(72 * 3600) == "vor 3 Tagen")
     }
+
+    @Test func age() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(StatusFormat.age(now, now: now) == "gerade eben")
+        #expect(StatusFormat.age(now.addingTimeInterval(-120), now: now) == "vor 2 min")
+        #expect(StatusFormat.age(now.addingTimeInterval(-3 * 3600), now: now) == "vor 3 h")
+        #expect(StatusFormat.age(now.addingTimeInterval(-50 * 3600), now: now) == "vor 2 Tagen")
+    }
 }

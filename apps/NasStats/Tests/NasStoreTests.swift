@@ -161,6 +161,8 @@ struct NasStoreTests {
         snapshot.nas.id = id
         snapshot.demo = false
         snapshot.worstHealth = health
+        // The demo snapshot has findings, which would outrank `health`.
+        snapshot.findings = []
         // Only the given health counts: no fill level or disk temperature
         // that crosses a threshold (#21).
         for index in snapshot.volumes.indices {
@@ -219,6 +221,28 @@ struct NasStoreTests {
         let store = await started(MemoryAccountStore([a, b, c, d]), core: core)
         #expect(store.entries.map(\.displayName) == ["Dora", "Cäsar", "Anton", "Berta"])
         #expect(store.entries.map(\.health) == [.critical, .warning, .ok, .unknown])
+    }
+
+    @Test func aFindingLiftsOkToWarning() async throws {
+        let (a, b) = (Self.account("Anton"), Self.account("Berta"))
+        var hot = Self.state(b, health: .ok)
+        hot.snapshot?.findings = [
+            Finding(kind: .alert, level: .warning, subject: nil, text: "Lüfter laut"),
+        ]
+        let core = FakeCore(states: [Self.state(a, health: .ok), hot])
+        let store = await started(MemoryAccountStore([a, b]), core: core)
+        #expect(store.entries.map(\.displayName) == ["Berta", "Anton"])
+        #expect(store.entries.map(\.health) == [.warning, .ok])
+    }
+
+    @Test func aCriticalNasStaysCriticalWithAWarningFinding() async throws {
+        let a = Self.account("Anton")
+        var state = Self.state(a, health: .critical)
+        state.snapshot?.findings = [
+            Finding(kind: .alert, level: .warning, subject: nil, text: "Update verfügbar"),
+        ]
+        let store = await started(MemoryAccountStore([a]), core: FakeCore(states: [state]))
+        #expect(store.entries.first?.health == .critical)
     }
 
     @Test func sameHealthSortsByName() async throws {
@@ -502,6 +526,10 @@ struct NasStoreTests {
 
         #expect(store.entries.map(\.id).sorted() == ["demo-buero", "demo-homelab", "demo-keller"])
         #expect(store.entries.allSatisfy { $0.snapshot?.demo == true })
+        // Keller has a hot disk and a full volume and comes first.
+        #expect(store.entries.first?.id == "demo-keller")
+        #expect(store.entries.map(\.health) == [.warning, .ok, .ok])
+        #expect(store.entries.map(\.provider) == [.qnap, .synology, .trueNas])
 
         store.demoMode = false
         #expect(!defaults.bool(forKey: NasStore.demoModeKey))
