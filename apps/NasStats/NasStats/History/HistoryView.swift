@@ -1,5 +1,8 @@
 import Charts
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 /// History screen (#19): fill level of every volume with the forecast,
 /// disk temperatures, CPU and RAM and the network traffic of one NAS over a
@@ -17,6 +20,8 @@ struct HistoryView: View {
     }
 
     @State private var loaded: Loaded?
+    /// Error of a CSV export (#45), shown as an alert.
+    @State private var csvError: String?
 
     private var entry: NasEntry? {
         store.entries.first { $0.id == nasId } ?? store.entries.first
@@ -52,10 +57,77 @@ struct HistoryView: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
+                if let entry, entry.snapshot != nil {
+                    ToolbarItem(placement: .primaryAction) { exportMenu(entry) }
+                }
                 ToolbarItem(placement: .primaryAction) { nasMenu }
+            }
+            .alert(
+                "CSV",
+                isPresented: Binding(get: { csvError != nil }, set: { if !$0 { csvError = nil } })
+            ) {
+                Button("OK") {}
+            } message: {
+                Text(verbatim: csvError ?? "")
             }
         }
     }
+
+    // MARK: - CSV export (#45)
+
+    private func export(_ kind: CSVExport.Kind, of entry: NasEntry) -> CSVExport {
+        let id = entry.id
+        let range = range
+        let store = store
+        let error = $csvError
+        return CSVExport(
+            fileName: CSVExport.fileName(
+                kind: kind, nasName: entry.displayName, range: range, demo: store.demoMode),
+            make: {
+                do {
+                    switch kind {
+                    case .history: return try store.historyCSV(nasId: id, range: range)
+                    case .events: return try store.eventsCSV(nasId: id, range: range)
+                    }
+                } catch let failure {
+                    error.wrappedValue = failure.localizedDescription
+                    throw failure
+                }
+            })
+    }
+
+    private func exportMenu(_ entry: NasEntry) -> some View {
+        let history = export(.history, of: entry)
+        let events = export(.events, of: entry)
+        return Menu("Export", systemImage: "square.and.arrow.up") {
+            ShareLink(
+                "Verlauf als CSV teilen…", item: history, preview: SharePreview(history.fileName))
+            ShareLink(
+                "Ereignisse als CSV teilen…", item: events, preview: SharePreview(events.fileName))
+            #if os(macOS)
+            Divider()
+            Button("Verlauf sichern…") { save(history) }
+            Button("Ereignisse sichern…") { save(events) }
+            #endif
+        }
+    }
+
+    #if os(macOS)
+    /// The Mac share menu offers no folder, so the file goes through a save
+    /// panel.
+    private func save(_ export: CSVExport) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.nameFieldStringValue = export.fileName
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let text = try export.make()
+            try Data(text.utf8).write(to: url, options: .atomic)
+        } catch {
+            csvError = error.localizedDescription
+        }
+    }
+    #endif
 
     private var nasMenu: some View {
         Menu {

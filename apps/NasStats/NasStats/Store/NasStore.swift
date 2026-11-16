@@ -366,6 +366,20 @@ final class NasStore {
         try historyCore.events(nasId: nasId, from: from, to: to)
     }
 
+    /// The history of a NAS in a range as CSV (#45), times in the time
+    /// zone of the device; in demo mode from the demo data set. Errors of
+    /// the core are thrown.
+    func historyCSV(nasId: String, range: HistoryRange) throws -> String {
+        try historyCore.historyCsv(nasId: nasId, range: range, timeZone: TimeZone.current.identifier)
+    }
+
+    /// The events of a NAS in a range as CSV (#45), times in the time zone
+    /// of the device; in demo mode from the demo data set. Errors of the
+    /// core are thrown.
+    func eventsCSV(nasId: String, range: HistoryRange) throws -> String {
+        try historyCore.eventsCsv(nasId: nasId, range: range, timeZone: TimeZone.current.identifier)
+    }
+
     /// The core that holds the history of the entries shown.
     private var historyCore: any NasCoreProtocol {
         demoMode ? (demoCoreInstance ?? accounts.core) : accounts.core

@@ -187,6 +187,14 @@ final class FakeCore: NasCoreProtocol {
         historyPreset.withLock { $0[metric] ?? [] }
     }
 
+    func historyCsv(nasId: String, range: HistoryRange, timeZone: String) throws -> String {
+        "Zeit;Metrik;Schlüssel;Einheit;Wert;Min;Max\n"
+    }
+
+    func eventsCsv(nasId: String, range: HistoryRange, timeZone: String) throws -> String {
+        "Beginn;Ende;Art;Betreff;Stufe;Text\n"
+    }
+
     func forecast(nasId: String, volumeId: String) throws -> Forecast? {
         forecastPreset.withLock { $0[volumeId] }
     }
@@ -1243,6 +1251,22 @@ struct NasStoreTests {
         // Only volumes with a rising trend get one, never "kein Trend".
         #expect(!keller.forecasts.values.contains(.noTrend))
         #expect(keller.fullestVolumeHistory.count == 30)
+    }
+
+    @Test func csvComesThroughTheStore() throws {
+        let store = makeStore(MemoryAccountStore(), core: FakeCore())
+        store.demoMode = true
+        let history = try store.historyCSV(nasId: "demo-keller", range: .month)
+        #expect(history.hasPrefix("\u{FEFF}Zeit;Metrik;Schlüssel;Einheit;Wert;Min;Max\n"))
+        #expect(history.contains(";Belegung;"))
+        let events = try store.eventsCSV(nasId: "demo-keller", range: .month)
+        #expect(events.hasPrefix("\u{FEFF}Beginn;Ende;Art;Betreff;Stufe;Text\n"))
+        #expect(events.split(separator: "\n").count > 1)
+
+        // Outside demo mode from the core of the accounts.
+        defaults.set(false, forKey: NasStore.demoModeKey)
+        let plain = makeStore(MemoryAccountStore(), core: FakeCore())
+        #expect(try plain.historyCSV(nasId: "a", range: .day) == "Zeit;Metrik;Schlüssel;Einheit;Wert;Min;Max\n")
     }
 
     @Test func historyAndEventsComeThroughTheStore() throws {
