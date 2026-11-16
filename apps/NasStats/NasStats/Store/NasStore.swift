@@ -352,6 +352,13 @@ final class NasStore {
         try historyCore.history(nasId: nasId, metric: metric, range: range)
     }
 
+    /// Forecast "full in X days" of a volume from the history; `nil`
+    /// without a rising trend. In demo mode from the demo data set. Errors
+    /// of the core are thrown.
+    func forecast(nasId: String, volumeId: String) throws -> Forecast? {
+        try historyCore.forecast(nasId: nasId, volumeId: volumeId)
+    }
+
     /// Events of one NAS (`nil`: of all) open at some time in `[from, to]`
     /// (Unix seconds UTC), newest first; in demo mode from the demo data
     /// set. Errors of the core are thrown.
