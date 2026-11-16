@@ -1,25 +1,10 @@
 name: Apps
 
-# Builds the iOS and macOS apps on the Xcode 27 runner. Only for changes to
-# the apps, the Rust core or the scripts: macOS minutes count tenfold.
+# Builds the iOS and macOS apps on the Xcode 27 runner. Runs only for a release
+# (and by hand): macOS minutes count tenfold on the free plan.
 on:
-  pull_request:
-    paths:
-      - "apps/**"
-      - "crates/**"
-      - "scripts/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/apps.yml"
-  push:
-    branches: [main]
-    paths:
-      - "apps/**"
-      - "crates/**"
-      - "scripts/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/apps.yml"
+  release:
+    types: [published]
   workflow_dispatch:
 
 concurrency:

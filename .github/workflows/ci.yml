@@ -1,11 +1,11 @@
 name: CI
 
-# The Rust core on Linux for every pull request and push to main. The apps
-# build in apps.yml on the Xcode 27 runner.
+# The Rust core on Linux. Runs only for a release (and by hand), not for every
+# pull request: the free plan's Actions minutes are limited. Before a pull
+# request, run cargo fmt, clippy and test locally. The apps build in apps.yml.
 on:
-  pull_request:
-  push:
-    branches: [main]
+  release:
+    types: [published]
   workflow_dispatch:
 
 concurrency:

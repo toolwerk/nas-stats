@@ -40,3 +40,4 @@ and the project uses [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - The settings of each NAS show „Über iCloud-Schlüsselbund auf meine Geräte“ and switch it afterwards: the keychain entry moves to or from iCloud Keychain, the NAS stays reachable and the password is never shown or logged (#98).
+- Fill bar: a total just below a unit boundary shows in the next unit („1,0 TB“ instead of „1.024,0 GB“); `capacity` and `bytes` share the rule for the unit (#86).

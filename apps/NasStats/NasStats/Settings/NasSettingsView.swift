@@ -17,24 +17,61 @@ struct NasSettingsView: View {
     @State private var confirmingRemove = false
 
     var body: some View {
-        Group {
-            if let account {
-                form(account)
-            } else {
-                Text("Dieses NAS ist nicht mehr gespeichert.")
-                    .foregroundStyle(.secondary)
+        content
+            .navigationTitle(account?.name ?? "")
+            .onAppear { name = account?.name ?? "" }
+            .onDisappear(perform: saveName)
+            .sheet(isPresented: $changingAccess) {
+                if let account {
+                    ChangeAccessView(account: account)
+                        .environment(store)
+                }
             }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        #if os(macOS)
+        // The settings window has no toolbar for the system back button (#99).
+        VStack(spacing: 0) {
+            macHeader
+            Divider()
+            page(account)
         }
-        .navigationTitle(account?.name ?? "")
-        .onAppear { name = account?.name ?? "" }
-        .onDisappear(perform: saveName)
-        .sheet(isPresented: $changingAccess) {
-            if let account {
-                ChangeAccessView(account: account)
-                    .environment(store)
-            }
+        #else
+        page(account)
+        #endif
+    }
+
+    @ViewBuilder
+    private func page(_ account: NasAccount?) -> some View {
+        if let account {
+            form(account)
+        } else {
+            Text("Dieses NAS ist nicht mehr gespeichert.")
+                .foregroundStyle(.secondary)
         }
     }
+
+    #if os(macOS)
+    /// Back button to the list; stays usable while an action runs, like the
+    /// system back on the iPhone. Dismissing saves the name (`onDisappear`).
+    private var macHeader: some View {
+        HStack {
+            Button {
+                dismiss()
+            } label: {
+                Label("Einstellungen", systemImage: "chevron.left")
+            }
+            .keyboardShortcut("[", modifiers: .command)
+            Text(verbatim: account?.name ?? "")
+                .font(.headline)
+            Spacer()
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+    }
+    #endif
 
     private var account: NasAccount? {
         store.accounts.accounts.first { $0.id == id }

@@ -13,6 +13,12 @@ GitHub: `toolwerk/nas-stats` (privat).
 - Einmalig: `./setup.sh`
 - Rust: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all`
 
+## CI und Builds
+
+- GitHub Actions laufen nur bei einem veröffentlichten Release (`release: published`) oder von Hand (`workflow_dispatch`), nicht bei Pull Requests und nicht bei Pushes auf `main`. Grund: Das Kontingent des Free Plans reicht sonst nicht, macOS-Minuten zählen zehnfach.
+- Vor jedem PR lokal prüfen: `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`. Nach Swift-Änderungen die Apps lokal bauen (xcodegen, dann `xcodebuild`); das gilt als Prüfung statt eines CI-Builds.
+- Neue Workflows bekommen keine Trigger auf `pull_request` oder `push`. Später ist ein eigener lokaler Runner für Mac, Windows und Linux geplant; erst dann gilt die Regel neu.
+
 ## Architektur-Regeln
 
 - Jeder Anbieter ist ein eigenes Crate `provider-<name>` und liefert nur Typen aus `nas-model`. Statistik, FFI und Apps kennen keine Anbieter-Details.
