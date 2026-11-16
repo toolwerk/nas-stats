@@ -185,9 +185,13 @@ final class NasStore {
     /// Every new state goes into the widget snapshot of the App Group (#23).
     static func live() -> NasStore {
         let isPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+        // Previews get an empty keychain and defaults of their own, so
+        // neither the first move to iCloud Keychain nor the switch of the
+        // settings (#113) touches the real entries or marks the move done,
+        // and no real NAS data shows.
         let store = NasStore(
-            accounts: NasAccounts(),
-            defaults: UserDefaults(suiteName: AppGroup.id) ?? .standard,
+            accounts: isPreview ? NasAccounts(keychain: NoAccountStore()) : NasAccounts(),
+            defaults: UserDefaults(suiteName: isPreview ? "preview-live" : AppGroup.id) ?? .standard,
             demoSource: { demoSnapshots(now: $0, thresholds: $1) },
             pollInterval: .seconds(300),
             lastStates: LastStates(fileURL: isPreview ? nil : LastStates.liveURL)
@@ -507,4 +511,11 @@ final class NasStore {
         entries.sort(by: NasEntry.ordered)
         onUpdate?(entries)
     }
+}
+
+/// A keychain without entries that stores nothing; for the previews.
+private struct NoAccountStore: AccountStore {
+    func loadAll() throws -> [StoredAccount] { [] }
+    func save(_ stored: StoredAccount) throws {}
+    func delete(id: UUID) throws {}
 }
