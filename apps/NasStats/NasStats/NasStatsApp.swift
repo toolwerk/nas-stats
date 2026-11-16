@@ -59,16 +59,22 @@ struct NasStatsApp: App {
             await store.refreshAll()
         }
         #else
-        // Menu bar only; LSUIElement keeps the app out of the Dock. The
-        // status item and its windows (also the settings, #21) come from
-        // `StatusItemController`.
+        // Menu bar app; LSUIElement keeps it out of the Dock while the main
+        // window is closed. The status item, its popover and the windows
+        // (main window #28, settings #21) come from `StatusItemController`.
         Settings {
             EmptyView()
         }
         .commands {
-            // ⌘, would open this empty scene instead of the settings window
-            // of `StatusItemController`.
-            CommandGroup(replacing: .appSettings) {}
+            // ⌘, in the app menu (shown while the main window is in front)
+            // opens the settings window of `StatusItemController`, not this
+            // empty scene.
+            CommandGroup(replacing: .appSettings) {
+                Button("Einstellungen …") {
+                    appDelegate.showSettings()
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
         }
         #endif
     }
@@ -82,16 +88,6 @@ extension StoreHealth {
         case .warning: .orange
         case .ok: .green
         case .unknown: .gray
-        }
-    }
-
-    /// Symbol for the menu, where colours do not show.
-    var symbol: String {
-        switch self {
-        case .critical: "xmark.octagon"
-        case .warning: "exclamationmark.triangle"
-        case .ok: "checkmark.circle"
-        case .unknown: "questionmark.circle"
         }
     }
 }

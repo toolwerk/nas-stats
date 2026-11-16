@@ -4,17 +4,19 @@ import Observation
 import SwiftUI
 
 /// The NAS symbol in the menu bar (#27): coloured by the worst NAS, with
-/// fill level or warning count if chosen. A left click lists the NAS, a
-/// right click opens the actions.
+/// fill level or warning count if chosen. A left click opens the popover
+/// (#28), a right click the actions. It also owns the windows: the main
+/// window with the sidebar (#28), adding a NAS and the settings.
 ///
 /// AppKit instead of `MenuBarExtra`: only a status item tells left and
-/// right clicks apart and shows a coloured image. #28 puts the popover on
-/// the left click.
+/// right clicks apart and shows a coloured image.
 @MainActor
 final class StatusItemController: NSObject, NSWindowDelegate {
     private let store: NasStore
     private let defaults: UserDefaults
     private let statusItem: NSStatusItem
+    private let popover = NSPopover()
+    private var mainWindow: NSWindow?
     private var addNasWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var defaultsObserver: NSObjectProtocol?
@@ -24,6 +26,8 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         self.defaults = defaults
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
+        // Closes on a click outside, like a menu.
+        popover.behavior = .transient
         if let button = statusItem.button {
             button.target = self
             button.action = #selector(clicked(_:))
@@ -82,39 +86,42 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         let event = NSApp.currentEvent
         let right = event?.type == .rightMouseUp
             || event?.modifierFlags.contains(.control) == true
+        guard right else {
+            togglePopover(sender)
+            return
+        }
+        popover.performClose(nil)
         // The menu hangs on the item only for this click; otherwise every
         // click would open it and the action would never fire.
-        statusItem.menu = right ? actionsMenu() : listMenu()
+        statusItem.menu = actionsMenu()
         sender.performClick(nil)
         statusItem.menu = nil
     }
 
-    /// Left click, provisional until the popover of #28: the NAS, worst first.
-    private func listMenu() -> NSMenu {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        menu.addItem(info(store.demoMode ? "NAS Stats – Demo-Modus" : "NAS Stats"))
-        if let loadError = store.loadError {
-            menu.addItem(info(loadError))
+    /// Left click: closes an open popover, else opens it with a new view, so
+    /// it starts at the worst NAS instead of the last one chosen.
+    private func togglePopover(_ button: NSStatusBarButton) {
+        if popover.isShown {
+            popover.performClose(nil)
+            return
         }
-        if store.entries.isEmpty {
-            if store.loadError == nil {
-                menu.addItem(info("Noch kein NAS verbunden"))
+        let view = MenuBarPopover(
+            onOpenWindow: { [weak self] in
+                self?.popover.performClose(nil)
+                self?.openMainWindow()
+            },
+            onAddNas: { [weak self] in
+                self?.popover.performClose(nil)
+                self?.openAddNas()
             }
-        } else {
-            for entry in store.entries {
-                let item = NSMenuItem(
-                    title: "\(entry.displayName) – \(entry.health.title)", action: nil, keyEquivalent: ""
-                )
-                item.image = NSImage(systemSymbolName: entry.health.symbol, accessibilityDescription: nil)
-                // Information only; a click would do nothing.
-                item.isEnabled = false
-                menu.addItem(item)
-            }
-        }
-        menu.addItem(.separator())
-        menu.addItem(action("NAS hinzufügen …", #selector(openAddNas)))
-        return menu
+        )
+            .environment(store)
+        let controller = NSHostingController(rootView: view)
+        controller.sizingOptions = [.preferredContentSize]
+        popover.contentViewController = controller
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        // Key, so the buttons take the first click.
+        popover.contentViewController?.view.window?.makeKey()
     }
 
     /// Right click: refresh, display, login item, settings, quit.
@@ -143,12 +150,6 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         menu.addItem(.separator())
         menu.addItem(action("NAS Stats beenden", #selector(quit), key: "q"))
         return menu
-    }
-
-    private func info(_ title: String) -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        return item
     }
 
     private func action(_ title: String, _ selector: Selector, key: String = "") -> NSMenuItem {
@@ -193,6 +194,12 @@ final class StatusItemController: NSObject, NSWindowDelegate {
     }
 
     @objc private func openSettings() {
+        showSettings()
+    }
+
+    /// The settings window, also for ⌘, of the app menu while the main
+    /// window is in front.
+    func showSettings() {
         if let settingsWindow {
             bringToFront(settingsWindow)
             return
@@ -207,6 +214,36 @@ final class StatusItemController: NSObject, NSWindowDelegate {
     }
 
     // MARK: - Windows
+
+    /// Main window with the sidebar (#28). While it is open the app shows
+    /// in the Dock and in ⌘-Tab, so it can be found behind other windows;
+    /// after closing it is a menu bar app again.
+    func openMainWindow() {
+        NSApp.setActivationPolicy(.regular)
+        if let mainWindow {
+            bringToFront(mainWindow)
+            return
+        }
+        let controller = NSHostingController(rootView: MainWindowView().environment(store))
+        // Title and the toolbar items of the views go to the window.
+        controller.sceneBridgingOptions = [.toolbars, .title]
+        let window = NSWindow(contentViewController: controller)
+        window.title = "NAS Stats"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        window.setContentSize(NSSize(width: 960, height: 640))
+        window.minSize = NSSize(width: 760, height: 480)
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        // Takes the frame of the last time, if there is one.
+        if !window.setFrameUsingName(Self.mainWindowFrameName) {
+            window.center()
+        }
+        window.setFrameAutosaveName(Self.mainWindowFrameName)
+        mainWindow = window
+        bringToFront(window)
+    }
+
+    private static let mainWindowFrameName = "NasStatsMainWindow"
 
     private func makeWindow(title: String, root: some View) -> NSWindow {
         let controller = NSHostingController(rootView: root)
@@ -228,7 +265,10 @@ final class StatusItemController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
-        if window === addNasWindow {
+        if window === mainWindow {
+            mainWindow = nil
+            NSApp.setActivationPolicy(.accessory)
+        } else if window === addNasWindow {
             addNasWindow = nil
         } else if window === settingsWindow {
             settingsWindow = nil
