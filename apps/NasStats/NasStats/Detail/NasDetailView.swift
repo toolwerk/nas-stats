@@ -11,6 +11,10 @@ struct NasDetailView: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
 
+    /// Why the NAS does not answer, asked of the system while the page is
+    /// open (#129); `nil` until known.
+    @State private var reason: UnreachableReason?
+
     private var entry: NasEntry? { store.entries.first { $0.id == id } }
 
     var body: some View {
@@ -94,20 +98,32 @@ struct NasDetailView: View {
                 Text(verbatim: error)
                     .font(.footnote)
                     .foregroundStyle(offline ? .secondary : Color.red)
-                #if os(iOS)
                 // Also for a NAS that stays red because its last state
                 // was critical.
                 if let kind = entry.problem?.kind, kind == .unreachable || kind == .timeout {
-                    // iOS reports a refused "Lokales Netzwerk" like a NAS
-                    // that does not answer.
-                    Text("Im Heimnetz? Prüfen Sie in den iOS-Einstellungen unter Datenschutz & Sicherheit › Lokales Netzwerk, ob NAS Stats zugreifen darf.")
+                    Text(verbatim: ReachabilityDiagnosis.text(for: reason ?? .noAnswer))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                    if let message = entry.problem?.message {
+                        Text(verbatim: message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
                 }
-                #endif
             }
         }
         .padding(.vertical, 4)
+        .task(id: entry.problem?.message) {
+            reason = nil
+            guard let kind = entry.problem?.kind, kind == .unreachable || kind == .timeout,
+                !store.demoMode,
+                let result = await ReachabilityDiagnosis.probe(baseUrl: entry.baseUrl)
+            else { return }
+            reason = ReachabilityDiagnosis.classify(
+                result,
+                hostIsLocal: NasAddress.host(of: entry.baseUrl).map(ReachabilityDiagnosis.isLocalHost) ?? false)
+        }
     }
 
     private func chip(_ text: String, color: some ShapeStyle) -> some View {
