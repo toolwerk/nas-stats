@@ -362,12 +362,14 @@ impl NasCore {
             epoch: AtomicU64::new(0),
         });
         let mut entries = lock(&self.entries);
+        if let Some(old) = entries.get(&nas_id) {
+            old.retire();
+        }
         let replaced = entries.insert(nas_id.clone(), Arc::clone(&entry));
         self.planner
             .add(&nas_id, Polled::current(entry), None, false);
         drop(entries);
         if let Some(old) = replaced {
-            old.retire();
             runtime().spawn(async move {
                 let _poll = old.poll.lock().await;
                 let _ = old.backend.logout().await;
@@ -544,10 +546,12 @@ impl NasCore {
                     continue;
                 }
                 entry.backend.set_credentials(user, password).await;
-                // A query that waited for the lock would send the new
-                // credentials a second time right after the next one.
-                entry.retire();
                 let entries = lock(&self.entries);
+                // A query that waited for the lock would send the new
+                // credentials a second time right after the next one. Under
+                // `entries`, so `restore_poll` cannot register the old epoch
+                // in between.
+                entry.retire();
                 // Replaced meanwhile: the new entry starts fresh anyway.
                 if Self::is_current(&entries, &nas_id, &entry) {
                     self.planner
@@ -578,8 +582,10 @@ impl NasCore {
     /// Hands back what the app remembers across launches: the start of the
     /// last query and whether the NAS is blocked. Call it after
     /// [`NasCore::add_nas`] and before [`NasCore::start_planner`], so a
-    /// restart neither queries at once nor repeats a rejected login. Clears
-    /// the error; the snapshot stays. Sends nothing.
+    /// restart neither queries at once nor repeats a rejected login. The
+    /// core keeps what is stricter: a block it knows stays, and a later
+    /// query of its own counts over an older time. Clears the error; the
+    /// snapshot stays. Sends nothing.
     pub fn restore_poll(
         &self,
         nas_id: String,
@@ -591,6 +597,11 @@ impl NasCore {
             .get(&nas_id)
             .cloned()
             .ok_or_else(|| FfiError::UnknownNas { id: nas_id.clone() })?;
+        let known = self.state(&nas_id)?;
+        let last_attempt_at = known.last_attempt_at.max(last_attempt_at);
+        if known.blocked || (!blocked && last_attempt_at == known.last_attempt_at) {
+            return Ok(());
+        }
         self.planner
             .add(&nas_id, Polled::current(entry), last_attempt_at, blocked);
         Ok(())
@@ -607,8 +618,8 @@ impl NasCore {
     /// the new listener. See [`StateListener`] for what the listener must
     /// not do.
     pub fn start_planner(&self, listener: Arc<dyn StateListener>) {
-        *lock(&self.sink.listener) = Some(listener);
         let mut run = lock(&self.run);
+        *lock(&self.sink.listener) = Some(listener);
         if run.as_ref().is_some_and(|task| !task.is_finished()) {
             return;
         }
@@ -620,9 +631,10 @@ impl NasCore {
     /// the old listener, later ones do not. [`NasCore::start_planner`]
     /// starts it again.
     pub fn stop_planner(&self) {
+        let mut run = lock(&self.run);
         *lock(&self.sink.listener) = None;
-        if let Some(run) = lock(&self.run).take() {
-            run.abort();
+        if let Some(task) = run.take() {
+            task.abort();
         }
     }
 
@@ -2028,5 +2040,37 @@ mod tests {
             .expect("refused");
         assert!(state.blocked);
         assert!(h.core.events(None, 0, i64::MAX).expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn restore_poll_keeps_a_newer_query_and_a_known_block() {
+        let backend = FakeBackend::answering(vec![Err(ProviderError::LoginFailed)]);
+        let h = harness(backend.clone());
+        h.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        let state = h
+            .core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("refused");
+        assert!(state.blocked);
+        // An older remembered state neither lifts the block nor moves the
+        // time back.
+        h.core
+            .restore_poll("nas-1".into(), Some(T0 - 3_600), false)
+            .expect("restore");
+        let state = h.core.states().remove(0);
+        assert!(state.blocked);
+        assert_eq!(state.last_attempt_at, Some(T0));
+        assert!(state.problem.is_some());
+        h.set_time(T0 + 100 * MIN_INTERVAL_SECS);
+        h.core
+            .clone()
+            .refresh_now("nas-1".into())
+            .await
+            .expect("blocked");
+        assert_eq!(backend.queries(), 1);
     }
 }
