@@ -111,6 +111,28 @@ final class FakeCore: NasCoreProtocol {
         throw FfiError.Internal(detail: "not used")
     }
 
+    // History, events and the planner (#60) are not used by the store yet.
+
+    func refreshNow(nasId: String) async throws -> NasState {
+        throw FfiError.Internal(detail: "not used")
+    }
+
+    func restorePoll(nasId: String, lastAttemptAt: Int64?, blocked: Bool) throws {}
+
+    func startPlanner(listener: StateListener) {}
+
+    func stopPlanner() {}
+
+    func setInterval(secs: Int64) {}
+
+    func history(nasId: String, metric: Metric, range: HistoryRange) throws -> [HistorySeries] { [] }
+
+    func events(nasId: String?, from: Int64, to: Int64) throws -> [NasEvent] { [] }
+
+    func forecast(nasId: String, volumeId: String) throws -> Forecast? { nil }
+
+    func backupRuns(nasId: String, from: Int64, to: Int64) throws -> [BackupRun] { [] }
+
     func updateCredentials(nasId: String, user: String, password: String) async throws {
         log.withLock {
             $0.updated.append(nasId)
