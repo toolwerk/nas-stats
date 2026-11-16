@@ -156,6 +156,8 @@ final class MemoryAccountStore: AccountStore {
     private let items = Mutex<[UUID: StoredAccount]>([:])
     /// `save` throws while set.
     let refuseSave = Mutex(false)
+    /// `loadAll` throws while set.
+    let refuseLoad = Mutex(false)
 
     struct Refused: Error {}
 
@@ -168,7 +170,10 @@ final class MemoryAccountStore: AccountStore {
     }
 
     func loadAll() throws -> [StoredAccount] {
-        items.withLock { Array($0.values) }
+        if refuseLoad.withLock({ $0 }) {
+            throw Refused()
+        }
+        return items.withLock { Array($0.values) }
     }
 
     func save(_ stored: StoredAccount) throws {
@@ -902,6 +907,29 @@ struct NasStoreTests {
         #expect(try keychain.loadAll().first?.account.syncsViaICloud == true)
         #expect(try keychain.loadAll().first?.password == "demo")
         #expect(store.accounts.accounts.first?.syncsViaICloud == true)
+    }
+
+    @Test func anUnreadableKeychainLeavesTheICloudSettingForTheNextStart() async throws {
+        let a = Self.account("Keller")
+        let keychain = MemoryAccountStore([a])
+        keychain.refuseLoad.withLock { $0 = true }
+        defaults.removeObject(forKey: NasStore.sharesAccessViaICloudKey)
+        let store = await started(keychain, core: FakeCore())
+
+        #expect(store.loadError != nil)
+        #expect(defaults.object(forKey: NasStore.sharesAccessViaICloudKey) == nil)
+        #expect(throws: FfiError.InvalidInput(detail: "Die gespeicherten NAS ließen sich nicht aus dem Schlüsselbund lesen.")) {
+            try store.setSharesAccessViaICloud(false)
+        }
+        #expect(store.sharesAccessViaICloud)
+        #expect(defaults.object(forKey: NasStore.sharesAccessViaICloudKey) == nil)
+
+        // The next start with a readable keychain moves the NAS.
+        keychain.refuseLoad.withLock { $0 = false }
+        let next = await started(keychain, core: FakeCore())
+        #expect(next.loadError == nil)
+        #expect(defaults.object(forKey: NasStore.sharesAccessViaICloudKey) as? Bool == true)
+        #expect(try keychain.loadAll().first?.account.syncsViaICloud == true)
     }
 
     @Test func aStoredOffKeepsTheNasOnThisDevice() async throws {
