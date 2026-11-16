@@ -231,7 +231,8 @@ impl HistoryStore {
     /// Stores samples a NAS delivers itself (history of the vendor). Rolls
     /// up and prunes like [`HistoryStore::write_snapshot`]. For hours whose
     /// raw samples are already pruned, the hourly value is built from the
-    /// delivered samples only.
+    /// delivered samples only; a day whose hours are already pruned keeps its
+    /// daily value and gets one only when it had none.
     pub fn write_samples(&mut self, samples: &[Sample], now: i64) -> Result<()> {
         let tx = self.conn.transaction()?;
         write_in(&tx, samples, now)?;
@@ -514,7 +515,11 @@ fn upsert_runs(tx: &Transaction, nas_id: &str, runs: &[BackupRun]) -> Result<()>
         "INSERT INTO backup_runs (nas_id, task_id, started_at, finished_at, result, message)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT (nas_id, task_id, started_at) DO UPDATE SET
-             result = excluded.result,
+             result = CASE
+                 WHEN excluded.result = 'running' AND backup_runs.finished_at IS NOT NULL
+                 THEN backup_runs.result
+                 ELSE excluded.result
+             END,
              finished_at = COALESCE(excluded.finished_at, backup_runs.finished_at),
              message = COALESCE(excluded.message, backup_runs.message)",
     )?;
@@ -540,7 +545,9 @@ fn write_in(tx: &Transaction, samples: &[Sample], now: i64) -> Result<()> {
             "INSERT OR REPLACE INTO samples (nas_id, metric, key, at, value)
              VALUES (?1, ?2, ?3, ?4, ?5)",
         )?;
-        for sample in samples.iter().filter(|s| s.value.is_finite()) {
+        // An empty key would read back as `None`, so such samples are dropped.
+        let valid = |s: &&Sample| s.value.is_finite() && s.key.as_deref() != Some("");
+        for sample in samples.iter().filter(valid) {
             let key = sample.key.as_deref().unwrap_or("");
             insert.execute(params![
                 sample.nas_id,
@@ -575,17 +582,28 @@ fn write_in(tx: &Transaction, samples: &[Sample], now: i64) -> Result<()> {
     }
 
     {
-        let mut daily = tx.prepare_cached(
-            "INSERT OR REPLACE INTO samples_daily
-                 (nas_id, metric, key, start, min, mean, max, count)
-             SELECT nas_id, metric, key, ?4, MIN(min), SUM(mean * count) / SUM(count),
-                    MAX(max), SUM(count)
-             FROM samples_hourly
-             WHERE nas_id = ?1 AND metric = ?2 AND key = ?3 AND start >= ?4 AND start < ?4 + ?5
-             GROUP BY nas_id, metric, key",
-        )?;
+        // A day whose hours are partly pruned already keeps its daily value;
+        // it is only filled in when there is none yet.
+        let daily_sql = |verb: &str| {
+            format!(
+                "INSERT OR {verb} INTO samples_daily
+                     (nas_id, metric, key, start, min, mean, max, count)
+                 SELECT nas_id, metric, key, ?4, MIN(min), SUM(mean * count) / SUM(count),
+                        MAX(max), SUM(count)
+                 FROM samples_hourly
+                 WHERE nas_id = ?1 AND metric = ?2 AND key = ?3 AND start >= ?4 AND start < ?4 + ?5
+                 GROUP BY nas_id, metric, key"
+            )
+        };
+        let mut rebuild = tx.prepare_cached(&daily_sql("REPLACE"))?;
+        let mut fill = tx.prepare_cached(&daily_sql("IGNORE"))?;
         for &(nas_id, metric, key, start) in &days {
-            daily.execute(params![nas_id, metric, key, start, DAY])?;
+            let stmt = if start >= now - HOURLY_KEEP {
+                &mut rebuild
+            } else {
+                &mut fill
+            };
+            stmt.execute(params![nas_id, metric, key, start, DAY])?;
         }
     }
 
@@ -876,6 +894,63 @@ mod tests {
     }
 
     #[test]
+    fn late_samples_keep_a_daily_value_whose_hours_are_pruned() {
+        let mut store = HistoryStore::in_memory().expect("store opens");
+        store
+            .write_samples(&[sample(T0 + HOUR, 10.0), sample(T0 + 2 * HOUR, 20.0)], T0)
+            .expect("samples are written");
+        let now = T0 + 120 * DAY;
+        store
+            .write_samples(&[], now)
+            .expect("old values are pruned");
+        let day = |store: &HistoryStore, start: i64| {
+            store
+                .points(
+                    "nas-1",
+                    Metric::DiskTemp,
+                    Some("disk-1"),
+                    Resolution::Daily,
+                    start,
+                    start,
+                )
+                .expect("days are read")
+        };
+        let before = day(&store, T0);
+        assert_eq!(before[0].count, 2);
+
+        // A late sample for that day leaves its daily value as it was.
+        store
+            .write_samples(&[sample(T0 + 3 * HOUR, 90.0)], now)
+            .expect("late sample is written");
+        assert_eq!(day(&store, T0), before);
+
+        // A day without a daily value yet is filled in.
+        store
+            .write_samples(&[sample(T0 + DAY + HOUR, 40.0)], now)
+            .expect("late sample is written");
+        let filled = day(&store, T0 + DAY);
+        assert_eq!(filled.len(), 1);
+        assert_eq!(filled[0].mean, 40.0);
+    }
+
+    #[test]
+    fn empty_key_gives_no_row() {
+        let mut store = HistoryStore::in_memory().expect("store opens");
+        let mut snap = snapshot("nas-1", T0, 0);
+        snap.interfaces[0].name = String::new();
+        store
+            .write_snapshot(&snap, T0)
+            .expect("snapshot is written");
+        assert_eq!(
+            count(
+                &store,
+                "SELECT COUNT(*) FROM samples WHERE metric LIKE 'net.%'"
+            ),
+            0
+        );
+    }
+
+    #[test]
     fn same_snapshot_twice_changes_no_count() {
         let mut store = HistoryStore::in_memory().expect("store opens");
         let mut snap = snapshot("nas-1", T0, 0);
@@ -1018,14 +1093,17 @@ mod tests {
             .write_backup_runs("nas-1", std::slice::from_ref(&done))
             .expect("runs are written");
         // A later snapshot with the same last run keeps end and message.
-        snap.backups[0].last_result = Some(BackupResult::Ok);
-        store
-            .write_snapshot(&snap, T0)
-            .expect("snapshot is written");
-        let runs = store
-            .backup_runs("nas-1", T0 - DAY, T0)
-            .expect("runs are read");
-        assert_eq!(runs, vec![done]);
+        // A stale `Running` does not undo the finished run.
+        for result in [BackupResult::Ok, BackupResult::Running] {
+            snap.backups[0].last_result = Some(result);
+            store
+                .write_snapshot(&snap, T0)
+                .expect("snapshot is written");
+            let runs = store
+                .backup_runs("nas-1", T0 - DAY, T0)
+                .expect("runs are read");
+            assert_eq!(runs, vec![done.clone()], "{result:?}");
+        }
     }
 
     #[test]
