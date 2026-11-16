@@ -19,7 +19,6 @@ struct AddNasView: View {
     @State private var name = ""
     @State private var user = ""
     @State private var password = ""
-    @State private var syncsViaICloud = false
     /// Fingerprint and the normalized address it was read from.
     @State private var certificate: (address: String, fingerprint: String)?
     @State private var busy = false
@@ -109,7 +108,6 @@ struct AddNasView: View {
                     #endif
                 SecureField("Passwort", text: $password)
                     .textContentType(.password)
-                Toggle("Über iCloud-Schlüsselbund auf meine Geräte", isOn: $syncsViaICloud)
             } footer: {
                 Text("Empfohlen: eigenes Konto mit der Rolle „System Monitoring“ (ab QTS 5.1), ohne 2-Schritt-Bestätigung. NAS Stats liest nur.")
             }
@@ -246,7 +244,8 @@ struct AddNasView: View {
             fingerprint: fingerprint,
             user: trimmedUser,
             model: nil,
-            syncsViaICloud: syncsViaICloud
+            // The store sets it from the setting of the settings (#113).
+            syncsViaICloud: false
         )
         let password = password
         let typedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
