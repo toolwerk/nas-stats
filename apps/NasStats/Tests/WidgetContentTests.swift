@@ -14,10 +14,10 @@ struct WidgetContentTests {
 
     func nas(
         finding: String? = nil, problem: String? = nil, volumes: [WidgetVolume] = [],
-        observedAgo: TimeInterval? = 60
+        observedAgo: TimeInterval? = 60, status: StatusLevel = .ok
     ) -> WidgetNas {
         WidgetNas(
-            id: "a", name: "Keller", model: nil, vendor: nil, status: .ok,
+            id: "a", name: "Keller", model: nil, vendor: nil, status: status,
             firstFinding: finding, firstFindingLevel: finding == nil ? nil : .critical,
             findingCount: finding == nil ? 0 : 1, problemLine: problem, volumes: volumes,
             hottestDiskC: nil, cpuPercent: nil, memoryPercent: nil, lastBackupAt: nil,
@@ -109,5 +109,65 @@ struct WidgetContentTests {
     @Test func aNasWithoutAStateHasNoStandLine() {
         let n = nas(problem: "Noch keine Abfrage", observedAgo: nil)
         #expect(lines(n).map(\.style) == [.problem])
+    }
+
+    // MARK: Lock screen (#25)
+
+    func lockLines(_ nas: WidgetNas, demo: Bool = false) -> [String] {
+        nas.lockLines(in: snapshot(nas, demo: demo), now: now, locale: locale, timeZone: zone)
+    }
+
+    @Test func theInlineLineNamesNasPercentAndState() {
+        let n = nas(volumes: [volume("a", 87)], status: .warning)
+        #expect(n.lockInline(demo: false) == "Keller · 87 % · Warnung")
+        #expect(n.lockTitle == "Keller · Warnung")
+    }
+
+    @Test func theInlineLineRoundsDownAndMarksDemoValues() {
+        let n = nas(volumes: [volume("a", 87.9)], status: .warning)
+        #expect(n.lockPercent == 87)
+        #expect(n.lockInline(demo: true) == "DEMO · Keller · 87 % · Warnung")
+    }
+
+    @Test func anUnreachableNasOrOneWithoutVolumesShowsNoPercent() {
+        let offline = nas(volumes: [volume("a", 87)], status: .offline)
+        #expect(offline.lockPercent == nil)
+        #expect(offline.lockInline(demo: false) == "Keller · Nicht erreichbar")
+        let none = nas()
+        #expect(none.lockPercent == nil)
+        #expect(none.lockInline(demo: false) == "Keller · Gesund")
+    }
+
+    @Test func theRectangularLinesNameTheWarningAndTheFullestVolumeWithForecast() {
+        let n = nas(
+            finding: "Platte 3 bei 52 °C",
+            volumes: [volume("Archiv", 64), volume("DataVol1", 87, forecast: .full(days: 143, date: nil))],
+            status: .warning)
+        #expect(lockLines(n) == ["Platte 3 bei 52 °C", "DataVol1 87 % · voll in 143 Tagen"])
+    }
+
+    @Test func anOldStateReplacesTheForecastInTheRectangularLines() {
+        let n = nas(
+            finding: "Platte 3 bei 52 °C",
+            volumes: [volume("a", 87, forecast: .full(days: 143, date: nil))], observedAgo: 3 * 3600,
+            status: .warning)
+        let result = lockLines(n)
+        #expect(result.count == 2)
+        #expect(result[1].hasPrefix("a 87 % · Stand "))
+        #expect(!result[1].contains("voll in"))
+    }
+
+    @Test func anUnreachableNasShowsOnlyStandInTheRectangularLines() {
+        let n = nas(
+            problem: "Nicht erreichbar", volumes: [volume("a", 87)], observedAgo: 3 * 3600,
+            status: .offline)
+        let result = lockLines(n)
+        #expect(result.count == 1)
+        #expect(result[0].hasPrefix("Stand "))
+    }
+
+    @Test func demoValuesNeverShowStandInTheRectangularLines() {
+        let n = nas(volumes: [volume("a", 87)], observedAgo: 3 * 3600, status: .warning)
+        #expect(lockLines(n, demo: true) == ["a 87 %"])
     }
 }

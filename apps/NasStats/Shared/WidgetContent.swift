@@ -83,4 +83,54 @@ extension WidgetNas {
         if let messageLine { return [messageLine, stale ?? forecast].compactMap { $0 } }
         return [forecast, stale].compactMap { $0 }
     }
+
+    /// Fill level of the fullest volume for the lock screen widgets (#25),
+    /// rounded down. `nil` when the NAS is not reachable (its volumes are
+    /// those of an old state) or has no volume with a percentage.
+    var lockPercent: Int? {
+        guard status != .offline, let percent = fullestVolume?.usedPercent else { return nil }
+        return Int(StatusFormat.floored(percent, fractionDigits: 0) ?? 0)
+    }
+
+    /// The inline lock screen widget: "Keller · 87 % · Warnung", with "DEMO"
+    /// in front for demo values and without the percentage when there is none.
+    func lockInline(demo: Bool) -> String {
+        var parts: [String] = []
+        if demo { parts.append("DEMO") }
+        parts.append(name)
+        if let lockPercent { parts.append("\(lockPercent) %") }
+        parts.append(status.label)
+        return parts.joined(separator: " · ")
+    }
+
+    /// Headline of the rectangular lock screen widget: "Keller · Warnung".
+    var lockTitle: String { "\(name) · \(status.label)" }
+
+    /// The lines under the headline of the rectangular lock screen widget, at
+    /// most two: the first message (unless it only repeats the state), then
+    /// the fullest volume with its percentage and the forecast, or "Stand"
+    /// once the state is old. Without a percentage only "Stand" is left.
+    func lockLines(
+        in snapshot: WidgetSnapshot, now: Date,
+        locale: Locale = .current, timeZone: TimeZone = .current
+    ) -> [String] {
+        var lines: [String] = []
+        if let text = messageLine?.text, text != status.label { lines.append(text) }
+        var stale: String?
+        if let observedAt, snapshot.isStale(self, now: now) {
+            stale = StatusFormat.observed(observedAt, now: now, locale: locale, timeZone: timeZone)
+        }
+        if let volume = fullestVolume, let lockPercent {
+            var fill = "\(volume.name) \(lockPercent) %"
+            if let stale {
+                fill += " · \(stale)"
+            } else if let value = volume.forecast, case .full = value {
+                fill += " · " + StatusFormat.forecast(value, locale: locale, timeZone: timeZone).main
+            }
+            lines.append(fill)
+        } else if let stale {
+            lines.append(stale)
+        }
+        return lines
+    }
 }
