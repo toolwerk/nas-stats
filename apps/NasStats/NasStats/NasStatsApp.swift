@@ -11,7 +11,7 @@ struct NasStatsApp: App {
     init() {
         let store = NasStore.live()
         _store = State(initialValue: store)
-        Task { await store.start() }
+        store.start()
     }
     #else
     /// Store and menu bar symbol live in the delegate, for as long as the
@@ -32,9 +32,9 @@ struct NasStatsApp: App {
             }
             .environment(store)
         }
-        // Back in the app, due NAS are queried at once (the poll loop
-        // sleeps while the app is suspended); leaving it asks iOS for an
-        // occasional query in the background.
+        // Back in the app, due NAS are queried at once (the planner of the
+        // core sleeps while the app is suspended); leaving it asks iOS for
+        // an occasional query in the background.
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:

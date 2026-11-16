@@ -62,6 +62,17 @@ struct NasEntry: Identifiable, Sendable {
     /// Thresholds of the settings, for the colour of fill bars and disk
     /// temperatures; the findings come from the core with the same ones.
     var thresholds: AlertThresholds = .standard
+    /// Forecast "full in X days" per volume id, from the history of the
+    /// core (#67); only volumes with a rising trend have one.
+    var forecasts: [String: FillForecast] = [:]
+    /// Daily fill level of the fullest volume over the last 30 days, oldest
+    /// first; empty without history.
+    var fullestVolumeHistory: [WidgetFillPoint] = []
+
+    /// Forecast of a volume; `nil` without a rising trend or history.
+    func forecast(for volumeId: String) -> FillForecast? {
+        forecasts[volumeId]
+    }
 
     /// Model of the last snapshot, else of the test query.
     var displayModel: String? { snapshot?.nas.model ?? model }
@@ -136,7 +147,11 @@ struct NasEntry: Identifiable, Sendable {
     /// (`Snapshot.capacityVolumeIds`): a pool and the volume in it count
     /// once.
     var capacityVolumes: [Volume] {
-        guard let snapshot else { return [] }
+        snapshot.map(Self.capacityVolumes(of:)) ?? []
+    }
+
+    /// `capacityVolumes` of a snapshot.
+    static func capacityVolumes(of snapshot: Snapshot) -> [Volume] {
         let ids = Set(snapshot.capacityVolumeIds)
         return snapshot.volumes.filter { ids.contains($0.id) }
     }
