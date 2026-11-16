@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 import WidgetKit
 
 /// The state of every NAS for all screens, the menu bar and later the
@@ -52,6 +53,15 @@ final class NasStore {
         }
     }
 
+    /// Which kinds of problems notify and when not (#39). Saved under
+    /// `notifications` in the defaults.
+    var notificationSettings: NotificationSettings {
+        didSet {
+            guard notificationSettings != oldValue else { return }
+            notificationSettings.save(to: defaults)
+        }
+    }
+
     /// Called after every new state with the sorted entries and after a
     /// change of the interval; `live()` writes the widget snapshot here and
     /// reloads the widgets (#23).
@@ -83,6 +93,8 @@ final class NasStore {
     @ObservationIgnored private let pollInterval: Duration?
     @ObservationIgnored private let clock: () -> Int64
     @ObservationIgnored private let lastStates: LastStates
+    /// Notifications of the open events (#39); `nil` notifies nothing.
+    @ObservationIgnored private let notifier: EventNotifier?
     /// What `lastStates` holds: NAS id → saved state of the core.
     @ObservationIgnored private var savedStates: [String: String]
 
@@ -103,16 +115,20 @@ final class NasStore {
     ///   `refreshAll` calls.
     /// - Parameter lastStates: Where the last snapshot of every NAS is
     ///   kept across launches; by default nowhere.
+    /// - Parameter notifier: Notifies the open events after every query;
+    ///   by default none.
     init(
         accounts: NasAccounts,
         defaults: UserDefaults,
         demoSource: @escaping (Int64, Thresholds) -> [Snapshot],
         pollInterval: Duration?,
         clock: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970) },
-        lastStates: LastStates = LastStates(fileURL: nil)
+        lastStates: LastStates = LastStates(fileURL: nil),
+        notifier: EventNotifier? = nil
     ) {
         self.clock = clock
         self.lastStates = lastStates
+        self.notifier = notifier
         self.accounts = accounts
         self.defaults = defaults
         self.demoSource = demoSource
@@ -123,6 +139,7 @@ final class NasStore {
         let thresholds = AlertThresholds.load(from: defaults)
         self.thresholds = thresholds
         self.queryIntervalMinutes = Self.storedInterval(in: defaults)
+        self.notificationSettings = NotificationSettings.load(from: defaults)
         // Before the first state, so restored ones get the same findings.
         accounts.core.setThresholds(thresholds: thresholds.core)
         // The last state of an earlier launch shows until the first answer;
@@ -152,18 +169,32 @@ final class NasStore {
         rebuild()
     }
 
+    private static let log = Logger(subsystem: "net.staude.nasstats", category: "store")
+
+    /// `history.sqlite` in the container of the App Group, the archive of
+    /// history and events of the core; `nil` without the container.
+    static var historyURL: URL? {
+        FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: AppGroup.id)?
+            .appendingPathComponent("history.sqlite")
+    }
+
     /// The store of the app: the NAS from the keychain, the demo data of the
     /// core, demo switch and settings in the defaults of the App Group and
     /// a poll round every 5 minutes (each NAS at its `queryIntervalMinutes`).
     /// Every new state goes into the widget snapshot of the App Group (#23).
+    /// The archive of the core is `history.sqlite`, so the events and with
+    /// them the notifications (#39) last across launches.
     static func live() -> NasStore {
         let isPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+        let defaults = UserDefaults(suiteName: AppGroup.id) ?? .standard
         let store = NasStore(
-            accounts: NasAccounts(),
-            defaults: UserDefaults(suiteName: AppGroup.id) ?? .standard,
+            accounts: NasAccounts(core: isPreview ? NasCore() : liveCore()),
+            defaults: defaults,
             demoSource: { demoSnapshots(now: $0, thresholds: $1) },
             pollInterval: .seconds(300),
-            lastStates: LastStates(fileURL: isPreview ? nil : LastStates.liveURL)
+            lastStates: LastStates(fileURL: isPreview ? nil : LastStates.liveURL),
+            notifier: isPreview ? nil : EventNotifier(poster: SystemNotificationPoster(), defaults: defaults)
         )
         // Previews never touch the files of the real app.
         guard !isPreview else {
@@ -186,6 +217,24 @@ final class NasStore {
         return store
     }
 
+    /// Core with the archive in `historyURL`; without the container or when
+    /// the file does not open, one with the archive in memory.
+    private static func liveCore() -> NasCore {
+        guard let url = historyURL else { return NasCore() }
+        do {
+            return try NasCore.withHistory(path: url.path)
+        } catch {
+            log.error("History not opened: \(String(describing: error), privacy: .public)")
+            return NasCore()
+        }
+    }
+
+    /// Whether the user switched notifications off for the app; `false`
+    /// without a notifier.
+    func notificationsDenied() async -> Bool {
+        await notifier?.isDenied() ?? false
+    }
+
     /// The core of the accounts, e.g. for the test query of the add dialog.
     var core: any NasCoreProtocol { accounts.core }
 
@@ -199,6 +248,7 @@ final class NasStore {
     func start() async {
         guard !started else { return }
         started = true
+        requestNotifications()
         await refreshAll()
         guard let pollInterval else { return }
         pollTask = Task { [weak self] in
@@ -261,6 +311,7 @@ final class NasStore {
         log.lastAttempts[id] = clock()
         saveLog()
         rebuild()
+        requestNotifications()
     }
 
     /// Removes a NAS from the keychain, the core and the list.
@@ -274,6 +325,7 @@ final class NasStore {
         if savedStates.removeValue(forKey: id.uuidString) != nil {
             lastStates.save(savedStates)
         }
+        notifier?.forget(nasId: id.uuidString)
         rebuild()
     }
 
@@ -336,6 +388,13 @@ final class NasStore {
         if !demoMode {
             await query([id])
         }
+    }
+
+    /// Asks for notifications once there is a NAS to query (not in demo
+    /// mode); the system asks the user only the first time.
+    private func requestNotifications() {
+        guard let notifier, !demoMode, !accounts.accounts.isEmpty else { return }
+        Task { await notifier.requestAuthorization() }
     }
 
     /// The stored interval; a missing or unknown value is 5 minutes.
@@ -413,6 +472,26 @@ final class NasStore {
         }
         saveLog()
         rebuild()
+        if state != nil {
+            notifyEvents(of: key)
+        }
+    }
+
+    /// Hands the open events of a NAS to the notifier, after `refresh`
+    /// wrote them to the archive. Open to the end, because `startedAt` is
+    /// the clock of the NAS. A failing archive notifies nothing. The demo
+    /// mode queries nothing and so notifies nothing.
+    /// The callback of the planner (#67) must call this too.
+    private func notifyEvents(of key: String) {
+        guard let notifier, !demoMode else { return }
+        guard let events = try? accounts.core.events(nasId: key, from: clock(), to: Int64.max) else { return }
+        let name = entries.first { $0.id == key }?.displayName ?? key
+        notifier.update(
+            nasId: key,
+            name: name,
+            open: events.filter { $0.endedAt == nil },
+            settings: notificationSettings
+        )
     }
 
     /// Keeps the last snapshot of the core for the next launch; a failure
