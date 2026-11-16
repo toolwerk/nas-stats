@@ -808,12 +808,21 @@ impl NasCore {
     /// [`NasCore::saved_state`], when it is newer than the own one. Read
     /// after the start of the last own query, it also clears the error of
     /// that query; the time of the last query and a block stay, so the
-    /// planner queries as before. `true` when it was taken. Checks the JSON
-    /// like [`NasCore::restore_state`]. Sends nothing.
+    /// planner queries as before. A taken state ends an open „nicht
+    /// erreichbar“ of the archive at its time: the NAS answered the other
+    /// device. `true` when it was taken. Checks the JSON like
+    /// [`NasCore::restore_state`]. Sends nothing.
     pub fn apply_remote_state(&self, nas_id: String, json: String) -> Result<bool, FfiError> {
         self.entry(&nas_id)?;
         let raw = parse_state(&nas_id, &json)?;
-        Ok(self.planner.take_newer_snapshot(&nas_id, raw))
+        let observed_at = raw.observed_at;
+        if !self.planner.take_newer_snapshot(&nas_id, raw) {
+            return Ok(false);
+        }
+        if let Some(mut store) = self.archive() {
+            store.close_unreachable(&nas_id, observed_at)?;
+        }
+        Ok(true)
     }
 
     /// Start of every UTC day with a daily value of a NAS, oldest first,
@@ -2599,5 +2608,62 @@ mod tests {
             phone.core.saved_state("nas-1".into()).expect("saved"),
             Some(later)
         );
+    }
+
+    #[tokio::test]
+    async fn a_state_of_the_mac_ends_an_own_unreachable() {
+        let mac = harness(FakeBackend::answering(vec![Ok(model_snapshot(10.0))]));
+        mac.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        mac.core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("state");
+        let json = mac
+            .core
+            .saved_state("nas-1".into())
+            .expect("saved")
+            .expect("json");
+        let fresh = json.replace(
+            &format!("\"observed_at\":{T0}"),
+            &format!("\"observed_at\":{}", T0 + 2_000),
+        );
+
+        // The phone saw the NAS at T0, then not for 15 minutes.
+        let phone = harness(FakeBackend::answering(vec![
+            Ok(model_snapshot(10.0)),
+            Err(ProviderError::Unreachable("weg".into())),
+        ]));
+        phone
+            .core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        phone
+            .core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("state");
+        phone.set_time(T0 + 1_000);
+        phone
+            .core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("state");
+        let open = phone.core.events(None, 0, i64::MAX).expect("events");
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].ended_at, None);
+
+        assert!(
+            phone
+                .core
+                .apply_remote_state("nas-1".into(), fresh)
+                .expect("apply")
+        );
+        let events = phone.core.events(None, 0, i64::MAX).expect("events");
+        assert_eq!(events[0].ended_at, Some(T0 + 2_000));
     }
 }
