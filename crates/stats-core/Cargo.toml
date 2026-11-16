@@ -1,0 +1,17 @@
+[package]
+name = "stats-core"
+description = "Polling planner for NAS Stats: queries each NAS at most every 5 minutes, keeps the last state on errors, stops after a rejected login and allows a manual refresh 30 s after the last query."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+nas-model = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+
+[lints]
+workspace = true
