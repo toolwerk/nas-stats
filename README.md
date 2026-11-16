@@ -69,6 +69,10 @@ cd apps/NasStats && xcodegen generate
 xcodebuild test -project NasStats.xcodeproj -scheme NasStatsMac -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 
+## Release
+
+`scripts/release.sh` lädt iPhone- und Mac-Build zu App Store Connect hoch (TestFlight), `scripts/bump-build.sh` erhöht vorher die Build-Nummer. Einrichtung, Ablauf, Icon, Datenschutzseite und Store-Texte stehen in [docs/release.md](docs/release.md).
+
 ## Lizenz
 
 MIT oder Apache-2.0, nach Wahl.
