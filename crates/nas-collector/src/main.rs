@@ -295,6 +295,14 @@ async fn serve(config: config::Config, dir: &Path) -> Result<(), String> {
     stop.notify_one();
     let _ = server.await;
     let _ = planning.await;
+    // Queries in flight still report, so a refused login is kept as a
+    // block before the process ends.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while planner.states().iter().any(|state| state.running)
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     // End the sessions on the NAS, without waiting long for them.
     for (_, provider) in &providers {
         let _ = tokio::time::timeout(Duration::from_secs(5), provider.client().logout()).await;
