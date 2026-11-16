@@ -8,6 +8,7 @@
 
 mod backup;
 mod device;
+mod events;
 mod findings;
 mod health;
 mod nas;
@@ -18,6 +19,10 @@ mod storage;
 
 pub use backup::{BackupKind, BackupResult, BackupRun, BackupTask};
 pub use device::{Alert, AlertLevel, Container, Fan, NetInterface, Ups, UpsState};
+pub use events::{
+    DISK_TEMP_RECOVERY_C, Event, EventChange, EventKind, FILL_RECOVERY_PERCENT,
+    UNREACHABLE_AFTER_SECS, detect_events, detect_unreachable,
+};
 pub use findings::{Finding, FindingKind, Thresholds};
 pub use health::{Health, percent};
 pub use nas::{Nas, ProviderKind, SystemStatus, hash_serial};
