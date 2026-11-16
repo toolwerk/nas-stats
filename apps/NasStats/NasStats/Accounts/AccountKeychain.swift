@@ -53,25 +53,36 @@ struct AccountKeychain: Sendable {
         }
     }
 
-    /// Replaces the entry of the account, also when its iCloud setting
-    /// changed.
-    func save(_ stored: StoredAccount) throws {
-        try delete(id: stored.account.id)
+    /// The query that adds the entry of the account; `kSecAttrSynchronizable`
+    /// follows the iCloud setting of the account.
+    func addQuery(for stored: StoredAccount) throws -> [String: Any] {
         var query = base()
         query[kSecAttrAccount as String] = stored.account.id.uuidString
         query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         query[kSecAttrSynchronizable as String] = stored.account.syncsViaICloud
         query[kSecValueData as String] = try JSONEncoder().encode(stored)
-        let status = SecItemAdd(query as CFDictionary, nil)
+        return query
+    }
+
+    /// The query that removes the entry, local or synced.
+    func deleteQuery(id: UUID) -> [String: Any] {
+        var query = base()
+        query[kSecAttrAccount as String] = id.uuidString
+        query[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
+        return query
+    }
+
+    /// Replaces the entry of the account, also when its iCloud setting
+    /// changed.
+    func save(_ stored: StoredAccount) throws {
+        try delete(id: stored.account.id)
+        let status = SecItemAdd(try addQuery(for: stored) as CFDictionary, nil)
         guard status == errSecSuccess else { throw KeychainError(status: status) }
     }
 
     /// Removes the entry, local or synced; a missing entry is no error.
     func delete(id: UUID) throws {
-        var query = base()
-        query[kSecAttrAccount as String] = id.uuidString
-        query[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
-        let status = SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(deleteQuery(id: id) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError(status: status)
         }

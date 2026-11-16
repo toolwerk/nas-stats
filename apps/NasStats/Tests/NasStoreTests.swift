@@ -828,6 +828,41 @@ struct NasStoreTests {
         }
     }
 
+    @Test func switchingICloudMovesTheEntryBothWays() async throws {
+        let a = Self.account("Keller")
+        let keychain = MemoryAccountStore([a])
+        let core = FakeCore()
+        let store = await started(keychain, core: core)
+        let calls = core.calls
+        let id = a.account.id
+
+        for syncs in [true, false] {
+            try store.setSyncsViaICloud(id: id, to: syncs)
+            let stored = try #require(try keychain.loadAll().first)
+            #expect(stored.account.syncsViaICloud == syncs)
+            #expect(stored.password == "demo")
+            #expect(store.accounts.accounts.first?.syncsViaICloud == syncs)
+            #expect(core.calls.added == calls.added)
+            #expect(core.calls.updated == calls.updated)
+            #expect(core.calls.refreshed == calls.refreshed)
+        }
+    }
+
+    @Test func aRefusedICloudSwitchKeepsTheSetting() async throws {
+        let a = Self.account("Keller")
+        let keychain = MemoryAccountStore([a])
+        let store = await started(keychain, core: FakeCore())
+        keychain.refuseSave.withLock { $0 = true }
+        #expect(throws: MemoryAccountStore.Refused.self) {
+            try store.setSyncsViaICloud(id: a.account.id, to: true)
+        }
+        #expect(try keychain.loadAll().first?.account.syncsViaICloud == false)
+        #expect(store.accounts.accounts.first?.syncsViaICloud == false)
+        #expect(throws: FfiError.self) {
+            try store.setSyncsViaICloud(id: UUID(), to: true)
+        }
+    }
+
     @Test func resumeStartsABlockedNasWithTheStoredAccess() async throws {
         let a = Self.account("Keller")
         let keychain = MemoryAccountStore([a])
