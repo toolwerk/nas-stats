@@ -8,6 +8,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `nas-model`: events from changes of state. `detect_events` compares a snapshot with the open events (not with the previous snapshot) and returns opened, raised and closed events for alerts, disks, volumes, fans, UPS and backups, with hysteresis (disk 3 °C, volume 1 point below the threshold; a fill event opens at 80 % and rises to critical at 90 %). `detect_unreachable` opens „nicht erreichbar“ after 15 minutes without a snapshot. `nas-demo` carries the events of the mockup (#10).
 - `nas-demo` crate: deterministic demo data as in the mockup (Keller with QNAP TS-464, Büro with Synology DS923+, Homelab with TrueNAS CE 25.10), with 90 days of daily history from a fixed seed and daily backup runs. All times follow the given `now`; ids start with `demo-`, base URLs end in `.demo.invalid`. The DataVol1 history yields "full in 143 days" from a regression over the last 30 days (#22).
 - `nas-http` crate: HTTPS layer for all providers with certificate pinning after the first contact (SHA-256 fingerprint), `CertificateChanged` with old and new fingerprint, 20 s time limit, no retries, no redirects, HTTPS only.
 - `ProviderError::Unreachable` carries a detail for the log (#3).
