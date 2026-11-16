@@ -55,6 +55,11 @@ pub fn forecast(used: &[Point], total: f64, now: i64) -> Option<Forecast> {
         return None;
     }
 
+    // A constant series is flat; rounding must not turn it into a trend.
+    if values.iter().all(|(_, y)| *y == values[0].1) {
+        return None;
+    }
+
     let n = values.len() as f64;
     let mean_x = values.iter().map(|(x, _)| x).sum::<f64>() / n;
     let mean_y = values.iter().map(|(_, y)| y).sum::<f64>() / n;
@@ -127,6 +132,12 @@ mod tests {
             forecast(&line(30, 1000.0 * GB, 0.0), 1400.0 * GB, NOW),
             None
         );
+    }
+
+    #[test]
+    fn full_and_unchanged_volume_has_no_trend() {
+        let total = 1234.567 * GB;
+        assert_eq!(forecast(&line(30, total, 0.0), total, NOW), None);
     }
 
     #[test]
