@@ -69,7 +69,12 @@ targets:
         LSApplicationCategoryType: public.app-category.utilities
         NSHumanReadableCopyright: "© 2026 Frank Neumann-Staude"
         ITSAppUsesNonExemptEncryption: false
-        NSLocalNetworkUsageDescription: "NAS Stats liest den Zustand Ihrer NAS im lokalen Netz."
+        NSLocalNetworkUsageDescription: "NAS Stats fragt Ihre NAS im Heimnetz direkt ab, um Speicher, Platten und Warnungen zu zeigen. Die Daten bleiben auf Ihrem Gerät."
+        # Occasional query in the background (BackgroundRefresh.swift).
+        UIBackgroundModes:
+          - fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - net.staude.nasstats.refresh
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
