@@ -98,7 +98,7 @@ struct StatusView: View {
     }
 }
 
-/// The worst NAS: status dot, name, "DEMO", the first warning or the error,
+/// The worst NAS: status dot, name, "DEMO", the error or the first warning,
 /// and the time of the state once it is old.
 private struct NasLines: View {
     let nas: WidgetNas
@@ -118,15 +118,17 @@ private struct NasLines: View {
                     .foregroundStyle(.secondary)
             }
         }
-        if let finding = nas.firstFinding {
-            Text(finding)
-                .font(.subheadline)
-                .foregroundStyle(nas.firstFindingLevel?.color ?? .primary)
-                .lineLimit(3)
-        } else if let problem = nas.problemLine {
+        // The error first: it explains a red or dashed dot, while the
+        // findings may be those of an old state.
+        if let problem = nas.problemLine {
             Text(problem)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .lineLimit(3)
+        } else if let finding = nas.firstFinding {
+            Text(finding)
+                .font(.subheadline)
+                .foregroundStyle(nas.firstFindingLevel?.color ?? .primary)
                 .lineLimit(3)
         }
         Spacer(minLength: 0)
