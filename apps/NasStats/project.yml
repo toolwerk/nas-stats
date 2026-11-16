@@ -60,6 +60,13 @@ targets:
         # Accounts live in the keychain under this group.
         keychain-access-groups:
           - $(AppIdentifierPrefix)net.staude.nasstats
+        # State and history from the Mac (#37), private database only.
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.net.staude.nasstats
+        com.apple.developer.icloud-services:
+          - CloudKit
+        # Silent push of the zone subscription; production with the archive.
+        aps-environment: development
     info:
       path: NasStats/Info-iOS.plist
       properties:
@@ -70,9 +77,11 @@ targets:
         NSHumanReadableCopyright: "© 2026 Frank Neumann-Staude"
         ITSAppUsesNonExemptEncryption: false
         NSLocalNetworkUsageDescription: "NAS Stats fragt Ihre NAS im Heimnetz direkt ab, um Speicher, Platten und Warnungen zu zeigen. Die Daten bleiben auf Ihrem Gerät."
-        # Occasional query in the background (BackgroundRefresh.swift).
+        # Occasional query in the background (BackgroundRefresh.swift) and
+        # the silent push of iCloud (PhoneAppDelegate.swift, #37).
         UIBackgroundModes:
           - fetch
+          - remote-notification
         BGTaskSchedulerPermittedIdentifiers:
           - net.staude.nasstats.refresh
         UILaunchScreen: {}
@@ -115,6 +124,11 @@ targets:
           - 7N2W4T6UPV.net.staude.nasstats
         keychain-access-groups:
           - $(AppIdentifierPrefix)net.staude.nasstats
+        # State and history to the iPhone (#37), private database only.
+        com.apple.developer.icloud-container-identifiers:
+          - iCloud.net.staude.nasstats
+        com.apple.developer.icloud-services:
+          - CloudKit
     info:
       path: NasStats/Info-macOS.plist
       properties:
@@ -200,6 +214,10 @@ targets:
       - path: NasStats/History
       # Events tab (#20): its content model is tested, the view compiles along.
       - path: NasStats/Events
+      # Collector (#124): pairing and sync, used by the store.
+      - path: NasStats/Collector
+      # iCloud transfer (#37): tested with a fake database, never a container.
+      - path: NasStats/Cloud
       - path: Shared
       - path: Generated/stats_ffi.swift
         optional: true

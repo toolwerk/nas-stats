@@ -436,6 +436,27 @@ impl NasCore {
     }
 }
 
+/// A snapshot saved with [`NasCore::saved_state`]; JSON that does not parse
+/// or belongs to another NAS is `InvalidInput`.
+fn parse_state(nas_id: &str, json: &str) -> Result<model::Snapshot, FfiError> {
+    let raw: model::Snapshot = serde_json::from_str(json).map_err(|e| FfiError::InvalidInput {
+        detail: e.to_string(),
+    })?;
+    if raw.nas.id != nas_id {
+        return Err(FfiError::InvalidInput {
+            detail: format!("saved state of {} given for {nas_id}", raw.nas.id),
+        });
+    }
+    Ok(raw)
+}
+
+/// An export as JSON.
+fn to_json(export: Export) -> Result<String, FfiError> {
+    serde_json::to_string(&export).map_err(|e| FfiError::Internal {
+        detail: e.to_string(),
+    })
+}
+
 impl Default for NasCore {
     fn default() -> Self {
         Self::with_parts(
@@ -819,17 +840,107 @@ impl NasCore {
     /// `InvalidInput`.
     pub fn restore_state(&self, nas_id: String, json: String) -> Result<(), FfiError> {
         self.entry(&nas_id)?;
-        let raw: model::Snapshot =
-            serde_json::from_str(&json).map_err(|e| FfiError::InvalidInput {
-                detail: e.to_string(),
-            })?;
-        if raw.nas.id != nas_id {
-            return Err(FfiError::InvalidInput {
-                detail: format!("saved state of {} given for {nas_id}", raw.nas.id),
-            });
-        }
+        let raw = parse_state(&nas_id, &json)?;
         self.planner.restore_snapshot(&nas_id, raw);
         Ok(())
+    }
+
+    /// Takes a snapshot another device of the user read (#37), as JSON of
+    /// [`NasCore::saved_state`], when it is newer than the own one. Read
+    /// after the start of the last own query, it also clears the error of
+    /// that query; the time of the last query and a block stay, so the
+    /// planner queries as before. A taken state ends an open „nicht
+    /// erreichbar“ of the archive at its time: the NAS answered the other
+    /// device. `true` when it was taken. Checks the JSON like
+    /// [`NasCore::restore_state`]. Sends nothing.
+    pub fn apply_remote_state(&self, nas_id: String, json: String) -> Result<bool, FfiError> {
+        self.entry(&nas_id)?;
+        let raw = parse_state(&nas_id, &json)?;
+        let observed_at = raw.observed_at;
+        // Also for an older state: the NAS answered at its time, and a
+        // failed close comes again with the next fetch.
+        if let Some(mut store) = self.archive() {
+            store.close_unreachable(&nas_id, observed_at)?;
+        }
+        Ok(self.planner.take_newer_snapshot(&nas_id, raw))
+    }
+
+    /// Start of every UTC day with a daily value of a NAS, oldest first,
+    /// Unix seconds; empty without an archive.
+    pub fn history_days(&self, nas_id: String) -> Result<Vec<i64>, FfiError> {
+        let Some(store) = self.archive() else {
+            return Ok(Vec::new());
+        };
+        Ok(store.days(&nas_id)?)
+    }
+
+    /// The hourly and daily values, backup runs and events of the UTC day
+    /// that holds `day` (Unix seconds), as JSON for another device of the
+    /// user (#37); `None` for a day without any, or without an archive.
+    pub fn export_day(&self, nas_id: String, day: i64) -> Result<Option<String>, FfiError> {
+        let now = (self.clock)();
+        let Some(store) = self.archive() else {
+            return Ok(None);
+        };
+        store
+            .export_day(&nas_id, day, now)?
+            .map(to_json)
+            .transpose()
+    }
+
+    /// The raw samples of the last 24 hours of a NAS as JSON for another
+    /// device of the user (#37); `None` without any, or without an archive.
+    pub fn export_recent(&self, nas_id: String) -> Result<Option<String>, FfiError> {
+        let now = (self.clock)();
+        let Some(store) = self.archive() else {
+            return Ok(None);
+        };
+        store.export_recent(&nas_id, now)?.map(to_json).transpose()
+    }
+
+    /// Takes over a day or the last 24 hours of another device
+    /// ([`NasCore::export_day`], [`NasCore::export_recent`]): an hour or
+    /// day with more samples than the own one wins, events keep a known
+    /// end. Returns the events of the export that are open there, so the
+    /// app keeps them silent (the other device notifies them). Nothing
+    /// changes without an archive. JSON that does not parse, or is of
+    /// another version, is `Parse`; one of another NAS is `InvalidInput`.
+    pub fn import_history(&self, nas_id: String, json: String) -> Result<Vec<NasEvent>, FfiError> {
+        self.check_registered(&nas_id)?;
+        let export: Export = serde_json::from_str(&json).map_err(|e| FfiError::Parse {
+            detail: e.to_string(),
+        })?;
+        if export.nas_id != nas_id {
+            return Err(FfiError::InvalidInput {
+                detail: format!("history of {} given for {nas_id}", export.nas_id),
+            });
+        }
+        let now = (self.clock)();
+        let Some(mut store) = self.archive() else {
+            return Ok(Vec::new());
+        };
+        store.import(&export, &nas_id, now).map_err(|e| match e {
+            HistoryError::Format(detail) => FfiError::Parse { detail },
+            other => other.into(),
+        })?;
+        Ok(export
+            .events
+            .iter()
+            .filter(|row| row.ended_at.is_none())
+            .filter_map(|row| {
+                Some(model::Event {
+                    nas_id: nas_id.clone(),
+                    kind: model::EventKind::from_name(&row.kind)?,
+                    subject: (!row.subject.is_empty()).then(|| row.subject.clone()),
+                    level: serde_json::from_value(serde_json::Value::String(row.level.clone()))
+                        .ok()?,
+                    text: row.text.clone(),
+                    started_at: row.started_at,
+                    ended_at: None,
+                })
+            })
+            .map(NasEvent::from)
+            .collect())
     }
 
     /// Queries a NAS once without registering it, e.g. before saving it,
@@ -2402,6 +2513,7 @@ mod tests {
             hourly: Vec::new(),
             daily: Vec::new(),
             backup_runs: Vec::new(),
+            events: Vec::new(),
         }
     }
 
@@ -2430,5 +2542,226 @@ mod tests {
             .expect("history");
         assert_eq!(cpu[0].points.len(), 1);
         assert!(h.core.events(None, 0, i64::MAX).expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_history_of_the_mac_goes_to_the_phone() {
+        let mac = harness(FakeBackend::answering(vec![Ok(model_snapshot(10.0))]));
+        mac.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        mac.core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("state");
+        let days = mac.core.history_days("nas-1".into()).expect("days");
+        assert_eq!(days, vec![T0 - T0.rem_euclid(86_400)]);
+        let day = mac
+            .core
+            .export_day("nas-1".into(), days[0])
+            .expect("day")
+            .expect("values");
+        let recent = mac
+            .core
+            .export_recent("nas-1".into())
+            .expect("recent")
+            .expect("samples");
+        assert_eq!(mac.core.export_day("nas-1".into(), 0).expect("day"), None);
+        assert_eq!(
+            mac.core.export_recent("nas-2".into()).expect("recent"),
+            None
+        );
+
+        let phone = harness(FakeBackend::answering(vec![]));
+        assert!(matches!(
+            phone.core.import_history("nas-1".into(), day.clone()),
+            Err(FfiError::UnknownNas { .. })
+        ));
+        phone
+            .core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        phone
+            .core
+            .add_nas(config("nas-2"), "u".into(), "p".into())
+            .expect("add");
+        assert!(matches!(
+            phone.core.import_history("nas-2".into(), day.clone()),
+            Err(FfiError::InvalidInput { .. })
+        ));
+        assert!(matches!(
+            phone
+                .core
+                .import_history("nas-1".into(), "{\"version\":".into()),
+            Err(FfiError::Parse { .. })
+        ));
+        assert!(matches!(
+            phone.core.import_history(
+                "nas-1".into(),
+                day.replace("\"version\":1", "\"version\":2")
+            ),
+            Err(FfiError::Parse { .. })
+        ));
+        phone.core.import_history("nas-1".into(), day).expect("day");
+        phone
+            .core
+            .import_history("nas-1".into(), recent)
+            .expect("recent");
+        for range in [HistoryRange::Day, HistoryRange::Year] {
+            assert_eq!(
+                phone
+                    .core
+                    .history("nas-1".into(), Metric::Cpu, range)
+                    .expect("phone"),
+                mac.core
+                    .history("nas-1".into(), Metric::Cpu, range)
+                    .expect("mac"),
+            );
+        }
+        // Only history: the phone has no state of the NAS from it.
+        assert_eq!(phone.core.states()[0].snapshot, None);
+    }
+
+    #[tokio::test]
+    async fn a_state_of_the_mac_counts_only_when_newer() {
+        let mac = harness(FakeBackend::answering(vec![Ok(model_snapshot(10.0))]));
+        mac.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        mac.set_time(T0 + 600);
+        mac.core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("state");
+        let at_t0 = mac
+            .core
+            .saved_state("nas-1".into())
+            .expect("saved")
+            .expect("json");
+        let later = at_t0.replace(
+            &format!("\"observed_at\":{T0}"),
+            &format!("\"observed_at\":{}", T0 + 900),
+        );
+        assert_ne!(later, at_t0);
+
+        // The phone queried at T0 + 600 itself and got no answer.
+        let phone = harness(FakeBackend::answering(vec![Err(
+            ProviderError::Unreachable("weg".into()),
+        )]));
+        assert!(matches!(
+            phone.core.apply_remote_state("nas-1".into(), at_t0.clone()),
+            Err(FfiError::UnknownNas { .. })
+        ));
+        phone
+            .core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        phone
+            .core
+            .add_nas(config("nas-2"), "u".into(), "p".into())
+            .expect("add");
+        phone.set_time(T0 + 600);
+        phone
+            .core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("state");
+        assert!(matches!(
+            phone.core.apply_remote_state("nas-2".into(), at_t0.clone()),
+            Err(FfiError::InvalidInput { .. })
+        ));
+
+        // Read before the failed query: taken, but the error stays.
+        assert!(
+            phone
+                .core
+                .apply_remote_state("nas-1".into(), at_t0.clone())
+                .expect("apply")
+        );
+        let state = phone.core.states().remove(0);
+        assert_eq!(state.snapshot.map(|s| s.observed_at), Some(T0));
+        assert!(state.problem.is_some());
+        assert!(
+            !phone
+                .core
+                .apply_remote_state("nas-1".into(), at_t0)
+                .expect("apply")
+        );
+
+        // Read after it: the error goes, the time of the query stays.
+        assert!(
+            phone
+                .core
+                .apply_remote_state("nas-1".into(), later.clone())
+                .expect("apply")
+        );
+        let state = phone.core.states().remove(0);
+        assert_eq!(state.snapshot.map(|s| s.observed_at), Some(T0 + 900));
+        assert_eq!(state.problem, None);
+        assert_eq!(state.last_attempt_at, Some(T0 + 600));
+        assert_eq!(
+            phone.core.saved_state("nas-1".into()).expect("saved"),
+            Some(later)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_state_of_the_mac_ends_an_own_unreachable() {
+        let mac = harness(FakeBackend::answering(vec![Ok(model_snapshot(10.0))]));
+        mac.core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        mac.core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("state");
+        let json = mac
+            .core
+            .saved_state("nas-1".into())
+            .expect("saved")
+            .expect("json");
+        let fresh = json.replace(
+            &format!("\"observed_at\":{T0}"),
+            &format!("\"observed_at\":{}", T0 + 2_000),
+        );
+
+        // The phone saw the NAS at T0, then not for 15 minutes.
+        let phone = harness(FakeBackend::answering(vec![
+            Ok(model_snapshot(10.0)),
+            Err(ProviderError::Unreachable("weg".into())),
+        ]));
+        phone
+            .core
+            .add_nas(config("nas-1"), "u".into(), "p".into())
+            .expect("add");
+        phone
+            .core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("state");
+        phone.set_time(T0 + 1_000);
+        phone
+            .core
+            .clone()
+            .refresh("nas-1".into())
+            .await
+            .expect("state");
+        let open = phone.core.events(None, 0, i64::MAX).expect("events");
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].ended_at, None);
+
+        assert!(
+            phone
+                .core
+                .apply_remote_state("nas-1".into(), fresh)
+                .expect("apply")
+        );
+        let events = phone.core.events(None, 0, i64::MAX).expect("events");
+        assert_eq!(events[0].ended_at, Some(T0 + 2_000));
     }
 }

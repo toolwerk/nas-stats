@@ -26,6 +26,20 @@ final class FakeCore: NasCoreProtocol {
         /// Number of `startPlanner` and `stopPlanner` calls.
         var plannerStarts = 0
         var plannerStops = 0
+        /// `nasId|json` of every `importHistory` call (#37).
+        var importedHistory: [String] = []
+        /// `nasId|json` of every `applyRemoteState` call (#37).
+        var remoteStates: [String] = []
+        /// `nasId|day` of every `exportDay` call (#37).
+        var exportedDays: [String] = []
+        /// Every `importFromCollector` call.
+        var imports: [CollectorImportCall] = []
+    }
+
+    struct CollectorImportCall: Equatable {
+        var collectorNasId: String
+        var nasId: String
+        var since: Int64?
     }
 
     struct RestoredPoll: Equatable {
@@ -56,6 +70,14 @@ final class FakeCore: NasCoreProtocol {
     /// What `history` and `forecast` return, for every NAS.
     let historyPreset = Mutex<[Metric: [HistorySeries]]>([:])
     let forecastPreset = Mutex<[String: Forecast]>([:])
+    /// What `importFromCollector` returns; it throws `failImport` per
+    /// collector NAS id instead.
+    let importResult = Mutex(CollectorImport(until: 0, samples: 0, hourly: 0, daily: 0, backupRuns: 0))
+    let failImport = Mutex<[String: FfiError]>([:])
+    /// What `historyDays` returns, for every NAS (#37).
+    let daysPreset = Mutex<[Int64]>([])
+    /// Events per NAS id that an `importHistory` brings into the archive.
+    let importedEvents = Mutex<[String: [NasEvent]]>([:])
 
     init(states: [NasState] = [], restorable: [String: Snapshot] = [:]) {
         presets = Mutex(Dictionary(uniqueKeysWithValues: states.map { ($0.nasId, $0) }))
@@ -201,12 +223,58 @@ final class FakeCore: NasCoreProtocol {
 
     func backupRuns(nasId: String, from: Int64, to: Int64) throws -> [BackupRun] { [] }
 
-    /// The store does not import yet (#124).
+    /// `day:<nasId>:<day>` for every day of `daysPreset`.
+    func exportDay(nasId: String, day: Int64) throws -> String? {
+        log.withLock { $0.exportedDays.append("\(nasId)|\(day)") }
+        return daysPreset.withLock { $0.contains(day) } ? "day:\(nasId):\(day)" : nil
+    }
+
+    func exportRecent(nasId: String) throws -> String? { "recent:\(nasId)" }
+
+    func historyDays(nasId: String) throws -> [Int64] { daysPreset.withLock { $0 } }
+
+    func importHistory(nasId: String, json: String) throws -> [NasEvent] {
+        log.withLock { $0.importedHistory.append("\(nasId)|\(json)") }
+        guard registered.withLock({ $0[nasId] }) != nil else {
+            throw FfiError.UnknownNas(id: nasId)
+        }
+        guard let events = importedEvents.withLock({ $0.removeValue(forKey: nasId) }) else { return [] }
+        presetEvents.withLock { $0[nasId, default: []] += events }
+        return events
+    }
+
+    /// Takes a restorable snapshot when it is newer than the own one.
+    func applyRemoteState(nasId: String, json: String) throws -> Bool {
+        log.withLock { $0.remoteStates.append("\(nasId)|\(json)") }
+        guard let state = registered.withLock({ $0[nasId] }) else {
+            throw FfiError.UnknownNas(id: nasId)
+        }
+        guard let snapshot = restorable.withLock({ $0[json] }) else {
+            throw FfiError.InvalidInput(detail: "kaputt")
+        }
+        if let own = state.snapshot, own.observedAt >= snapshot.observedAt {
+            return false
+        }
+        registered.withLock { $0[nasId]?.snapshot = snapshot }
+        return true
+    }
+
+    /// Makes `json` a state `restoreState` and `applyRemoteState` take.
+    func makeRestorable(_ json: String, _ snapshot: Snapshot) {
+        restorable.withLock { $0[json] = snapshot }
+    }
+
     func importFromCollector(
         baseUrl: String, fingerprint: String, token: String, collectorNasId: String,
         nasId: String, since: Int64?
     ) async throws -> CollectorImport {
-        CollectorImport(until: 0, samples: 0, hourly: 0, daily: 0, backupRuns: 0)
+        log.withLock {
+            $0.imports.append(CollectorImportCall(collectorNasId: collectorNasId, nasId: nasId, since: since))
+        }
+        if let error = failImport.withLock({ $0[collectorNasId] }) {
+            throw error
+        }
+        return importResult.withLock { $0 }
     }
 
     func updateCredentials(nasId: String, user: String, password: String) async throws {
@@ -1421,5 +1489,77 @@ struct NasStoreTests {
         let data = try #require(defaults.data(forKey: NasStore.queryLogKey))
         let log = try JSONDecoder().decode(NasStore.QueryLog.self, from: data)
         #expect(log.lastAttempts[id] == clock.now)
+    }
+
+    // MARK: - Collector (#124)
+
+    /// A started store with a paired collector that `fake` answers for.
+    func startedWithCollector(
+        _ keychain: MemoryAccountStore, core: FakeCore, fake: FakeCollector
+    ) async -> NasStore {
+        let store = NasStore(
+            accounts: NasAccounts(keychain: keychain, core: core),
+            defaults: defaults,
+            demoSource: { demoSnapshots(now: $0, thresholds: $1) },
+            clock: { [clock] in clock.now },
+            collectorStore: MemoryCollectorStore(CollectorSyncTests.collector()),
+            listCollectorNas: fake.listNas
+        )
+        store.start()
+        await store.refreshAll()
+        await store.collectorTask?.value
+        return store
+    }
+
+    @Test func anUnreachableCollectorChangesNothingAboutTheNas() async throws {
+        let a = Self.account("Keller")
+        let fake = FakeCollector()
+        fake.failure.withLock { $0 = .Unreachable(detail: "weg") }
+        let core = FakeCore(states: [Self.state(a, health: .ok)])
+
+        let store = await startedWithCollector(MemoryAccountStore([a]), core: core, fake: fake)
+
+        #expect(fake.calls.withLock { $0 } == 1)
+        #expect(store.collector.error == "Container nicht erreichbar")
+        let entry = try #require(store.entries.first)
+        #expect(entry.health == .ok)
+        #expect(entry.queryError == nil)
+        #expect(entry.localError == nil)
+        #expect(core.calls.refreshed == [a.account.id.uuidString])
+        #expect(store.historyRevision == 0)
+    }
+
+    @Test func importedHistoryReloadsTheHistoryScreen() async throws {
+        let a = Self.account("Keller")
+        let fake = FakeCollector()
+        fake.list.withLock { $0 = [CollectorSyncTests.nas("1", fingerprint: a.account.fingerprint)] }
+        let core = FakeCore(states: [Self.state(a, health: .ok)])
+        core.importResult.withLock { $0 = CollectorImport(until: 7, samples: 12, hourly: 1, daily: 0, backupRuns: 0) }
+
+        let store = await startedWithCollector(MemoryAccountStore([a]), core: core, fake: fake)
+
+        #expect(core.calls.imports.map(\.nasId) == [a.account.id.uuidString])
+        #expect(store.historyRevision == 1)
+    }
+
+    @Test func theDemoModeDoesNotAskTheCollector() async throws {
+        defaults.set(true, forKey: NasStore.demoModeKey)
+        let fake = FakeCollector()
+
+        let store = await startedWithCollector(MemoryAccountStore([Self.account("Keller")]), core: FakeCore(), fake: fake)
+
+        #expect(store.collectorTask == nil)
+        #expect(fake.calls.withLock { $0 } == 0)
+    }
+
+    @Test func removingANasForgetsItsCollectorChoice() async throws {
+        let a = Self.account("Keller")
+        let fake = FakeCollector()
+        let store = await startedWithCollector(MemoryAccountStore([a]), core: FakeCore(), fake: fake)
+        try store.collector.assign("1", to: a.account.id)
+
+        try await store.remove(id: a.account.id)
+
+        #expect(store.collector.paired?.assignments == [:])
     }
 }

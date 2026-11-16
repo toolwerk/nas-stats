@@ -52,7 +52,8 @@ mod schedule;
 pub use archive::archive_poll;
 pub use csv::{events_csv, history_csv};
 pub use export::{
-    CollectorNas, EXPORT_VERSION, Export, ExportBackupRun, ExportBucket, ExportSample, ImportCount,
+    CollectorNas, EXPORT_VERSION, Export, ExportBackupRun, ExportBucket, ExportEvent, ExportSample,
+    ImportCount,
 };
 pub use forecast::{FORECAST_DAYS, Forecast, MAX_FORECAST_DAYS, MIN_FORECAST_DAYS, forecast};
 pub use history::{
