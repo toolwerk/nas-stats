@@ -174,3 +174,74 @@ struct WidgetSnapshotTests {
         #expect(reported == 1)
     }
 }
+
+@MainActor
+struct WidgetSnapshotCarryOverTests {
+    let now = Date(timeIntervalSince1970: 1_794_665_100)
+
+    func nas(_ id: String, status: StatusLevel, observedMinutesAgo: Double?, finding: String? = nil) -> WidgetNas {
+        var (_, nas) = WidgetSnapshotTests.live(observedMinutesAgo: observedMinutesAgo, interval: 5, now: now)
+        nas.id = id
+        nas.name = id
+        nas.status = status
+        nas.firstFinding = finding
+        return nas
+    }
+
+    func snapshot(_ nas: [WidgetNas], demo: Bool = false) -> WidgetSnapshot {
+        WidgetSnapshot(writtenAt: now, demo: demo, staleAfterSeconds: 1800, thresholds: .standard, nas: nas)
+    }
+
+    @Test func aNasWithoutStateKeepsItsLastOne() throws {
+        let previous = snapshot([
+            nas("a", status: .warning, observedMinutesAgo: 40, finding: "Platte 3 bei 52 °C"),
+            nas("b", status: .ok, observedMinutesAgo: 3),
+        ])
+        // After a launch: b answered again, a waits for its interval.
+        var blocked = nas("a", status: .critical, observedMinutesAgo: nil)
+        blocked.problemLine = "Anmeldung abgelehnt"
+        let merged = snapshot([blocked, nas("b", status: .ok, observedMinutesAgo: 0)])
+            .carryingOver(from: previous)
+        let a = try #require(merged.nas.first)
+        #expect(a.id == "a")
+        #expect(a.status == .critical)
+        #expect(a.firstFinding == "Platte 3 bei 52 °C")
+        #expect(a.problemLine == "Anmeldung abgelehnt")
+        #expect(a.observedAt == previous.nas[0].observedAt)
+        // Its old state shows its age.
+        #expect(merged.isStale(a, now: now))
+        #expect(merged.nas[1].observedAt == now)
+    }
+
+    @Test func anUnknownStateKeepsTheLastLevelAndTheOrder() {
+        let previous = snapshot([nas("a", status: .warning, observedMinutesAgo: 3)])
+        let merged = snapshot([
+            nas("b", status: .ok, observedMinutesAgo: 0),
+            nas("a", status: .unknown, observedMinutesAgo: nil),
+        ]).carryingOver(from: previous)
+        #expect(merged.nas.map(\.id) == ["a", "b"])
+        #expect(merged.nas[0].status == .warning)
+    }
+
+    @Test func demoAndLiveDataNeverMix() {
+        let previous = snapshot([nas("a", status: .warning, observedMinutesAgo: 3)], demo: true)
+        let fresh = snapshot([nas("a", status: .unknown, observedMinutesAgo: nil)])
+        #expect(fresh.carryingOver(from: previous) == fresh)
+        #expect(fresh.carryingOver(from: nil) == fresh)
+    }
+
+    @Test func theWriterKeepsTheStateOfAnEarlierLaunch() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nasstats-widget-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent(WidgetSnapshot.fileName)
+        let earlier = snapshot([nas("a", status: .ok, observedMinutesAgo: 3)])
+        WidgetSnapshotWriter(fileURL: url) {}.update(earlier)
+
+        let writer = WidgetSnapshotWriter(fileURL: url) {}
+        writer.update(snapshot([nas("a", status: .unknown, observedMinutesAgo: nil)]))
+        let read = try #require(WidgetSnapshot.load(from: url))
+        #expect(read.nas.first?.observedAt == earlier.nas.first?.observedAt)
+        #expect(read.nas.first?.status == .ok)
+    }
+}

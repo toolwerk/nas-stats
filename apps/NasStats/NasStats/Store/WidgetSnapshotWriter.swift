@@ -19,6 +19,51 @@ extension WidgetSnapshot {
             nas: entries.map(WidgetNas.init(entry:))
         )
     }
+
+    /// The snapshot with the last known state of every NAS that has none
+    /// yet: the core keeps its states only in memory, so after a launch the
+    /// NAS stay without a state until their interval has passed, a blocked
+    /// NAS for good. Their file entry would otherwise lose the last state,
+    /// and the widget could never show its age. Name, vendor, error and a
+    /// known state come from the new entry; demo and live data never mix.
+    func carryingOver(from previous: WidgetSnapshot?) -> WidgetSnapshot {
+        guard let previous, !demo, !previous.demo else { return self }
+        var result = self
+        var carried = false
+        for index in result.nas.indices where result.nas[index].observedAt == nil {
+            let new = result.nas[index]
+            guard var kept = previous.nas.first(where: { $0.id == new.id }),
+                  kept.observedAt != nil
+            else { continue }
+            kept.name = new.name
+            kept.model = new.model ?? kept.model
+            kept.vendor = new.vendor
+            kept.problemLine = new.problemLine
+            if new.status != .unknown {
+                kept.status = new.status
+            }
+            result.nas[index] = kept
+            carried = true
+        }
+        if carried {
+            // Worst first again, as the store sorts; stable within a level.
+            result.nas = result.nas.enumerated()
+                .sorted { (Self.rank($0.element.status), $0.offset) < (Self.rank($1.element.status), $1.offset) }
+                .map(\.element)
+        }
+        return result
+    }
+
+    /// Place of a state in the order of the store (`StoreHealth`); a NAS
+    /// that did not answer counts as a warning there.
+    private static func rank(_ level: StatusLevel) -> Int {
+        switch level {
+        case .critical: 0
+        case .warning, .offline: 1
+        case .ok: 2
+        case .unknown: 3
+        }
+    }
 }
 
 extension WidgetNas {
@@ -71,6 +116,9 @@ final class WidgetSnapshotWriter {
     private let reload: @MainActor () -> Void
     /// What was written last; stays after a failed write.
     private var lastWritten: WidgetSnapshot?
+    /// Last known state per NAS: what was written last, else the file of
+    /// an earlier launch.
+    private var previous: WidgetSnapshot?
 
     /// - Parameters:
     ///   - fileURL: Target file; `nil` (no App Group container) writes nothing.
@@ -78,11 +126,14 @@ final class WidgetSnapshotWriter {
     init(fileURL: URL?, reload: @escaping @MainActor () -> Void) {
         self.fileURL = fileURL
         self.reload = reload
+        previous = WidgetSnapshot.load(from: fileURL)
     }
 
     /// Writes `snapshot` unless it equals the last one written apart from
-    /// `writtenAt`; on success the widgets are redrawn.
-    func update(_ snapshot: WidgetSnapshot) {
+    /// `writtenAt`; on success the widgets are redrawn. A NAS without a
+    /// state keeps its last known one (`carryingOver(from:)`).
+    func update(_ new: WidgetSnapshot) {
+        let snapshot = new.carryingOver(from: previous)
         if var last = lastWritten {
             last.writtenAt = snapshot.writtenAt
             if last == snapshot { return }
@@ -99,6 +150,7 @@ final class WidgetSnapshotWriter {
             return
         }
         lastWritten = snapshot
+        previous = snapshot
         reload()
     }
 }
