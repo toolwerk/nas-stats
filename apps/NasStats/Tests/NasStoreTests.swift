@@ -1160,8 +1160,13 @@ struct NasStoreTests {
         let core = FakeCore()
         let store = await started(MemoryAccountStore(), core: core)
         let new = Self.account("Neu")
+        #expect(core.calls.plannerStarts == 1)
         try await store.add(new)
         #expect(core.calls.restoredPolls.last
             == FakeCore.RestoredPoll(nasId: new.account.id.uuidString, lastAttemptAt: clock.now, blocked: false))
+        // Held while the core registers the NAS as due, then running again.
+        #expect(core.calls.plannerStops == 1)
+        #expect(core.calls.plannerStarts == 2)
+        #expect(core.listener.withLock { $0 } != nil)
     }
 }

@@ -323,6 +323,17 @@ final class NasStore {
     /// and the planner queries it next after the interval of the settings.
     /// Throws when the keychain or the core refuses it; nothing changes then.
     func add(_ stored: StoredAccount, snapshot: Snapshot? = nil) async throws {
+        // The core registers a new NAS as due and wakes its planner at once;
+        // held until the test query counts, it does not query again.
+        let planning = started && !demoMode
+        if planning {
+            accounts.core.stopPlanner()
+        }
+        defer {
+            if planning {
+                accounts.core.startPlanner(listener: listener)
+            }
+        }
         try accounts.add(stored)
         let id = stored.account.id.uuidString
         try? accounts.core.restorePoll(nasId: id, lastAttemptAt: clock(), blocked: false)
@@ -481,7 +492,10 @@ final class NasStore {
             if let snapshot = state.snapshot {
                 testSnapshots[key] = nil
                 saveState(of: key)
-                derived[key] = Self.derive(key, snapshot: snapshot, core: accounts.core, now: clock())
+                // A query of `refreshAll` also comes through the listener.
+                if derived[key]?.observedAt != snapshot.observedAt {
+                    derived[key] = Self.derive(key, snapshot: snapshot, core: accounts.core, now: clock())
+                }
             }
         }
         saveLog()
@@ -512,6 +526,8 @@ final class NasStore {
 
     /// What the store takes from the history of a NAS with a new snapshot.
     struct Derived {
+        /// Time of the snapshot it was made for.
+        var observedAt: Int64?
         var forecasts: [String: FillForecast] = [:]
         var fullestVolumeHistory: [WidgetFillPoint] = []
     }
@@ -522,7 +538,7 @@ final class NasStore {
     /// failing history gives none.
     static func derive(_ nasId: String, snapshot: Snapshot, core: any NasCoreProtocol, now: Int64) -> Derived {
         let volumes = NasEntry.capacityVolumes(of: snapshot)
-        var result = Derived()
+        var result = Derived(observedAt: snapshot.observedAt)
         for volume in volumes {
             guard let forecast = try? core.forecast(nasId: nasId, volumeId: volume.id) else { continue }
             result.forecasts[volume.id] = .full(
