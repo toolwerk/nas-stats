@@ -166,6 +166,7 @@ fn keller(now: i64) -> Snapshot {
                 last_run: Some(now - 9 * HOUR),
                 last_result: Some(BackupResult::Ok),
                 next_run: Some(now + 11 * HOUR + 55 * MINUTE),
+                interval_secs: None,
             },
             BackupTask {
                 id: format!("{id}-backup-snapshots"),
@@ -174,6 +175,7 @@ fn keller(now: i64) -> Snapshot {
                 last_run: Some(now - 5 * MINUTE),
                 last_result: Some(BackupResult::Ok),
                 next_run: Some(now + 55 * MINUTE),
+                interval_secs: None,
             },
         ],
         containers: containers(&[
@@ -262,6 +264,7 @@ fn buero(now: i64) -> Snapshot {
             last_run: Some(now - 3 * HOUR),
             last_result: Some(BackupResult::Ok),
             next_run: Some(now + 21 * HOUR),
+            interval_secs: None,
         }],
         containers: Vec::new(),
         alerts: Vec::new(),
@@ -376,6 +379,7 @@ fn homelab(now: i64) -> Snapshot {
             last_run: Some(now - HOUR),
             last_result: Some(BackupResult::Ok),
             next_run: Some(now + 23 * HOUR),
+            interval_secs: None,
         }],
         containers: containers(&[
             ("Home Assistant", true),

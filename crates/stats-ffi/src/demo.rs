@@ -118,6 +118,7 @@ pub(crate) fn snapshot() -> Snapshot {
             last_run: Some(now - 8 * HOUR),
             last_result: Some(BackupResult::Ok),
             next_run: Some(now + 16 * HOUR),
+            interval_secs: Some(24 * HOUR),
         }],
         containers: vec![Container {
             name: "demo-app".into(),

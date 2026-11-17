@@ -1781,6 +1781,7 @@ mod tests {
             last_run: Some(T0 - HOUR),
             last_result: Some(BackupResult::Ok),
             next_run: None,
+            interval_secs: None,
         });
         store.write_snapshot(&snap, T0).expect("first write");
         let first = counts(&store);
@@ -1867,6 +1868,7 @@ mod tests {
                 last_run: Some(started),
                 last_result: Some(BackupResult::Running),
                 next_run: None,
+                interval_secs: None,
             },
             BackupTask {
                 id: "b2".into(),
@@ -1875,6 +1877,7 @@ mod tests {
                 last_run: Some(started),
                 last_result: Some(BackupResult::Never),
                 next_run: None,
+                interval_secs: None,
             },
             BackupTask {
                 id: "b3".into(),
@@ -1883,6 +1886,7 @@ mod tests {
                 last_run: None,
                 last_result: Some(BackupResult::Ok),
                 next_run: None,
+                interval_secs: None,
             },
         ];
         store
@@ -1937,6 +1941,7 @@ mod tests {
             last_run: Some(T0 - HOUR),
             last_result: Some(BackupResult::Running),
             next_run: None,
+            interval_secs: None,
         }];
         for result in [
             BackupResult::Running,
@@ -2221,6 +2226,7 @@ mod tests {
                     last_run: Some(at),
                     last_result: Some(BackupResult::Ok),
                     next_run: None,
+                    interval_secs: None,
                 });
             }
             store

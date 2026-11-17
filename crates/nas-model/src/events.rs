@@ -431,6 +431,7 @@ mod tests {
             last_run,
             last_result,
             next_run: None,
+            interval_secs: None,
         }
     }
 

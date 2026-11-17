@@ -23,6 +23,8 @@ pub struct Thresholds {
     /// Fill level in percent from which a volume is critical.
     pub fill_critical_percent: f64,
     /// Age of the last backup run in seconds above which it is a warning.
+    /// A task with a known schedule (`BackupTask::interval_secs`) is allowed
+    /// its longest gap plus one day if that is more.
     pub backup_max_age_secs: i64,
 }
 
@@ -219,7 +221,13 @@ impl Snapshot {
             }
             if let Some(last_run) = backup.last_run {
                 let age = self.observed_at.saturating_sub(last_run);
-                if age > thresholds.backup_max_age_secs {
+                let allowed = match backup.interval_secs {
+                    Some(interval) if interval > 0 => thresholds
+                        .backup_max_age_secs
+                        .max(interval.saturating_add(86_400)),
+                    _ => thresholds.backup_max_age_secs,
+                };
+                if age > allowed {
                     findings.push(Finding {
                         kind: FindingKind::BackupOverdue,
                         level: Health::Warning,
@@ -317,6 +325,7 @@ mod tests {
             last_run,
             last_result: result,
             next_run: None,
+            interval_secs: None,
         }
     }
 
@@ -512,6 +521,33 @@ mod tests {
         assert_eq!(texts(&s), ["Backup „Offsite“ seit 2 Tagen nicht gelaufen"]);
         s.backups = vec![backup(Some(NOW - 5 * DAY), None)];
         assert_eq!(texts(&s), ["Backup „Offsite“ seit 5 Tagen nicht gelaufen"]);
+    }
+
+    #[test]
+    fn a_weekly_backup_is_overdue_only_after_a_week_and_a_day() {
+        let mut weekly = backup(Some(NOW - 3 * DAY), Some(BackupResult::Ok));
+        weekly.interval_secs = Some(7 * DAY);
+        let mut s = empty();
+        s.backups = vec![weekly.clone()];
+        assert!(texts(&s).is_empty());
+        s.backups[0].last_run = Some(NOW - 8 * DAY);
+        assert!(texts(&s).is_empty());
+        s.backups[0].last_run = Some(NOW - 8 * DAY - 1);
+        assert_eq!(
+            texts(&s),
+            vec!["Backup „Offsite“ seit 8 Tagen nicht gelaufen"]
+        );
+    }
+
+    #[test]
+    fn a_daily_backup_is_overdue_as_without_a_schedule() {
+        let mut daily = backup(Some(NOW - 2 * DAY), Some(BackupResult::Ok));
+        daily.interval_secs = Some(DAY);
+        let mut s = empty();
+        s.backups = vec![daily];
+        assert!(texts(&s).is_empty());
+        s.backups[0].last_run = Some(NOW - 2 * DAY - 1);
+        assert_eq!(texts(&s).len(), 1);
     }
 
     #[test]
