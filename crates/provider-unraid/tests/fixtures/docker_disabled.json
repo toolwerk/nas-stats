@@ -1,0 +1,6 @@
+{
+  "errors": [
+    { "message": "connect ENOENT /var/run/docker.sock", "path": ["docker", "containers"], "extensions": { "code": "INTERNAL_SERVER_ERROR" } }
+  ],
+  "data": null
+}

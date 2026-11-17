@@ -1,0 +1,22 @@
+[package]
+name = "provider-unraid"
+description = "Unraid provider for NAS Stats: GraphQL API of Unraid 7.2+ with an API key of the role VIEWER. Array with parity check, array disks without waking them, shares, notifications, UPS, containers, CPU and memory, and the parity history as backup runs."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+nas-model = { workspace = true }
+nas-http = { workspace = true }
+jiff = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

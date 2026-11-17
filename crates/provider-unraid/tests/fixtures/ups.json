@@ -1,0 +1,1 @@
+{ "data": { "upsDevices": [ { "status": "OL CHRG", "battery": { "chargeLevel": 98, "estimatedRuntime": 2700 } }, { "status": "OB", "battery": null } ] } }

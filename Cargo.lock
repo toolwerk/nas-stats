@@ -1244,6 +1244,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "provider-unraid"
+version = "0.1.0"
+dependencies = [
+ "jiff",
+ "log",
+ "nas-http",
+ "nas-model",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "psl-types"
 version = "2.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"

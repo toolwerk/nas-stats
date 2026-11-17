@@ -1,0 +1,10 @@
+{
+  "data": {
+    "shares": [
+      { "name": "appdata", "free": "500000000", "used": "25000000" },
+      { "name": "share-1", "free": 6000000000, "used": 1900000000 },
+      { "name": null, "free": 1, "used": 1 },
+      { "name": "share-2", "free": null, "used": "1000" }
+    ]
+  }
+}

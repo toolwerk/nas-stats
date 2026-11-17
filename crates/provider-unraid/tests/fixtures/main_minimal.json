@@ -1,0 +1,20 @@
+{
+  "data": {
+    "vars": null,
+    "info": { "os": { "uptime": "2099-01-01T00:00:00Z" }, "versions": { "core": null } },
+    "array": {
+      "state": "stopped",
+      "capacity": { "kilobytes": { "free": "6000000000", "used": "2000000000", "total": "8000000000" } },
+      "parityCheckStatus": { "date": null, "duration": null, "status": "NEVER_RUN", "progress": null },
+      "parities": [
+        { "id": "SERVERID:MODEL_SERIAL-A", "name": "parity", "status": "DISK_OK" }
+      ],
+      "disks": [
+        { "name": "disk1", "temp": "36", "isSpinning": "true" },
+        { "id": "SERVERID:MODEL_SERIAL-E" },
+        "kaputt"
+      ],
+      "caches": null
+    }
+  }
+}

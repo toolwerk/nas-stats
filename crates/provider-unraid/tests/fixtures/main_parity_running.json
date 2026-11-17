@@ -1,0 +1,14 @@
+{
+  "data": {
+    "vars": { "name": "Tower" },
+    "info": null,
+    "array": {
+      "state": "STARTED",
+      "capacity": { "kilobytes": { "free": 6000000000, "used": 2000000000, "total": 8000000000 } },
+      "parityCheckStatus": { "date": "2026-11-17T01:00:00Z", "duration": 3600, "status": "RUNNING", "progress": 12 },
+      "parities": [],
+      "disks": [],
+      "caches": []
+    }
+  }
+}

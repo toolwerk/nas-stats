@@ -1,0 +1,6 @@
+{
+  "errors": [
+    { "message": "Failed to read parity history", "path": ["parityHistory"], "extensions": { "code": "INTERNAL_SERVER_ERROR" } }
+  ],
+  "data": null
+}
