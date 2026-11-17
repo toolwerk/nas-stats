@@ -589,3 +589,35 @@ fn hints_are_german_and_name_the_way_out() {
     assert!(provider_synology::IP_BLOCKED_HINT.contains("Sicherheit › Schutz"));
     assert_eq!(provider_synology::DEVICE_NAME, "NAS Stats");
 }
+
+#[tokio::test]
+async fn http_403_and_429_on_login_block_like_a_rejection() {
+    for status in [ProviderError::PermissionDenied, ProviderError::Http(429)] {
+        let fake = FakeTransport::new(vec![Ok(API_INFO), Err(status.clone())]);
+        let client = SynologyClient::new(&fake, "admin", "pw", None);
+        assert_eq!(
+            info(&client).await,
+            Err(ProviderError::LoginFailed),
+            "{status}"
+        );
+        assert_eq!(
+            info(&client).await,
+            Err(ProviderError::LoginFailed),
+            "{status}"
+        );
+        assert_eq!(calls(&fake).len(), 2, "{status}");
+    }
+}
+
+#[tokio::test]
+async fn server_errors_on_login_do_not_block() {
+    let fake = FakeTransport::new(vec![
+        Ok(API_INFO),
+        Err(ProviderError::Http(503)),
+        Ok(LOGIN_OK),
+        Ok(DATA),
+    ]);
+    let client = SynologyClient::new(&fake, "admin", "pw", None);
+    assert_eq!(info(&client).await, Err(ProviderError::Http(503)));
+    assert_eq!(info(&client).await, Ok(data()));
+}

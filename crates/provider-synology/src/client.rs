@@ -260,7 +260,7 @@ impl<T: Transport> SynologyClient<T> {
 
     /// One login, with `code` as second factor when given, otherwise with
     /// the device token when there is one. A rejection by the NAS (also
-    /// HTTP 401) blocks further logins; network and format errors do not.
+    /// HTTP 401, 403 or 429) blocks further logins; network and format errors do not.
     /// Session id and the device token of this answer; after a login with
     /// code the token replaces the stored one.
     async fn login_locked(
@@ -300,7 +300,13 @@ impl<T: Transport> SynologyClient<T> {
         }
         let answer = match self.transport.post_form_text(&api_path(&auth), &form).await {
             Ok(body) => parse_login(&body)?,
-            Err(ProviderError::LoginFailed) => LoginAnswer::Refused(ProviderError::LoginFailed),
+            // HTTP 401, 403 or 429 on the login: the web server refuses it,
+            // which counts as a rejection like a DSM error code.
+            Err(
+                ProviderError::LoginFailed
+                | ProviderError::PermissionDenied
+                | ProviderError::Http(429),
+            ) => LoginAnswer::Refused(ProviderError::LoginFailed),
             Err(e) => return Err(e),
         };
         match answer {
