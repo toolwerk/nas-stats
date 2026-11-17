@@ -44,6 +44,10 @@ pub struct BackupTask {
     pub last_result: Option<BackupResult>,
     /// Next scheduled run, Unix seconds UTC.
     pub next_run: Option<i64>,
+    /// Longest gap between two scheduled runs in seconds; `None` when the
+    /// schedule is unknown (manual start, a plan that is not understood).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interval_secs: Option<i64>,
 }
 
 /// One past run of a backup task.
@@ -76,5 +80,29 @@ mod tests {
         let json = serde_json::to_string(&run).expect("run serializes");
         let back: BackupRun = serde_json::from_str(&json).expect("run deserializes");
         assert_eq!(back, run);
+    }
+
+    fn task(interval_secs: Option<i64>) -> BackupTask {
+        BackupTask {
+            id: "b1".into(),
+            name: "Offsite".into(),
+            kind: BackupKind::Hbs3,
+            last_run: Some(1_699_950_000),
+            last_result: Some(BackupResult::Ok),
+            next_run: None,
+            interval_secs,
+        }
+    }
+
+    #[test]
+    fn a_task_without_interval_reads_and_writes_without_the_field() {
+        let json = serde_json::to_string(&task(None)).expect("task serializes");
+        assert!(!json.contains("interval_secs"));
+        let back: BackupTask = serde_json::from_str(&json).expect("task deserializes");
+        assert_eq!(back.interval_secs, None);
+
+        let with = serde_json::to_string(&task(Some(604_800))).expect("task serializes");
+        let back: BackupTask = serde_json::from_str(&with).expect("task deserializes");
+        assert_eq!(back.interval_secs, Some(604_800));
     }
 }

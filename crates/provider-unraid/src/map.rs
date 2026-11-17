@@ -219,6 +219,7 @@ pub(crate) fn parity_task(check: Option<&ParityCheck>) -> BackupTask {
         last_run: check.and_then(|c| c.date.as_deref()).and_then(unix_seconds),
         last_result,
         next_run: None,
+        interval_secs: None,
     }
 }
 

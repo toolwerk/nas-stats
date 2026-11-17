@@ -112,6 +112,7 @@ mod tests {
             last_run: None,
             last_result: result,
             next_run: None,
+            interval_secs: None,
         }
     }
 
@@ -206,6 +207,7 @@ mod tests {
             last_run: Some(1_699_950_000),
             last_result: Some(BackupResult::Ok),
             next_run: Some(1_700_036_400),
+            interval_secs: None,
         }];
         snapshot.containers = vec![Container {
             name: "demo-app".into(),
