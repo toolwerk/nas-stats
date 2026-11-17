@@ -599,10 +599,11 @@ mod tests {
     }
 
     #[test]
-    fn login_second_factor_and_certificate_block_until_unblocked() {
+    fn login_second_factor_ip_block_and_certificate_block_until_unblocked() {
         let errors = [
             ProviderError::LoginFailed,
             ProviderError::SecondFactorRequired,
+            ProviderError::IpBlocked,
             ProviderError::CertificateChanged {
                 old: "aa".into(),
                 new: "bb".into(),

@@ -26,6 +26,11 @@ pub enum ProviderError {
     LoginFailed,
     #[error("NAS verlangt einen zweiten Faktor")]
     SecondFactorRequired,
+    /// The NAS blocks the address of this device after too many failed
+    /// logins (DSM error 407). Not a wrong password: the user unblocks the
+    /// address at the NAS or waits.
+    #[error("NAS hat diese Adresse gesperrt")]
+    IpBlocked,
     #[error("Konto hat keine Rechte für diese Abfrage")]
     PermissionDenied,
     #[error("Zertifikat des NAS hat sich geändert (vorher {old}, jetzt {new})")]
@@ -44,14 +49,15 @@ pub enum ProviderError {
 impl ProviderError {
     /// Whether polling must stop until the user acts.
     ///
-    /// True for a failed login, a required second factor and a changed
-    /// certificate: retrying would lock the account or the IP (DSM) or
-    /// trust a foreign certificate.
+    /// True for a failed login, a required second factor, a blocked address
+    /// and a changed certificate: retrying would lock the account or the IP
+    /// (DSM), keep a blocked IP blocked, or trust a foreign certificate.
     pub fn stops_polling(&self) -> bool {
         matches!(
             self,
             ProviderError::LoginFailed
                 | ProviderError::SecondFactorRequired
+                | ProviderError::IpBlocked
                 | ProviderError::CertificateChanged { .. }
         )
     }
@@ -130,10 +136,11 @@ mod tests {
     }
 
     #[test]
-    fn only_login_second_factor_and_certificate_stop_polling() {
+    fn only_login_second_factor_ip_block_and_certificate_stop_polling() {
         let stopping = [
             ProviderError::LoginFailed,
             ProviderError::SecondFactorRequired,
+            ProviderError::IpBlocked,
             ProviderError::CertificateChanged {
                 old: "aa".into(),
                 new: "bb".into(),
@@ -162,6 +169,7 @@ mod tests {
         let answer = [
             ProviderError::LoginFailed,
             ProviderError::SecondFactorRequired,
+            ProviderError::IpBlocked,
             ProviderError::PermissionDenied,
             ProviderError::CertificateChanged {
                 old: "aa".into(),
