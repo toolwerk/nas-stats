@@ -90,6 +90,8 @@ async fn rejected_logins_block_without_further_connections() {
             Login::OtpRequired,
             ProviderError::SecondFactorRequired,
         ),
+        (Version::V25, Login::RpcError, ProviderError::LoginFailed),
+        (Version::V26, Login::RpcError, ProviderError::LoginFailed),
     ] {
         let server = start(Config {
             login,

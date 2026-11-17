@@ -66,7 +66,8 @@ impl std::fmt::Debug for Session {
 /// `wss://<host[:port]><path without trailing />/api/current` for an
 /// `https://` address. The address is read like `nas_http` reads it, so an
 /// international host name arrives as Punycode and user info, query and
-/// fragment are left out.
+/// fragment are left out. A trailing `/ui`, the path of the web interface
+/// a user copies from the browser, is dropped as well.
 pub(crate) fn endpoint_url(base_url: &str) -> Result<String, ProviderError> {
     let base = url::Url::parse(base_url)
         .map_err(|e| ProviderError::Parse(format!("Adresse des NAS: {e}")))?;
@@ -80,10 +81,9 @@ pub(crate) fn endpoint_url(base_url: &str) -> Result<String, ProviderError> {
         .filter(|h| !h.is_empty())
         .ok_or_else(|| ProviderError::Parse("Adresse des NAS: Host fehlt".into()))?;
     let port = base.port().map(|p| format!(":{p}")).unwrap_or_default();
-    Ok(format!(
-        "wss://{host}{port}{}{ENDPOINT}",
-        base.path().trim_end_matches('/')
-    ))
+    let path = base.path().trim_end_matches('/');
+    let path = path.strip_suffix("/ui").unwrap_or(path);
+    Ok(format!("wss://{host}{port}{path}{ENDPOINT}"))
 }
 
 impl Session {
@@ -240,7 +240,16 @@ mod tests {
                 "https://proxy.lan/truenas//",
                 "wss://proxy.lan/truenas/api/current",
             ),
-            ("https://nas.local/ui?x=1", "wss://nas.local/ui/api/current"),
+            ("https://nas.local/ui?x=1", "wss://nas.local/api/current"),
+            ("https://nas.local/ui/", "wss://nas.local/api/current"),
+            (
+                "https://nas.local/ui/dashboard",
+                "wss://nas.local/ui/dashboard/api/current",
+            ),
+            (
+                "https://proxy.lan/truenas/ui/",
+                "wss://proxy.lan/truenas/api/current",
+            ),
             ("HTTPS://nas.local", "wss://nas.local/api/current"),
         ] {
             assert_eq!(endpoint_url(base), Ok(url.to_owned()), "{base}");

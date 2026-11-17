@@ -53,6 +53,8 @@ pub enum Login {
     Redirect,
     /// SCRAM succeeds on the server, but its signature is wrong.
     BadSignature,
+    /// `auth.login_ex` answers with a JSON-RPC error object.
+    RpcError,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -277,6 +279,11 @@ impl Connection {
                 })),
                 Version::V26 => Reply::Result(json!(["PASSWORD_PLAIN", "API_KEY_PLAIN", "SCRAM"])),
             },
+            "auth.login_ex" if self.config.login == Login::RpcError => Reply::Error(json!({
+                "code": -32001,
+                "message": "Method call error",
+                "data": {"errname": "EINVAL", "reason": "Too many failed attempts"},
+            })),
             "auth.login_ex" => Reply::Result(self.login(&params[0])),
             "system.info" if self.authenticated => {
                 Reply::Result(json!({"hostname": "truenas-demo", "version": "TrueNAS-26.04.0"}))
@@ -312,6 +319,7 @@ impl Connection {
             Login::Redirect => {
                 return json!({"response_type": "REDIRECT", "urls": ["wss://192.0.2.2/api/current"]});
             }
+            Login::RpcError => return Value::Null,
             Login::Check | Login::BadSignature => {}
         }
         match params["mechanism"].as_str() {

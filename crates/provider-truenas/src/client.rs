@@ -44,7 +44,8 @@ impl std::fmt::Debug for TruenasClient {
 }
 
 impl TruenasClient {
-    /// Client for `base_url` (`https://…`, the address of the web interface)
+    /// Client for `base_url` (`https://…`, the address of the web interface;
+    /// a trailing `/ui` is dropped)
     /// with the confirmed certificate `pin`. `http://` and `ws://` are
     /// refused before any connection: TrueNAS revokes a key that arrives
     /// without TLS.
@@ -216,17 +217,16 @@ async fn login_plain(
     session: &mut Session,
     credentials: &TruenasCredentials,
 ) -> Result<(), ProviderError> {
-    let answer = session
-        .call(
-            "auth.login_ex",
-            json!([{
-                "mechanism": "API_KEY_PLAIN",
-                "username": credentials.username(),
-                "api_key": credentials.api_key(),
-                "login_options": {"user_info": false},
-            }]),
-        )
-        .await?;
+    let answer = login_ex(
+        session,
+        json!({
+            "mechanism": "API_KEY_PLAIN",
+            "username": credentials.username(),
+            "api_key": credentials.api_key(),
+            "login_options": {"user_info": false},
+        }),
+    )
+    .await?;
     match response_type(&answer)? {
         "SUCCESS" => Ok(()),
         other => Err(unexpected(other)),
@@ -239,12 +239,28 @@ async fn scram_step(
     scram_type: &str,
     rfc_str: &str,
 ) -> Result<Value, ProviderError> {
+    login_ex(
+        session,
+        json!({"mechanism": "SCRAM", "scram_type": scram_type, "rfc_str": rfc_str}),
+    )
+    .await
+}
+
+/// `auth.login_ex` with `params`. An error object instead of an answer is
+/// treated like a rejected login and blocks, so a refused login is never
+/// repeated; transport errors pass through.
+async fn login_ex(session: &mut Session, params: Value) -> Result<Value, ProviderError> {
     session
-        .call(
-            "auth.login_ex",
-            json!([{"mechanism": "SCRAM", "scram_type": scram_type, "rfc_str": rfc_str}]),
-        )
-        .await
+        .call_rpc("auth.login_ex", json!([params]))
+        .await?
+        .map_err(|e| {
+            log::warn!(
+                "TrueNAS: auth.login_ex mit Fehler {} beantwortet: {}",
+                e.code,
+                e.message
+            );
+            ProviderError::LoginFailed
+        })
 }
 
 /// `rfc_str` of a `SCRAM_RESPONSE` of type `expected`.

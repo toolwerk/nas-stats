@@ -11,7 +11,8 @@
 //!   [`nas_http::connect_pinned`]; another certificate is
 //!   [`ProviderError::CertificateChanged`]. `http://` and `ws://` are refused
 //!   before any connection, because TrueNAS revokes an API key that arrives
-//!   without TLS.
+//!   without TLS. A path in the address goes before `/api/current` (reverse
+//!   proxy); a trailing `/ui`, as copied from the browser, is dropped.
 //! - Access is user name and API key ([`TruenasCredentials`]); TrueNAS needs
 //!   the user for every login. Advice for the user: [`ROLE_HINT`], a user of
 //!   its own with the role `READONLY_ADMIN`.
@@ -23,7 +24,8 @@
 //!   forbids this fallback against a man in the middle; here the pinned
 //!   certificate keeps him out, and without it TrueNAS 25 would not work.
 //! - A rejected key, an expired one, a user without API access, a wrong
-//!   server signature in SCRAM ([`ProviderError::LoginFailed`]) and a
+//!   server signature in SCRAM, an error object instead of an answer to
+//!   `auth.login_ex` ([`ProviderError::LoginFailed`]) and a
 //!   required second factor ([`ProviderError::SecondFactorRequired`]) block
 //!   the client until [`TruenasClient::set_credentials`], without any
 //!   further connection. A redirect to the other controller is
