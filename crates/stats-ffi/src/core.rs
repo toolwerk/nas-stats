@@ -44,6 +44,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use nas_http::{Fingerprint, NasClient};
 use nas_model::{self as model, BoxFuture, Provider, ProviderError};
 use provider_qnap::{QnapClient, QnapProvider};
+use provider_unraid::{UnraidClient, UnraidProvider};
 use stats_core::{
     Clock, EventRecord, Export, HistoryError, HistoryStore, ImportCount, Planner, PollSink,
     PollState, archive_poll, system_clock,
@@ -81,11 +82,29 @@ impl Backend for QnapProvider<NasClient> {
     }
 }
 
+/// Unraid has an API key instead of user and password: the password field
+/// carries the key, the user stays unused. There is no session to end.
+impl Backend for UnraidProvider<NasClient> {
+    fn snapshot(&self) -> BoxFuture<'_, Result<model::Snapshot, ProviderError>> {
+        Provider::snapshot(self)
+    }
+
+    fn set_credentials(&self, _user: String, password: String) -> BoxFuture<'_, ()> {
+        Box::pin(self.client().set_api_key(password))
+    }
+
+    fn logout(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+}
+
 /// Builds the backend for a NAS; sends nothing.
 pub(crate) type Connector =
     Box<dyn Fn(&NasConfig, String, String) -> Result<Arc<dyn Backend>, FfiError> + Send + Sync>;
 
-/// The real factory: QNAP over HTTPS with the pinned certificate.
+/// The real factory: QNAP and Unraid over HTTPS with the pinned
+/// certificate. For Unraid `password` is the API key, which may not be
+/// empty; `user` is not used.
 pub(crate) fn connect(
     config: &NasConfig,
     user: String,
@@ -93,6 +112,12 @@ pub(crate) fn connect(
 ) -> Result<Arc<dyn Backend>, FfiError> {
     match config.provider {
         ProviderKind::Qnap => {}
+        ProviderKind::Unraid if password.trim().is_empty() => {
+            return Err(FfiError::InvalidInput {
+                detail: "API-Key fehlt".into(),
+            });
+        }
+        ProviderKind::Unraid => {}
         provider => return Err(FfiError::Unsupported { provider }),
     }
     let pin: Fingerprint =
@@ -108,11 +133,18 @@ pub(crate) fn connect(
     let http = NasClient::new(&config.base_url, pin).map_err(|e| FfiError::InvalidInput {
         detail: e.to_string(),
     })?;
-    Ok(Arc::new(QnapProvider::new(
-        config.id.clone(),
-        config.base_url.clone(),
-        QnapClient::new(http, user, password),
-    )))
+    Ok(match config.provider {
+        ProviderKind::Unraid => Arc::new(UnraidProvider::new(
+            config.id.clone(),
+            config.base_url.clone(),
+            UnraidClient::new(http, password),
+        )),
+        _ => Arc::new(QnapProvider::new(
+            config.id.clone(),
+            config.base_url.clone(),
+            QnapClient::new(http, user, password),
+        )),
+    })
 }
 
 /// A NAS of the demo data set (#22): its snapshot at the time of the clock,
@@ -1725,6 +1757,23 @@ mod tests {
         ));
 
         assert!(connect(&config("nas-1"), "u".into(), "p".into()).is_ok());
+    }
+
+    #[test]
+    fn the_real_core_adds_an_unraid_with_api_key_without_network() {
+        let core = NasCore::new();
+        let unraid = |id: &str| NasConfig {
+            provider: ProviderKind::Unraid,
+            ..config(id)
+        };
+        core.add_nas(unraid("nas-1"), String::new(), "api-key".into())
+            .expect("add");
+        assert_eq!(core.states().len(), 1);
+        assert!(matches!(
+            core.add_nas(unraid("nas-2"), "u".into(), "  ".into()),
+            Err(FfiError::InvalidInput { .. })
+        ));
+        assert_eq!(core.states().len(), 1);
     }
 
     #[test]

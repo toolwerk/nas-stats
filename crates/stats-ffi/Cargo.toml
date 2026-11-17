@@ -14,6 +14,7 @@ nas-demo = { workspace = true }
 nas-model = { workspace = true }
 nas-http = { workspace = true }
 provider-qnap = { workspace = true }
+provider-unraid = { workspace = true }
 serde_json = { workspace = true }
 stats-core = { workspace = true }
 thiserror = { workspace = true }
