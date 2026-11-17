@@ -101,6 +101,23 @@ impl NasClient {
             .await
     }
 
+    /// Like [`NasClient::get_text`] with extra request headers, for
+    /// interfaces that take the session in a header (QNAP Hybrid Backup
+    /// Sync, #41). The values are not logged.
+    pub async fn get_text_with_headers(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+        headers: &[(&str, &str)],
+    ) -> Result<String, ProviderError> {
+        let url = self.url(path)?;
+        let mut request = self.http.get(url).query(query);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        self.send(request).await
+    }
+
     /// `POST <base><path>` with a URL-encoded form, body as text.
     pub async fn post_form_text(
         &self,

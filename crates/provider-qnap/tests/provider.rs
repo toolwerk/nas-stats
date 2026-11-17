@@ -16,6 +16,7 @@ const SMART: &str = include_str!("fixtures/qsmart.xml");
 const BANDWIDTH: &str = include_str!("fixtures/bandwidth.xml");
 const CS_LOGIN: &str = include_str!("fixtures/cs_login.json");
 const CS_CONTAINERS: &str = include_str!("fixtures/cs_container.json");
+const HBS_JOBS: &str = include_str!("fixtures/hbs_jobs.json");
 
 const BASE_URL: &str = "https://nas.example:443";
 
@@ -31,6 +32,7 @@ async fn snapshot_holds_every_part() {
         Ok(BANDWIDTH),
         Ok(CS_LOGIN),
         Ok(CS_CONTAINERS),
+        Ok(HBS_JOBS),
     ]);
     let provider = QnapProvider::new("nas-1", BASE_URL, QnapClient::new(&fake, "admin", "secret"));
     assert_eq!(provider.kind(), ProviderKind::Qnap);
@@ -78,7 +80,8 @@ async fn snapshot_holds_every_part() {
         }]
     );
     assert_eq!(snapshot.containers.len(), 6);
-    assert!(snapshot.backups.is_empty());
+    assert_eq!(snapshot.backups.len(), 1);
+    assert_eq!(snapshot.backups[0].name, "Backup 1");
     assert_eq!(snapshot.worst_health(), Some(Health::Warning));
 
     // One request after the other, in a fixed order, nothing else.
@@ -95,8 +98,11 @@ async fn snapshot_holds_every_part() {
             "/cgi-bin/management/chartReq.cgi",
             "/container-station/api/v1/login",
             "/container-station/api/v1/container",
+            "/cc3/v1/users/system/jobs",
         ]
     );
+    // The backups use the session of the system values: one login.
+    assert_eq!(logins(&fake), 1);
 }
 
 #[tokio::test]
@@ -110,6 +116,7 @@ async fn an_http_error_of_storage_leaves_only_storage_empty() {
         Ok(BANDWIDTH),
         Ok(CS_LOGIN),
         Ok(CS_CONTAINERS),
+        Ok(HBS_JOBS),
     ]);
     let provider = QnapProvider::new("nas-1", BASE_URL, QnapClient::new(&fake, "admin", "secret"));
     let snapshot = provider.snapshot().await.expect("snapshot");
@@ -118,6 +125,35 @@ async fn an_http_error_of_storage_leaves_only_storage_empty() {
     assert!(snapshot.disks.is_empty());
     assert_eq!(snapshot.interfaces.len(), 1);
     assert_eq!(snapshot.containers.len(), 6);
+    assert_eq!(snapshot.backups.len(), 1);
+}
+
+#[tokio::test]
+async fn a_stopped_hybrid_backup_sync_leaves_only_backups_empty() {
+    for status in [502, 503] {
+        let fake = FakeTransport::new(vec![
+            Ok(LOGIN_OK),
+            Ok(SYSINFO),
+            Ok(HEALTH_WARNING),
+            Ok(FIRMWARE_NONE),
+            Ok(USAGE),
+            Ok(SMART),
+            Ok(BANDWIDTH),
+            Ok(CS_LOGIN),
+            Ok(CS_CONTAINERS),
+            Err(ProviderError::Http(status)),
+        ]);
+        let provider =
+            QnapProvider::new("nas-1", BASE_URL, QnapClient::new(&fake, "admin", "secret"));
+        let snapshot = provider.snapshot().await.expect("snapshot");
+
+        assert!(snapshot.backups.is_empty());
+        assert_eq!(snapshot.volumes.len(), 3);
+        assert_eq!(snapshot.disks.len(), 9);
+        assert_eq!(snapshot.interfaces.len(), 1);
+        assert_eq!(snapshot.containers.len(), 6);
+        assert_eq!(logins(&fake), 1);
+    }
 }
 
 #[tokio::test]

@@ -1,0 +1,75 @@
+{
+  "jobs": [
+    {
+      "_id": "job-0002",
+      "_type": "cloud",
+      "job_type": "backup",
+      "enable": true,
+      "user_stop": false,
+      "name": "  Backup 2  ",
+      "schedule": [
+        {
+          "type": "cron",
+          "cron_start": "30 2 * * 0"
+        }
+      ],
+      "statistics": {
+        "status": "Running",
+        "substatus": "",
+        "progress": 42,
+        "start_time": "2026-11-16T23:30:00Z",
+        "stop_time": "",
+        "remaining_time": 600,
+        "bytes_total": 2147483648,
+        "bytes_transferred": 901943132,
+        "transfer_bytes_per_second": 2097152
+      }
+    },
+    {
+      "_id": "job-0003",
+      "_type": "cloud",
+      "job_type": "backup",
+      "enable": false,
+      "user_stop": false,
+      "name": "Backup 3",
+      "schedule": [],
+      "statistics": {
+        "status": "Finished",
+        "start_time": "2026-10-01T01:00:00+02:00"
+      }
+    },
+    {
+      "_id": "job-0004",
+      "_type": "local",
+      "job_type": "restore",
+      "enable": true,
+      "user_stop": false,
+      "name": "Restore 1",
+      "schedule": [],
+      "statistics": {
+        "status": "Finished",
+        "start_time": "2026-11-01T10:00:00+01:00"
+      }
+    },
+    {
+      "_id": "job-0005",
+      "_type": "local",
+      "job_type": "backup",
+      "user_stop": false,
+      "name": "Backup 5",
+      "schedule": []
+    },
+    {
+      "_type": "cloud",
+      "job_type": "backup",
+      "enable": true,
+      "name": "Backup ohne Id",
+      "statistics": {
+        "status": "Finished",
+        "start_time": "2026-11-17T01:00:03+01:00"
+      }
+    }
+  ],
+  "total": 5,
+  "has_more": true
+}

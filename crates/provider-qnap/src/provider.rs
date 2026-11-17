@@ -1,15 +1,17 @@
 //! [`nas_model::Provider`] for a QNAP: one snapshot from all parts.
 //!
 //! The parts are asked one after the other, never in parallel: system
-//! values, storage, network, containers. The snapshot holds the NAS, system
-//! values, fans, UPS, alerts, volumes, disks, network interfaces and
-//! containers. Backups stay empty until #41, storage pools stay empty
-//! because QTS does not answer them to a GET (#6).
+//! values, storage, network, containers, backups. The snapshot holds the
+//! NAS, system values, fans, UPS, alerts, volumes, disks, network
+//! interfaces, containers and the backup jobs of Hybrid Backup Sync 3.
+//! Storage pools stay empty because QTS does not answer them to a GET (#6).
 //!
-//! Failing system values fail the snapshot. For storage, network and
-//! containers an HTTP error status leaves only that part empty (and is
-//! logged); every other error (unreachable, timeout, rejected login, changed
-//! certificate) fails the snapshot, so the app keeps its last state.
+//! Failing system values fail the snapshot. For storage, network,
+//! containers and backups an HTTP error status leaves only that part empty
+//! (and is logged); every other error (unreachable, timeout, rejected login,
+//! changed certificate) fails the snapshot, so the app keeps its last state.
+//! Backups also stay empty on 401, 403 and an answer that is no JSON (see
+//! `backups.rs`).
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -54,8 +56,8 @@ impl<T: Transport> Provider for QnapProvider<T> {
         ProviderKind::Qnap
     }
 
-    /// Reads system values, storage, network and containers one after the
-    /// other. The error of the system values is returned unchanged; see the
+    /// Reads system values, storage, network, containers and backups one
+    /// after the other. The error of the system values is returned unchanged; see the
     /// module doc for the other parts.
     fn snapshot(&self) -> BoxFuture<'_, Result<Snapshot, ProviderError>> {
         Box::pin(async move {
@@ -63,6 +65,7 @@ impl<T: Transport> Provider for QnapProvider<T> {
             let storage = part("storage", self.client.storage(&self.nas_id).await)?;
             let interfaces = part("network", self.client.network().await)?;
             let containers = part("containers", self.client.containers().await)?;
+            let backups = part("backups", self.client.backups().await)?;
             Ok(Snapshot {
                 nas: Nas {
                     id: self.nas_id.clone(),
@@ -80,7 +83,7 @@ impl<T: Transport> Provider for QnapProvider<T> {
                 volumes: storage.volumes,
                 disks: storage.disks,
                 fans: system.fans,
-                backups: Vec::new(),
+                backups,
                 containers,
                 alerts: system.alerts,
                 interfaces,

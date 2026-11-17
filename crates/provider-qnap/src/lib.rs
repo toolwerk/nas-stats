@@ -23,20 +23,26 @@
 //! [`QnapClient::system`] reads the system values (model, firmware, CPU,
 //! memory, temperatures, fans, health, firmware update),
 //! [`QnapClient::network`] the throughput per interface in bytes per second,
-//! [`QnapClient::containers`] the containers of the Container Station and
-//! [`QnapClient::storage`] the volumes and the disks with their SMART summary.
+//! [`QnapClient::containers`] the containers of the Container Station,
+//! [`QnapClient::storage`] the volumes and the disks with their SMART summary
+//! and [`QnapClient::backups`] the backup jobs of Hybrid Backup Sync 3 over
+//! its REST interface with the QTS session in a header (an empty list when
+//! HBS 3 is missing, stopped or refuses; only the status `Finished` is known
+//! and counts as a successful run, any other stays unknown).
 //! The Container Station has its own login with the same account; without
 //! it, without admin rights or after a rejected login the list is empty, and
 //! that login is not repeated until the user acts (a missing Container
 //! Station is looked for again after [`CONTAINER_RECHECK`]). Storage pools
 //! are not read: QTS answers `disk_manage.cgi?store=…` to a GET only with
 //! `unknown cmd format.`. [`QnapProvider`] puts system values, storage,
-//! network and containers, asked one after the other, into a
+//! network, containers and backups, asked one after the other, into a
 //! [`nas_model::Snapshot`] for the core. An HTTP error status of storage,
-//! network or containers leaves only that part empty; other errors fail the
+//! network, containers or backups leaves only that part empty, for backups
+//! also HTTP 401, 403 and an answer that is no JSON; other errors fail the
 //! snapshot.
 
 mod auth;
+mod backups;
 mod client;
 mod containers;
 mod network;
