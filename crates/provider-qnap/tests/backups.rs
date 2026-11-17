@@ -29,6 +29,7 @@ async fn reads_the_finished_backup_job() {
             last_run: Some(1_794_873_603),
             last_result: Some(BackupResult::Ok),
             next_run: None,
+            interval_secs: Some(86_400),
         }]
     );
 
@@ -63,6 +64,8 @@ async fn keeps_only_enabled_backup_jobs_and_leaves_unknown_status_open() {
                 last_run: Some(1_794_871_800),
                 last_result: None,
                 next_run: None,
+                // `30 2 * * 0`
+                interval_secs: Some(604_800),
             },
             // Without `enable` and without `statistics`: kept, all open.
             BackupTask {
@@ -72,6 +75,7 @@ async fn keeps_only_enabled_backup_jobs_and_leaves_unknown_status_open() {
                 last_run: None,
                 last_result: None,
                 next_run: None,
+                interval_secs: None,
             },
         ]
     );
