@@ -21,7 +21,7 @@
 //!   client logs in again.
 //!
 //! [`QnapClient::system`] reads the system values (model, firmware, CPU,
-//! memory, temperatures, fans, health, firmware update),
+//! memory, temperatures, fans, health, UPS, firmware update),
 //! [`QnapClient::network`] the throughput per interface in bytes per second,
 //! [`QnapClient::containers`] the containers of the Container Station,
 //! [`QnapClient::storage`] the volumes and the disks with their SMART summary

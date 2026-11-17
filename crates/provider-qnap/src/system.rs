@@ -5,17 +5,18 @@
 //!
 //! - `management/manaRequest.cgi?subfunc=sysinfo&hd=no&multicpu=1`
 //! - `management/manaRequest.cgi?subfunc=sysinfo&sysHealth=1`
+//! - `devices/devRequest.cgi?subfunc=ups`, the page under Control Panel >
+//!   External Device > UPS (issue #146)
 //! - `sys/sysRequest.cgi?subfunc=firm_update`, at most once per
 //!   [`FIRMWARE_INTERVAL`]
 //!
-//! The UPS stays `None`: QTS lists a connected UPS in
-//! `devices/devRequest.cgi?func=getExternalDev`, but no recorded answer
-//! (issue #1) holds its state, charge or runtime.
+//! The UPS page also holds the SNMP community and the addresses of the
+//! network clients; they are never read.
 
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
-use nas_model::{Alert, AlertLevel, Fan, Health, ProviderError, SystemStatus, Ups};
+use nas_model::{Alert, AlertLevel, Fan, Health, ProviderError, SystemStatus, Ups, UpsState};
 use roxmltree::Document;
 
 use crate::client::QnapClient;
@@ -30,6 +31,8 @@ const MANA_PATH: &str = "management/manaRequest.cgi";
 const FIRMWARE_PATH: &str = "sys/sysRequest.cgi";
 const SYSINFO_QUERY: &[(&str, &str)] = &[("subfunc", "sysinfo"), ("hd", "no"), ("multicpu", "1")];
 const HEALTH_QUERY: &[(&str, &str)] = &[("subfunc", "sysinfo"), ("sysHealth", "1")];
+const UPS_PATH: &str = "devices/devRequest.cgi";
+const UPS_QUERY: &[(&str, &str)] = &[("subfunc", "ups")];
 const FIRMWARE_QUERY: &[(&str, &str)] = &[("subfunc", "firm_update")];
 
 /// Upper bound for the fan count a NAS reports, so a broken answer cannot
@@ -73,7 +76,8 @@ impl<T: Transport> QnapClient<T> {
     ///
     /// An error of the `sysinfo` request is returned. For the health and the
     /// firmware request, `PermissionDenied` or `Parse` leave only their value
-    /// empty. A timeout or network error of the firmware request leaves the
+    /// empty. The UPS request also stays empty on an HTTP error (older
+    /// firmware may not know the page); other errors are returned. A timeout or network error of the firmware request leaves the
     /// update empty too and is not cached, so the next poll tries again; any
     /// other error is returned.
     pub async fn system(&self) -> Result<QnapSystem, ProviderError> {
@@ -83,6 +87,14 @@ impl<T: Transport> QnapClient<T> {
         if let Some(body) = optional(self.get_xml(MANA_PATH, HEALTH_QUERY).await)? {
             system.alerts.extend(parse_health(&body));
         }
+
+        system.ups = match self.get_xml(UPS_PATH, UPS_QUERY).await {
+            Ok(body) => parse_ups(&body),
+            Err(
+                ProviderError::PermissionDenied | ProviderError::Parse(_) | ProviderError::Http(_),
+            ) => None,
+            Err(e) => return Err(e),
+        };
 
         let (available, version) = self.firmware().await?;
         system.status.update_available = available;
@@ -271,6 +283,52 @@ fn fan_health(flag: &str) -> Option<Health> {
     }
 }
 
+/// Parses the UPS page (`subfunc=ups`). Without a UPS the page has no
+/// `ups_status` or `--` (QTS tests for the same); that is `None`.
+///
+/// `ups_status` follows the NUT flags (`OL`, `OB`, `LB`, also together
+/// like `OB LB`): `OB` is on battery, otherwise `OL` is online. Any other
+/// text leaves the state `None`. The charge is a percentage; the runtime
+/// is `h:m:s (hh:mm:ss)`, anything else leaves it `None`.
+pub(crate) fn parse_ups(body: &str) -> Option<Ups> {
+    let doc = parse_qdoc(body).ok()?;
+    let info = |name: &str| path_text(&doc, &["func", "ownContent", "UPS_Info", name]);
+    let status = info("ups_status").filter(|s| s != "--")?;
+    let flags: Vec<&str> = status.split_whitespace().collect();
+    let state = if flags.contains(&"OB") {
+        Some(UpsState::OnBattery)
+    } else if flags.contains(&"OL") {
+        Some(UpsState::Online)
+    } else {
+        None
+    };
+    Some(Ups {
+        state,
+        charge_percent: info("battery_charge")
+            .as_deref()
+            .and_then(number)
+            .filter(|c| (0.0..=100.0).contains(c)),
+        runtime_seconds: info("battery_runtime").as_deref().and_then(runtime),
+    })
+}
+
+/// `1:4:0 (hh:mm:ss)` as seconds: three whole numbers, hours, minutes
+/// and seconds. Anything else, or an overflow, is `None`.
+fn runtime(text: &str) -> Option<u64> {
+    let parts: Vec<u64> = text
+        .split_whitespace()
+        .next()?
+        .split(':')
+        .map(|p| p.parse().ok())
+        .collect::<Option<_>>()?;
+    let [h, m, s] = parts[..] else {
+        return None;
+    };
+    h.checked_mul(3600)?
+        .checked_add(m.checked_mul(60)?)?
+        .checked_add(s)
+}
+
 /// Parses the `sysHealth` answer: anything but `good` is an alert with the
 /// text QTS reports. A text with `error`, `critical` or `abnormal` is
 /// critical, every other one a warning.
@@ -344,6 +402,34 @@ mod tests {
             health("unknown").map(|a| a.level),
             Some(AlertLevel::Warning)
         );
+    }
+
+    #[test]
+    fn ups_flags_and_runtime() {
+        let ups = |status: &str, runtime: &str, charge: &str| {
+            parse_ups(&format!(
+                "<QDocRoot><func><ownContent><UPS_Info><ups_status>{status}</ups_status><battery_runtime>{runtime}</battery_runtime><battery_charge>{charge}</battery_charge></UPS_Info></ownContent></func></QDocRoot>"
+            ))
+        };
+        let state = |status: &str| ups(status, "", "").and_then(|u| u.state);
+        assert_eq!(state("OL"), Some(UpsState::Online));
+        assert_eq!(state("OL CHRG"), Some(UpsState::Online));
+        assert_eq!(state("OB"), Some(UpsState::OnBattery));
+        assert_eq!(state("OB DISCHRG"), Some(UpsState::OnBattery));
+        assert_eq!(state("LB"), None);
+        assert_eq!(state("--"), None);
+        assert!(ups("--", "", "").is_none() && ups("", "", "").is_none());
+        let runtime = |text: &str| ups("OL", text, "").and_then(|u| u.runtime_seconds);
+        assert_eq!(runtime("1:4:0 (hh:mm:ss)"), Some(3840));
+        assert_eq!(runtime("0:0:0"), Some(0));
+        assert_eq!(runtime("1:4"), None);
+        assert_eq!(runtime("abc"), None);
+        assert_eq!(runtime("1:-4:0"), None);
+        assert_eq!(runtime("18446744073709551615:0:0"), None);
+        let charge = |text: &str| ups("OL", "", text).and_then(|u| u.charge_percent);
+        assert_eq!(charge(" 100"), Some(100.0));
+        assert_eq!(charge("101"), None);
+        assert_eq!(charge("-1"), None);
     }
 
     #[test]
