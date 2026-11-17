@@ -40,6 +40,10 @@ shared_folders priv/privRequest.cgi?store=sharedFolderInfo
 replica_jobs disk/snap_sync.cgi?store=replicaJobStore
 iscsi_luns disk/iscsi_portal_setting.cgi?store=lunList
 
+# UPS (Control Panel > External Device > UPS), issue #146. The answer also
+# holds the SNMP community and client IPs; the anonymiser replaces them.
+ups devices/devRequest.cgi?subfunc=ups
+
 # Resource Monitor
 sysmonitor management/manaRequest.cgi?subfunc=sysmonitor&sys_cpu_use_v2=1&sys_gpu_use=1&sys_memory_use=1
 
