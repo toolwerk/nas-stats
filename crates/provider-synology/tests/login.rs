@@ -591,18 +591,18 @@ fn hints_are_german_and_name_the_way_out() {
 }
 
 #[tokio::test]
-async fn http_403_and_429_on_login_block_like_a_rejection() {
+async fn http_403_and_429_on_login_block_like_an_ip_block() {
     for status in [ProviderError::PermissionDenied, ProviderError::Http(429)] {
         let fake = FakeTransport::new(vec![Ok(API_INFO), Err(status.clone())]);
         let client = SynologyClient::new(&fake, "admin", "pw", None);
         assert_eq!(
             info(&client).await,
-            Err(ProviderError::LoginFailed),
+            Err(ProviderError::IpBlocked),
             "{status}"
         );
         assert_eq!(
             info(&client).await,
-            Err(ProviderError::LoginFailed),
+            Err(ProviderError::IpBlocked),
             "{status}"
         );
         assert_eq!(calls(&fake).len(), 2, "{status}");

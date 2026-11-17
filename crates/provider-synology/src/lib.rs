@@ -20,6 +20,8 @@
 //!   acts, so DSM does not lock the account or the IP: 400, 401, 402 and
 //!   unknown codes are `LoginFailed`, 403, 404 and 406 (second factor
 //!   missing or rejected) are `SecondFactorRequired`, 407 is `IpBlocked`.
+//!   HTTP 401 on the login counts as `LoginFailed`, HTTP 403 and 429 (the
+//!   web server refuses or throttles the address) as `IpBlocked`.
 //!   Network and format errors do not block.
 //! - The second factor is entered once ([`SynologyClient::login_with_code`]);
 //!   the NAS then issues a device token, which the caller stores and hands

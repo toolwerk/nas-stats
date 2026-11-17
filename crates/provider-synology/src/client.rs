@@ -300,13 +300,13 @@ impl<T: Transport> SynologyClient<T> {
         }
         let answer = match self.transport.post_form_text(&api_path(&auth), &form).await {
             Ok(body) => parse_login(&body)?,
-            // HTTP 401, 403 or 429 on the login: the web server refuses it,
-            // which counts as a rejection like a DSM error code.
-            Err(
-                ProviderError::LoginFailed
-                | ProviderError::PermissionDenied
-                | ProviderError::Http(429),
-            ) => LoginAnswer::Refused(ProviderError::LoginFailed),
+            // HTTP 401 on the login: the web server refuses the account.
+            Err(ProviderError::LoginFailed) => LoginAnswer::Refused(ProviderError::LoginFailed),
+            // HTTP 403 or 429 on the login: the web server refuses or
+            // throttles this address, not the password; like DSM error 407.
+            Err(ProviderError::PermissionDenied | ProviderError::Http(429)) => {
+                LoginAnswer::Refused(ProviderError::IpBlocked)
+            }
             Err(e) => return Err(e),
         };
         match answer {
