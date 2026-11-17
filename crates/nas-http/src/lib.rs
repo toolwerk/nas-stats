@@ -19,6 +19,9 @@
 //! - Every request has a time limit ([`TIMEOUT`], connect
 //!   [`CONNECT_TIMEOUT`]), goes out exactly once and follows no redirects.
 //! - Each [`NasClient`] keeps the cookies its NAS sets, in memory only.
+//! - [`connect_pinned`] opens a bare TLS connection with the same pin and
+//!   limits, for protocols on top of TLS (WebSocket for TrueNAS);
+//!   [`peer_certificate`] hands out the certificate for channel binding.
 //!
 //! The crate is async; the tokio runtime comes with the FFI crate.
 
@@ -26,6 +29,9 @@ mod client;
 mod fingerprint;
 mod verifier;
 
-pub use client::{CONNECT_TIMEOUT, NasClient, TIMEOUT, first_contact};
+pub use client::{
+    CONNECT_TIMEOUT, NasClient, PinnedStream, TIMEOUT, connect_pinned, first_contact,
+    peer_certificate,
+};
 pub use fingerprint::Fingerprint;
 pub use nas_model::ProviderError;

@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nas_http::{Fingerprint, NasClient, ProviderError, first_contact};
+use nas_http::{
+    Fingerprint, NasClient, ProviderError, connect_pinned, first_contact, peer_certificate,
+};
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -420,4 +422,45 @@ async fn bearer_get_with_rejected_token_is_login_failed() {
         .await
         .unwrap_err();
     assert_eq!(err, ProviderError::LoginFailed);
+}
+
+#[tokio::test]
+async fn pinned_stream_with_matching_pin_sends_nothing() {
+    let server = server(Answer::Status(200)).await;
+    let stream = connect_pinned(&server.url(), server.fingerprint())
+        .await
+        .unwrap();
+    assert_eq!(peer_certificate(&stream), Some(server.cert.to_vec()));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
+async fn pinned_stream_with_other_certificate_is_certificate_changed() {
+    let server = server(Answer::Status(200)).await;
+    let pin = Fingerprint::of_der(b"another certificate");
+    let err = connect_pinned(&server.url(), pin).await.unwrap_err();
+    assert_eq!(
+        err,
+        ProviderError::CertificateChanged {
+            old: pin.to_string(),
+            new: server.fingerprint().to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn pinned_stream_refuses_plain_http_and_closed_ports() {
+    let pin = Fingerprint::of_der(b"cert");
+    for url in ["http://127.0.0.1:8080/", "ws://127.0.0.1:8080/"] {
+        let err = connect_pinned(url, pin).await.unwrap_err();
+        assert!(matches!(err, ProviderError::Parse(_)), "{url}: {err:?}");
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let err = connect_pinned(&format!("https://127.0.0.1:{port}/"), pin)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProviderError::Unreachable(_)), "{err:?}");
 }

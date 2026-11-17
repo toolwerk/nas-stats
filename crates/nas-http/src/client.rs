@@ -271,12 +271,8 @@ fn is_pin_error(err: &(dyn std::error::Error + 'static)) -> bool {
     }
 }
 
-/// Reads the server certificate of the NAS at `base_url` (`https://…`, the
-/// same address the [`NasClient`] gets later, so both send the same SNI name)
-/// and returns its fingerprint. The handshake is aborted right after the
-/// certificate, so the server never receives a request.
-pub async fn first_contact(base_url: &str) -> Result<Fingerprint, ProviderError> {
-    let base = parse_base(base_url)?;
+/// Host without IPv6 brackets and port of a URL checked by [`parse_base`].
+fn host_port(base: &Url) -> (String, u16) {
     // `parse_base` made sure there is a host; IPv6 comes in brackets.
     let host = base
         .host_str()
@@ -285,12 +281,27 @@ pub async fn first_contact(base_url: &str) -> Result<Fingerprint, ProviderError>
         .trim_end_matches(']')
         .to_owned();
     let port = base.port_or_known_default().unwrap_or(443);
-    let name = ServerName::try_from(host.clone())
-        .map_err(|e| ProviderError::Parse(format!("Host {host}: {e}")))?;
-    let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host.as_str(), port)))
+    (host, port)
+}
+
+/// TCP connection to `host:port` within [`CONNECT_TIMEOUT`].
+async fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, ProviderError> {
+    tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect((host, port)))
         .await
         .map_err(|_| ProviderError::Timeout)?
-        .map_err(|e| ProviderError::Unreachable(format!("{host}:{port}: {e}")))?;
+        .map_err(|e| ProviderError::Unreachable(format!("{host}:{port}: {e}")))
+}
+
+/// Reads the server certificate of the NAS at `base_url` (`https://…`, the
+/// same address the [`NasClient`] gets later, so both send the same SNI name)
+/// and returns its fingerprint. The handshake is aborted right after the
+/// certificate, so the server never receives a request.
+pub async fn first_contact(base_url: &str) -> Result<Fingerprint, ProviderError> {
+    let base = parse_base(base_url)?;
+    let (host, port) = host_port(&base);
+    let name = ServerName::try_from(host.clone())
+        .map_err(|e| ProviderError::Parse(format!("Host {host}: {e}")))?;
+    let tcp = connect_tcp(&host, port).await?;
     let seen: Seen = Arc::new(Mutex::new(None));
     let config = verifier::capture_config(seen.clone())
         .map_err(|e| ProviderError::Parse(format!("TLS-Konfiguration: {e}")))?;
@@ -307,6 +318,54 @@ pub async fn first_contact(base_url: &str) -> Result<Fingerprint, ProviderError>
             "{host}:{port}: kein Zertifikat erhalten"
         ))),
     }
+}
+
+/// A TLS connection to the NAS that passed the pin, for protocols other than
+/// plain HTTP requests (WebSocket for TrueNAS).
+pub type PinnedStream = tokio_rustls::client::TlsStream<TcpStream>;
+
+/// Opens a TLS connection to the NAS at `base_url` (`https://…`) that only
+/// accepts the certificate with fingerprint `pin`, with the same limits as
+/// [`NasClient`]: [`CONNECT_TIMEOUT`] for TCP, [`TIMEOUT`] for the handshake.
+/// Nothing is sent after the handshake. Another certificate is
+/// [`ProviderError::CertificateChanged`].
+pub async fn connect_pinned(
+    base_url: &str,
+    pin: Fingerprint,
+) -> Result<PinnedStream, ProviderError> {
+    let base = parse_base(base_url)?;
+    let (host, port) = host_port(&base);
+    let name = ServerName::try_from(host.clone())
+        .map_err(|e| ProviderError::Parse(format!("Host {host}: {e}")))?;
+    let seen: Seen = Arc::new(Mutex::new(None));
+    let config = verifier::pinned_config(pin, seen.clone())
+        .map_err(|e| ProviderError::Parse(format!("TLS-Konfiguration: {e}")))?;
+    let tcp = connect_tcp(&host, port).await?;
+    let connector = TlsConnector::from(Arc::new(config));
+    let handshake = tokio::time::timeout(TIMEOUT, connector.connect(name, tcp))
+        .await
+        .map_err(|_| ProviderError::Timeout)?;
+    handshake.map_err(|e| {
+        // `seen` belongs to this one handshake, so a value in it comes from
+        // this rejection.
+        let seen = *seen.lock().unwrap_or_else(PoisonError::into_inner);
+        match seen {
+            Some(new) if is_pin_error(&e) => ProviderError::CertificateChanged {
+                old: pin.to_string(),
+                new: new.to_string(),
+            },
+            _ => ProviderError::Unreachable(format!("{host}:{port}: {e}")),
+        }
+    })
+}
+
+/// The certificate the NAS presented on `stream`, in DER form.
+pub fn peer_certificate(stream: &PinnedStream) -> Option<Vec<u8>> {
+    let (_, connection) = stream.get_ref();
+    connection
+        .peer_certificates()
+        .and_then(|chain| chain.first())
+        .map(|cert| cert.as_ref().to_vec())
 }
 
 /// The error with all its causes, for the log. Callers strip the URL first
