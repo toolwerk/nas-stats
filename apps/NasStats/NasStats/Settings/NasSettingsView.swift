@@ -364,8 +364,13 @@ private struct ChangeAccessView: View {
             let entry = store.entries.first { $0.id == account.id.uuidString }
             if let entry, entry.blocked {
                 switch entry.problem?.kind {
-                case .loginFailed?, .secondFactorRequired?, .ipBlocked?:
+                case .loginFailed?, .secondFactorRequired?:
                     refused = credentials
+                case .ipBlocked?:
+                    // Not a wrong password: say how to unblock the address,
+                    // and do not send the same access again meanwhile.
+                    refused = credentials
+                    errorText = connectionErrorText(FfiError.IpBlocked)
                 default:
                     errorText = entry.localError ?? entry.problem?.message
                         ?? String(localized: "Das NAS bleibt angehalten.")
