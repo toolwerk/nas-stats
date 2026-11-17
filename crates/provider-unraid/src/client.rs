@@ -61,14 +61,18 @@ pub(crate) fn parse_answer(body: &str) -> Result<Value, ProviderError> {
         .map(|list| list.iter().map(error_parts).collect())
         .unwrap_or_default();
     let data = answer.get("data").filter(|d| d.is_object()).cloned();
-    if errors.iter().any(|(code, message)| {
-        code == "UNAUTHENTICATED" || message.to_ascii_lowercase().contains("unauthorized")
-    }) {
+    // The code decides; the text only counts for an error without a code,
+    // so e.g. an internal error that quotes "Unauthorized" does not stop
+    // polling.
+    let is = |wanted: &str, text: &str| {
+        errors.iter().any(|(code, message)| {
+            code == wanted || (code.is_empty() && message.to_ascii_lowercase().contains(text))
+        })
+    };
+    if is("UNAUTHENTICATED", "unauthorized") {
         return Err(ProviderError::LoginFailed);
     }
-    if errors.iter().any(|(code, message)| {
-        code == "FORBIDDEN" || message.to_ascii_lowercase().contains("forbidden")
-    }) {
+    if is("FORBIDDEN", "forbidden") {
         return Err(ProviderError::PermissionDenied);
     }
     let first = errors.first().map(|(_, message)| message.as_str());
@@ -127,6 +131,19 @@ mod tests {
         let by_text = r#"{"errors":[{"message":"Forbidden resource"}],"data":null}"#;
         assert_eq!(parse_answer(by_code), Err(ProviderError::PermissionDenied));
         assert_eq!(parse_answer(by_text), Err(ProviderError::PermissionDenied));
+    }
+
+    #[test]
+    fn text_counts_only_for_errors_without_a_code() {
+        let internal = r#"{"errors":[{"message":"Docker: Unauthorized socket","extensions":{"code":"INTERNAL_SERVER_ERROR"}}],"data":null}"#;
+        assert_eq!(
+            parse_answer(internal),
+            Err(ProviderError::Parse(
+                "GraphQL: Docker: Unauthorized socket".into()
+            ))
+        );
+        let internal = r#"{"errors":[{"message":"forbidden path","extensions":{"code":"INTERNAL_SERVER_ERROR"}}],"data":{"a":1}}"#;
+        assert_eq!(parse_answer(internal).expect("data")["a"], 1);
     }
 
     #[test]
