@@ -37,8 +37,9 @@
 //! `unknown cmd format.`. [`QnapProvider`] puts system values, storage,
 //! network, containers and backups, asked one after the other, into a
 //! [`nas_model::Snapshot`] for the core. An HTTP error status of storage,
-//! network, containers or backups leaves only that part empty; other errors
-//! fail the snapshot.
+//! network, containers or backups leaves only that part empty, for backups
+//! also HTTP 401, 403 and an answer that is no JSON; other errors fail the
+//! snapshot.
 
 mod auth;
 mod backups;

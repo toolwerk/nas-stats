@@ -45,7 +45,7 @@ Echte Antworten eines eigenen QNAP, aufgezeichnet mit `qnap-capture` (Issue #1) 
 | `disk_usage_warning.xml` | wie `disk_usage.xml` mit einem Volume `DataVol1` bei 87,1 % belegt, **nachgebaut** (#6) | – |
 | `qsmart_warning.xml` | wie `qsmart.xml` mit vier Platten (Platte 3 bei 52 °C mit SMART `Warning`, Platte 4 mit unbekanntem Text) und einem leeren Steckplatz, **nachgebaut** (#6) | – |
 | `bandwidth_items.xml` | wie `bandwidth.xml` mit Schnittstellen als `item` (`id`, `dname` oder `name`) statt `eth<n>`, für den Rückfall auf `QSM40bandwidth`, **nachgebaut** (#7) | – |
-| `hbs_jobs.json` | `GET /cc3/v1/users/system/jobs` (Kopfzeile `X-QNAP-SID`), ein Backup-Auftrag mit Status `Finished`, **nachgebaut** aus den Feldern, die am 2026-11-17 in den DevTools zu sehen waren (#41) | admin |
+| `hbs_jobs.json` | `GET /cc3/v1/users/system/jobs` (Kopfzeile `X-QNAP-SID`), ein Backup-Auftrag mit Status `Finished`, **nachgebaut** aus den Feldern, die am 2026-11-17 in den DevTools zu sehen waren (#41) | – |
 | `hbs_jobs_mixed.json` | wie `hbs_jobs.json` mit Status `Running`, einem abgeschalteten Auftrag, einem Restore-Auftrag, einem Auftrag ohne `statistics` und `enable` und einem ohne `_id`, `has_more` true, **nachgebaut** (#41) | – |
 
 ## Antworten
