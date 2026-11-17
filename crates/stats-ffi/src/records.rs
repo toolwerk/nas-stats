@@ -660,6 +660,8 @@ pub enum ProblemKind {
     Timeout,
     LoginFailed,
     SecondFactorRequired,
+    /// The NAS blocks the address of this device (DSM error 407).
+    IpBlocked,
     PermissionDenied,
     CertificateChanged,
     Parse,
@@ -694,6 +696,7 @@ impl From<&model::ProviderError> for NasProblem {
             E::Timeout => ProblemKind::Timeout,
             E::LoginFailed => ProblemKind::LoginFailed,
             E::SecondFactorRequired => ProblemKind::SecondFactorRequired,
+            E::IpBlocked => ProblemKind::IpBlocked,
             E::PermissionDenied => ProblemKind::PermissionDenied,
             E::CertificateChanged { .. } => ProblemKind::CertificateChanged,
             E::Parse(_) => ProblemKind::Parse,

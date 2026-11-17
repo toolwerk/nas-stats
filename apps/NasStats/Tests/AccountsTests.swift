@@ -41,6 +41,7 @@ struct AccountsTests {
         let errors: [FfiError] = [
             .LoginFailed,
             .SecondFactorRequired,
+            .IpBlocked,
             .PermissionDenied,
             .Unreachable(detail: "refused"),
         ]

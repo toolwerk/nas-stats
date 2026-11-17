@@ -1246,6 +1246,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "provider-synology"
+version = "0.1.0"
+dependencies = [
+ "nas-http",
+ "nas-model",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "provider-unraid"
 version = "0.1.0"
 dependencies = [
