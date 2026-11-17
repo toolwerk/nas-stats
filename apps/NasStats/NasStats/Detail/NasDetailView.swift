@@ -166,9 +166,9 @@ struct NasDetailView: View {
                     backupRow(task, now: now)
                 }
             }
-        case .interfaceOpen:
+        case .noTasks:
             Section("Backups") {
-                Text("Hybrid Backup Sync: Schnittstelle offen")
+                Text("Hybrid Backup Sync: keine Aufträge gefunden")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

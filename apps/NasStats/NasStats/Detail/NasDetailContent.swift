@@ -7,8 +7,9 @@ struct NasDetailContent {
     enum Backups: Equatable {
         /// The tasks of the NAS, in the order of the vendor.
         case tasks([BackupTask])
-        /// QNAP without tasks: the HBS 3 interface is not read yet (#41).
-        case interfaceOpen
+        /// QNAP without tasks: Hybrid Backup Sync 3 is missing, stopped,
+        /// refused or has no backup jobs; the app cannot tell which (#41).
+        case noTasks
         /// No section.
         case hidden
     }
@@ -29,7 +30,7 @@ struct NasDetailContent {
         if !snapshot.backups.isEmpty {
             backups = .tasks(snapshot.backups)
         } else if snapshot.nas.provider == .qnap {
-            backups = .interfaceOpen
+            backups = .noTasks
         } else {
             backups = .hidden
         }
