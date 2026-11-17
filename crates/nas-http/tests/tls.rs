@@ -341,6 +341,35 @@ async fn bearer_get_sends_the_token() {
 }
 
 #[tokio::test]
+async fn get_with_headers_sends_the_headers() {
+    let server = server(Answer::Status(200)).await;
+    let client = NasClient::new(&server.url(), server.fingerprint()).unwrap();
+    let body = client
+        .get_text_with_headers(
+            "cc3/v1/users/system/jobs",
+            &[],
+            &[
+                ("X-QNAP-SID", "abc123"),
+                ("Content-Type", "application/json"),
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(body, "hallo");
+    let heads = server.heads();
+    assert!(
+        heads[0].starts_with("GET /cc3/v1/users/system/jobs "),
+        "{}",
+        heads[0]
+    );
+    assert_eq!(header(&heads[0], "x-qnap-sid"), Some("abc123"));
+    assert_eq!(header(&heads[0], "content-type"), Some("application/json"));
+    // The plain call sends none of them.
+    client.get_text("v1/nas", &[]).await.unwrap();
+    assert_eq!(header(&server.heads()[1], "x-qnap-sid"), None);
+}
+
+#[tokio::test]
 async fn bearer_get_with_rejected_token_is_login_failed() {
     let server = server(Answer::Status(401)).await;
     let client = NasClient::new(&server.url(), server.fingerprint()).unwrap();

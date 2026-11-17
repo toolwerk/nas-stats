@@ -27,10 +27,10 @@ struct NasDetailContentTests {
         ])
     }
 
-    @Test func qnapWithoutBackupsShowsTheOpenInterface() {
+    @Test func qnapWithoutBackupsShowsNoTasksFound() {
         var keller = demo("demo-keller")
         keller.backups = []
-        #expect(NasDetailContent(snapshot: keller).backups == .interfaceOpen)
+        #expect(NasDetailContent(snapshot: keller).backups == .noTasks)
     }
 
     @Test func otherVendorWithoutBackupsHidesTheSection() {
