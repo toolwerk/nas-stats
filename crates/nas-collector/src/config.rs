@@ -204,9 +204,10 @@ fn check_nas(raw: RawNas) -> Result<NasConfig, ConfigError> {
         .fingerprint
         .parse()
         .map_err(|e: ProviderError| ConfigError(format!("{}: {e}", field("fingerprint"))))?;
+    // A key of blanks is empty; a password of blanks is allowed.
     let filled = |name: &str, value: Option<String>| match value {
         None => Err(ConfigError(format!("{}: fehlt", field(name)))),
-        Some(value) if value.trim().is_empty() => {
+        Some(value) if value.is_empty() || (name == "api_key" && value.trim().is_empty()) => {
             Err(ConfigError(format!("{}: leer", field(name))))
         }
         Some(value) => Ok(value),

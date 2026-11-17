@@ -18,6 +18,7 @@ const SHARES_OK: &str = include_str!("fixtures/shares.json");
 const NOTIFICATIONS_OK: &str = include_str!("fixtures/notifications.json");
 const UPS_OK: &str = include_str!("fixtures/ups.json");
 const UPS_NONE: &str = include_str!("fixtures/ups_none.json");
+const UPS_NO_APCUPSD: &str = include_str!("fixtures/ups_no_apcupsd.json");
 const DOCKER_OK: &str = include_str!("fixtures/docker.json");
 const DOCKER_DISABLED: &str = include_str!("fixtures/docker_disabled.json");
 const UNAUTHENTICATED: &str = include_str!("fixtures/unauthenticated.json");
@@ -448,6 +449,9 @@ async fn apcupsd_states_map_to_online_and_on_battery() {
         ("ONBATT LOWBATT", Some(UpsState::OnBattery)),
         ("OL CHRG", Some(UpsState::Online)),
         ("OB DISCHRG", Some(UpsState::OnBattery)),
+        ("ONLINE LOWBATT", Some(UpsState::Online)),
+        ("OL CHRG LB", Some(UpsState::Online)),
+        ("LOWBATT", Some(UpsState::OnBattery)),
         ("COMMLOST", None),
         ("", None),
     ] {
@@ -470,4 +474,13 @@ async fn completed_parity_check_without_date_keeps_its_state() {
     assert_eq!(scrub.state, Some(ScrubState::Finished));
     assert_eq!(scrub.last_finished_at, None);
     assert_eq!(snapshot.backups[0].last_run, None);
+}
+
+#[tokio::test]
+async fn without_apcupsd_the_ups_stays_empty() {
+    let answers = with(all_ok(MAIN_FULL), UPS, Ok(UPS_NO_APCUPSD));
+    let fake = FakeTransport::new(answers);
+    let snapshot = provider(&fake).snapshot().await.expect("snapshot");
+    assert_eq!(snapshot.ups, None);
+    assert_eq!(snapshot.containers.len(), 3);
 }

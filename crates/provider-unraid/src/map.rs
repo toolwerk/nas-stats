@@ -252,14 +252,15 @@ pub(crate) fn ups(devices: &[UpsDevice]) -> Option<Ups> {
         .unwrap_or_default()
         .to_ascii_uppercase();
     let words: Vec<&str> = status.split_whitespace().collect();
-    let on_battery = words
-        .iter()
-        .any(|w| matches!(*w, "ONBATT" | "ONBATTERY" | "OB" | "LOWBATT" | "LB"));
-    let online = words.iter().any(|w| matches!(*w, "ONLINE" | "OL"));
-    let state = if on_battery {
+    let has = |names: &[&str]| words.iter().any(|w| names.contains(w));
+    // A low battery alone means on battery; with mains back
+    // (`ONLINE LOWBATT`, `OL CHRG LB`) the UPS is online and charging.
+    let state = if has(&["ONBATT", "ONBATTERY", "OB"]) {
         Some(UpsState::OnBattery)
-    } else if online {
+    } else if has(&["ONLINE", "OL"]) {
         Some(UpsState::Online)
+    } else if has(&["LOWBATT", "LB"]) {
+        Some(UpsState::OnBattery)
     } else {
         None
     };

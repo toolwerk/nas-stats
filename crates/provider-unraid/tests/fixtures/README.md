@@ -19,7 +19,8 @@ Antworten der GraphQL-API von Unraid für die Tests von `provider-unraid`.
 | `shares.json` | `shares` | Freigaben in Kilobyte, eine ohne Namen, eine ohne freien Platz |
 | `notifications.json` | `notifications.list(filter: UNREAD)` | `INFO`, `WARNING`, `alert` ohne Betreff und Zeit, ein leerer Eintrag |
 | `ups.json` | `upsDevices` | USV im Netzbetrieb mit fälligem Akkutausch (`ONLINE REPLACEBATT`, apcupsd), 45 Minuten Restlaufzeit, zweites Gerät wird ignoriert |
-| `ups_none.json` | `upsDevices` | keine USV |
+| `ups_none.json` | `upsDevices` | leere Liste (tolerant gelesen; 4.25 liefert sie so nicht) |
+| `ups_no_apcupsd.json` | `upsDevices` | apcupsd aus: GraphQL-Fehler ohne `data`, so antwortet 4.25 ohne USV |
 | `docker.json` | `docker.containers` | laufender, beendeter und pausierter Container (ohne Namen) |
 | `docker_disabled.json` | `docker.containers` | Docker-Dienst aus: GraphQL-Fehler ohne `data` |
 | `unauthenticated.json` | jede | abgelehnter API-Key (`UNAUTHENTICATED`) |
@@ -32,6 +33,7 @@ Antworten der GraphQL-API von Unraid für die Tests von `provider-unraid`.
 
 - Kapazität von Array und Freigaben in Kilobyte zu 1000 Byte, nicht 1024.
 - `metrics.memory.total` in Byte, `estimatedRuntime` in ganzen Minuten (laut Schema Sekunden, der Resolver übernimmt aber `TIMELEFT` von `apcaccess`, z. B. `45.0 Minutes`, per `parseInt`), `duration` in Sekunden, `progress` und `chargeLevel` in Prozent.
+- Fehlt in der Ausgabe von `apcaccess` ein Wert, setzt der Resolver Ersatzwerte ein (`STATUS` `Online`, `BCHARGE` `100`, `TIMELEFT` `3600`). Die API unterscheidet sie nicht von Messwerten; der Anbieter übernimmt sie deshalb (bekannte Grenze, eine USV ohne `TIMELEFT` zeigt 60 Stunden).
 - `upsDevices[].status` ist der Status von apcupsd (`ONLINE`, `ONBATT`, `ONLINE REPLACEBATT`, `TRIM ONLINE` …).
 - `info.os.uptime` ist die Bootzeit (ISO 8601), keine Dauer.
 - `parityCheckStatus.date` ist der Start der aktuellen bzw. letzten Prüfung (`sbSynced`), `duration` die Zeit bis zum Ende (`sbSynced2`) bzw. bis jetzt; `parityHistory[].date` ist das Ende einer vergangenen Prüfung (Zeitpunkt des Eintrags im Paritätslog). Fehlt das Paritätslog, antwortet `parityHistory` mit einem GraphQL-Fehler.
