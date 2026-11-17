@@ -39,7 +39,7 @@ Der Container braucht eigene Zugangsdaten. Auf dem QNAP liefern die nötigen Abf
 
 Ein Unraid fragt der Container über die GraphQL-API mit einem API-Key ab, ohne Anmeldung und ohne Session. Den Key unter **Settings** › **Management Access** › **API Keys** anlegen, mit der Rolle **Viewer** (nur lesen; laut Quellcode der Unraid-API reicht sie für alle Abfragen), und in `collector.toml` als `api_key` eintragen; `user` und `password` entfallen.
 
-Der Container spricht nur HTTPS. Unraid liefert ab Werk nur HTTP: unter **Settings** › **Management Access** **Use SSL/TLS** auf **Yes** (selbstsigniert) oder **Strict** (Let's-Encrypt-Zertifikat über `myunraid.net`) stellen. Bei **Strict** erneuert Unraid das Zertifikat alle zwei bis drei Monate; danach meldet der Container ein geändertes Zertifikat und hält an, bis der neue Fingerabdruck in `collector.toml` steht.
+Der Container spricht nur HTTPS. Unraid liefert ab Werk nur HTTP: unter **Settings** › **Management Access** **Use SSL/TLS** auf **Yes** stellen (selbstsigniertes Zertifikat, Zugriff über die IP-Adresse; empfohlen). Mit **Strict** (Let's-Encrypt-Zertifikat über `myunraid.net`) leitet Unraid Zugriffe über die IP-Adresse auf die `myunraid.net`-Adresse um, der Container folgt keiner Umleitung: Dann muss `base_url` die `myunraid.net`-Adresse aus **Management Access** sein. Bei **Strict** erneuert Unraid das Zertifikat außerdem alle zwei bis drei Monate; danach meldet der Container ein geändertes Zertifikat und hält an, bis der neue Fingerabdruck in `collector.toml` steht.
 
 Platten liest der Container nur aus den Array-Daten, damit schlafende Platten schlafen bleiben; SMART und Betriebsstunden fehlen deshalb. Ein abgelehnter Key hält die Abfrage an wie eine abgelehnte Anmeldung.
 

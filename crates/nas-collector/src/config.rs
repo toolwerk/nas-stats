@@ -206,7 +206,9 @@ fn check_nas(raw: RawNas) -> Result<NasConfig, ConfigError> {
         .map_err(|e: ProviderError| ConfigError(format!("{}: {e}", field("fingerprint"))))?;
     let filled = |name: &str, value: Option<String>| match value {
         None => Err(ConfigError(format!("{}: fehlt", field(name)))),
-        Some(value) if value.is_empty() => Err(ConfigError(format!("{}: leer", field(name)))),
+        Some(value) if value.trim().is_empty() => {
+            Err(ConfigError(format!("{}: leer", field(name))))
+        }
         Some(value) => Ok(value),
     };
     let unused = |name: &str, value: &Option<String>, provider: &str| match value {
@@ -377,6 +379,8 @@ mod tests {
         );
         let empty = unraid("a").replace("\"schluessel-123\"", "\"\"");
         assert!(error(&empty).contains("api_key: leer"));
+        let blank = unraid("a").replace("\"schluessel-123\"", "\"  \"");
+        assert!(error(&blank).contains("api_key: leer"));
         let with_user = format!("{}user = \"admin\"\n", unraid("a"));
         assert!(error(&with_user).contains("user"));
         let with_password = format!("{}password = \"x\"\n", unraid("a"));
