@@ -432,3 +432,42 @@ async fn queries_never_ask_for_disks_or_the_docker_organizer() {
         assert!(!call.query.contains("smart"), "{}", call.query);
     }
 }
+
+#[tokio::test]
+async fn apcupsd_states_map_to_online_and_on_battery() {
+    let answer = |status: &str| {
+        format!(
+            r#"{{"data":{{"upsDevices":[{{"status":"{status}","battery":{{"chargeLevel":50,"estimatedRuntime":"10"}}}}]}}}}"#
+        )
+    };
+    for (status, state) in [
+        ("ONLINE", Some(UpsState::Online)),
+        ("TRIM ONLINE", Some(UpsState::Online)),
+        ("BOOST ONLINE", Some(UpsState::Online)),
+        ("ONBATT", Some(UpsState::OnBattery)),
+        ("ONBATT LOWBATT", Some(UpsState::OnBattery)),
+        ("OL CHRG", Some(UpsState::Online)),
+        ("OB DISCHRG", Some(UpsState::OnBattery)),
+        ("COMMLOST", None),
+        ("", None),
+    ] {
+        let body: &'static str = Box::leak(answer(status).into_boxed_str());
+        let fake = FakeTransport::new(with(all_ok(MAIN_FULL), UPS, Ok(body)));
+        let snapshot = provider(&fake).snapshot().await.expect("snapshot");
+        let ups = snapshot.ups.expect("ups");
+        assert_eq!(ups.state, state, "{status}");
+        assert_eq!(ups.runtime_seconds, Some(600));
+    }
+}
+
+#[tokio::test]
+async fn completed_parity_check_without_date_keeps_its_state() {
+    let main = MAIN_FULL.replace(r#""date": "2026-11-01T01:00:00.000Z""#, r#""date": null"#);
+    let main: &'static str = Box::leak(main.into_boxed_str());
+    let fake = FakeTransport::new(all_ok(main));
+    let snapshot = provider(&fake).snapshot().await.expect("snapshot");
+    let scrub = snapshot.volumes[0].scrub.as_ref().expect("scrub");
+    assert_eq!(scrub.state, Some(ScrubState::Finished));
+    assert_eq!(scrub.last_finished_at, None);
+    assert_eq!(snapshot.backups[0].last_run, None);
+}

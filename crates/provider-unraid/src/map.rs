@@ -108,7 +108,7 @@ fn scrub(check: &ParityCheck) -> Option<ScrubStatus> {
     };
     let last_finished_at = match state {
         Some(ScrubState::Finished) => {
-            let start = unix_seconds(check.date.as_deref()?);
+            let start = check.date.as_deref().and_then(unix_seconds);
             let duration = check.duration.and_then(|d| i64::try_from(d).ok());
             start.zip(duration).and_then(|(s, d)| s.checked_add(d))
         }
@@ -238,26 +238,38 @@ pub(crate) fn alert(raw: &Notification) -> Option<Alert> {
     })
 }
 
-/// The first UPS. Status as NUT reports it (`ONLINE`, `OL CHRG`,
-/// `ONBATT`, `OB DISCHRG`, `LOWBATT`); others leave the state `None`.
+/// The first UPS. Unraid reads it with apcupsd (`apcaccess`): the status
+/// is a list of words such as `ONLINE`, `ONBATT`, `ONLINE REPLACEBATT`,
+/// `TRIM ONLINE` or `ONBATT LOWBATT`; NUT forms (`OL CHRG`, `OB DISCHRG`)
+/// are read as well. Any other status leaves the state `None`. Unraid
+/// passes the remaining runtime of apcupsd (`TIMELEFT : 45.0 Minutes`) as
+/// whole minutes, although its schema says seconds.
 pub(crate) fn ups(devices: &[UpsDevice]) -> Option<Ups> {
     let device = devices.first()?;
-    let status: Option<String> = device
+    let status = device
         .status
         .as_deref()
-        .map(|s| s.to_ascii_uppercase().replace(' ', ""));
-    let state = match status.as_deref() {
-        Some(s) if s.starts_with("ONBATT") || s.starts_with("OB") || s == "LOWBATT" => {
-            Some(UpsState::OnBattery)
-        }
-        Some(s) if s == "ONLINE" || s.starts_with("OL") => Some(UpsState::Online),
-        _ => None,
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let words: Vec<&str> = status.split_whitespace().collect();
+    let on_battery = words
+        .iter()
+        .any(|w| matches!(*w, "ONBATT" | "ONBATTERY" | "OB" | "LOWBATT" | "LB"));
+    let online = words.iter().any(|w| matches!(*w, "ONLINE" | "OL"));
+    let state = if on_battery {
+        Some(UpsState::OnBattery)
+    } else if online {
+        Some(UpsState::Online)
+    } else {
+        None
     };
     let battery = device.battery.as_ref();
     Some(Ups {
         state,
         charge_percent: battery.and_then(|b| b.charge_level),
-        runtime_seconds: battery.and_then(|b| b.estimated_runtime),
+        runtime_seconds: battery
+            .and_then(|b| b.estimated_runtime)
+            .and_then(|minutes| minutes.checked_mul(60)),
     })
 }
 

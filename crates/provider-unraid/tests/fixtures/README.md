@@ -18,7 +18,7 @@ Antworten der GraphQL-API von Unraid für die Tests von `provider-unraid`.
 | `metrics.json` | `metrics { cpu memory }` | CPU und RAM |
 | `shares.json` | `shares` | Freigaben in Kilobyte, eine ohne Namen, eine ohne freien Platz |
 | `notifications.json` | `notifications.list(filter: UNREAD)` | `INFO`, `WARNING`, `alert` ohne Betreff und Zeit, ein leerer Eintrag |
-| `ups.json` | `upsDevices` | USV im Netzbetrieb (`OL CHRG`), zweites Gerät wird ignoriert |
+| `ups.json` | `upsDevices` | USV im Netzbetrieb mit fälligem Akkutausch (`ONLINE REPLACEBATT`, apcupsd), 45 Minuten Restlaufzeit, zweites Gerät wird ignoriert |
 | `ups_none.json` | `upsDevices` | keine USV |
 | `docker.json` | `docker.containers` | laufender, beendeter und pausierter Container (ohne Namen) |
 | `docker_disabled.json` | `docker.containers` | Docker-Dienst aus: GraphQL-Fehler ohne `data` |
@@ -31,7 +31,8 @@ Antworten der GraphQL-API von Unraid für die Tests von `provider-unraid`.
 ## Einheiten
 
 - Kapazität von Array und Freigaben in Kilobyte zu 1000 Byte, nicht 1024.
-- `metrics.memory.total` in Byte, `estimatedRuntime` in Sekunden, `duration` in Sekunden, `progress` und `chargeLevel` in Prozent.
+- `metrics.memory.total` in Byte, `estimatedRuntime` in ganzen Minuten (laut Schema Sekunden, der Resolver übernimmt aber `TIMELEFT` von `apcaccess`, z. B. `45.0 Minutes`, per `parseInt`), `duration` in Sekunden, `progress` und `chargeLevel` in Prozent.
+- `upsDevices[].status` ist der Status von apcupsd (`ONLINE`, `ONBATT`, `ONLINE REPLACEBATT`, `TRIM ONLINE` …).
 - `info.os.uptime` ist die Bootzeit (ISO 8601), keine Dauer.
 - `parityCheckStatus.date` ist der Start der aktuellen bzw. letzten Prüfung (`sbSynced`), `duration` die Zeit bis zum Ende (`sbSynced2`) bzw. bis jetzt; `parityHistory[].date` ist das Ende einer vergangenen Prüfung (Zeitpunkt des Eintrags im Paritätslog). Fehlt das Paritätslog, antwortet `parityHistory` mit einem GraphQL-Fehler.
 

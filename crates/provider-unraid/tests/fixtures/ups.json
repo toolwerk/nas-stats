@@ -1,1 +1,1 @@
-{ "data": { "upsDevices": [ { "status": "OL CHRG", "battery": { "chargeLevel": 98, "estimatedRuntime": 2700 } }, { "status": "OB", "battery": null } ] } }
+{ "data": { "upsDevices": [ { "status": "ONLINE REPLACEBATT", "battery": { "chargeLevel": 98, "estimatedRuntime": 45 } }, { "status": "ONBATT", "battery": null } ] } }

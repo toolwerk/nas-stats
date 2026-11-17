@@ -367,7 +367,7 @@ pub(crate) struct UpsBattery {
     /// Percent.
     #[serde(deserialize_with = "num")]
     pub charge_level: Option<f64>,
-    /// Seconds.
+    /// Minutes in fact (see `map::ups`), seconds by the schema.
     #[serde(deserialize_with = "count")]
     pub estimated_runtime: Option<u64>,
 }
