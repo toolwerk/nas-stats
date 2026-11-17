@@ -1,0 +1,6 @@
+{
+  "errors": [
+    { "message": "Forbidden resource", "path": ["upsDevices"], "extensions": { "code": "FORBIDDEN" } }
+  ],
+  "data": null
+}

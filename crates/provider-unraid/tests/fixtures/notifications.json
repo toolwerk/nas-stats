@@ -1,0 +1,12 @@
+{
+  "data": {
+    "notifications": {
+      "list": [
+        { "title": "Unraid Status", "subject": "Parity disk returned to normal operation", "importance": "INFO", "timestamp": "2026-11-16T08:00:00.000Z" },
+        { "title": "Unraid disk3 error", "subject": "Warning [TOWER-DEMO] - disk3 has read errors", "importance": "WARNING", "timestamp": "2026-11-16T09:00:00.000Z" },
+        { "title": "Array has 1 disk with errors", "subject": "", "importance": "alert", "timestamp": null },
+        { "title": null, "subject": null, "importance": "INFO", "timestamp": null }
+      ]
+    }
+  }
+}

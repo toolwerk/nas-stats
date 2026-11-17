@@ -1,0 +1,6 @@
+{
+  "errors": [
+    { "message": "API key validation failed", "extensions": { "code": "UNAUTHENTICATED" } }
+  ],
+  "data": null
+}

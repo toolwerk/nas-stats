@@ -1,0 +1,1 @@
+{ "data": { "upsDevices": [ { "status": "ONLINE REPLACEBATT", "battery": { "chargeLevel": 98, "estimatedRuntime": 45 } }, { "status": "ONBATT", "battery": null } ] } }

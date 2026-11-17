@@ -1,0 +1,6 @@
+{
+  "errors": [
+    { "message": "Failed to get UPS data: No UPS data returned from apcaccess", "path": ["upsDevices"], "extensions": { "code": "INTERNAL_SERVER_ERROR" } }
+  ],
+  "data": null
+}

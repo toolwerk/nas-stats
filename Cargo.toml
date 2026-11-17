@@ -7,6 +7,7 @@ members = [
     "crates/nas-collector",
     "crates/provider-qnap",
     "crates/provider-synology",
+    "crates/provider-unraid",
     "crates/stats-core",
     "crates/stats-ffi",
     "crates/uniffi-bindgen",
@@ -26,6 +27,7 @@ nas-http = { path = "crates/nas-http" }
 stats-core = { path = "crates/stats-core" }
 provider-qnap = { path = "crates/provider-qnap" }
 provider-synology = { path = "crates/provider-synology" }
+provider-unraid = { path = "crates/provider-unraid" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"

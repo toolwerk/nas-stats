@@ -14,6 +14,7 @@ hyper-util = { version = "0.1.21", features = ["tokio", "server", "http1"] }
 nas-http = { workspace = true }
 nas-model = { workspace = true }
 provider-qnap = { workspace = true }
+provider-unraid = { workspace = true }
 rcgen = { workspace = true }
 rustls = { workspace = true }
 serde = { workspace = true }

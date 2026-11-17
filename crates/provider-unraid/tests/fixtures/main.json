@@ -1,0 +1,33 @@
+{
+  "data": {
+    "vars": { "name": "Tower" },
+    "info": {
+      "os": { "hostname": "tower-demo", "uptime": "2026-11-01T06:00:00.000Z" },
+      "system": { "manufacturer": "Demo Board Inc.", "model": "B550-DEMO" },
+      "versions": { "core": { "unraid": "7.2.0" } }
+    },
+    "array": {
+      "state": "STARTED",
+      "capacity": { "kilobytes": { "free": "6000000000", "used": "2000000000", "total": "8000000000" } },
+      "parityCheckStatus": {
+        "date": "2026-11-01T01:00:00.000Z",
+        "duration": 36000,
+        "status": "COMPLETED",
+        "progress": 100
+      },
+      "parities": [
+        { "id": "SERVERID:MODEL_SERIAL-A", "name": "parity", "device": "sdb", "status": "DISK_OK", "temp": 33, "numErrors": 0, "isSpinning": true },
+        { "id": "SERVERID:slot-parity2", "name": "parity2", "device": null, "status": "DISK_NP", "temp": null, "numErrors": 0, "isSpinning": false }
+      ],
+      "disks": [
+        { "id": "SERVERID:MODEL_SERIAL-B", "name": "disk1", "device": "sdc", "status": "DISK_OK", "temp": 35, "numErrors": 0, "isSpinning": true },
+        { "id": "SERVERID:MODEL_SERIAL-C", "name": "disk2", "device": "sdd", "status": "DISK_OK", "temp": null, "numErrors": "3", "isSpinning": false },
+        { "id": "SERVERID:MODEL_SERIAL-D", "name": "disk3", "device": "sde", "status": "DISK_DSBL", "temp": 41, "numErrors": 0, "isSpinning": true },
+        { "id": "SERVERID:slot-disk4", "name": "disk4", "device": null, "status": "DISK_NP", "temp": null, "numErrors": 0, "isSpinning": false }
+      ],
+      "caches": [
+        { "id": "SERVERID:nvme0n1", "name": "cache", "device": "nvme0n1", "status": "DISK_OK", "temp": 44, "numErrors": 0, "isSpinning": true }
+      ]
+    }
+  }
+}

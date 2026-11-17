@@ -8,7 +8,7 @@ Was der Container tut:
 - Er greift nur lesend zu: keine Befehle ans NAS, keine Änderung der Konfiguration.
 - Nach einer abgelehnten Anmeldung meldet er sich nicht erneut an, auch nicht nach einem Neustart, bis der Zugang in der Konfiguration geändert ist. Sonst sperrt das NAS womöglich die IP-Adresse.
 - Er gibt Messwerte und Backup-Läufe über eine Schnittstelle im Heimnetz heraus (HTTPS, Port 8743, mit Schlüssel). Ereignisse und Mitteilungen bleiben bei der App.
-- Derzeit nur QNAP.
+- Anbieter: QNAP (Benutzer und Passwort) und Unraid 7.2 oder neuer (API-Key).
 
 Die Apps fragen das NAS weiter selbst ab; der Container ergänzt nur den Verlauf. Das NAS bekommt so eine Abfrage mehr je 5 Minuten.
 
@@ -35,14 +35,24 @@ Für ein QNAP mit Intel- oder AMD-Prozessor `amd64` (Standard), für eines mit A
 
 Der Container braucht eigene Zugangsdaten. Auf dem QNAP liefern die nötigen Abfragen derzeit nur mit einem Konto der Gruppe administrators alle Werte (Befund aus #1). Empfehlung: ein eigenes Admin-Konto nur für den Container anlegen, mit eigenem Passwort und ohne 2-Stufen-Verifizierung. So lässt sich der Zugang später sperren, ohne das eigene Konto zu ändern, und eine Sperre wegen falscher Anmeldung trifft nur dieses Konto.
 
-Das Passwort steht im Klartext in `collector.toml` auf dem NAS. Die Datei deshalb nur für den Container lesbar machen: Der Container läuft als Benutzer mit der UID 10001. Per SSH:
+### Unraid
+
+Ein Unraid fragt der Container über die GraphQL-API mit einem API-Key ab, ohne Anmeldung und ohne Session. Den Key unter **Settings** › **Management Access** › **API Keys** anlegen, mit der Rolle **Viewer** (nur lesen; laut Quellcode der Unraid-API reicht sie für alle Abfragen), und in `collector.toml` als `api_key` eintragen; `user` und `password` entfallen.
+
+Der Container spricht nur HTTPS. Unraid liefert ab Werk nur HTTP: unter **Settings** › **Management Access** **Use SSL/TLS** auf **Yes** stellen (selbstsigniertes Zertifikat, Zugriff über die IP-Adresse; empfohlen). Mit **Strict** (Let's-Encrypt-Zertifikat über `myunraid.net`) leitet Unraid Zugriffe über die IP-Adresse auf die `myunraid.net`-Adresse um, der Container folgt keiner Umleitung: Dann muss `base_url` die `myunraid.net`-Adresse aus **Management Access** sein. Bei **Strict** erneuert Unraid das Zertifikat außerdem alle zwei bis drei Monate; danach meldet der Container ein geändertes Zertifikat und hält an, bis der neue Fingerabdruck in `collector.toml` steht.
+
+Platten liest der Container nur aus den Array-Daten, damit schlafende Platten schlafen bleiben; SMART und Betriebsstunden fehlen deshalb. Ein abgelehnter Key hält die Abfrage an wie eine abgelehnte Anmeldung.
+
+### Zugangsdaten schützen
+
+Passwort bzw. API-Key stehen im Klartext in `collector.toml` auf dem NAS. Die Datei deshalb nur für den Container lesbar machen: Der Container läuft als Benutzer mit der UID 10001. Per SSH:
 
 ```bash
 chown 10001 /share/Container/nas-collector/collector.toml
 chmod 600 /share/Container/nas-collector/collector.toml
 ```
 
-Wer Zugriff auf diesen Ordner oder auf Docker auf dem NAS hat, kann das Passwort lesen.
+Wer Zugriff auf diesen Ordner oder auf Docker auf dem NAS hat, kann Passwort bzw. API-Key lesen.
 
 ## Konfiguration
 
@@ -54,10 +64,11 @@ Wer Zugriff auf diesen Ordner oder auf Docker auf dem NAS hat, kann das Passwort
 | `interval_minutes` | Abstand der Abfragen je NAS, Standard und Minimum 5 |
 | `[[nas]]` | ein Abschnitt je NAS |
 | `id` | eigene Kennung, nur Buchstaben, Ziffern, `.`, `_`, `-`; jede nur einmal |
-| `provider` | derzeit nur `qnap` |
+| `provider` | `qnap` oder `unraid` |
 | `base_url` | Adresse des NAS, nur `https://`, vom Container aus gesehen, also mit der IP-Adresse im Heimnetz |
 | `fingerprint` | SHA-256-Fingerabdruck des Zertifikats des NAS (`AB:CD:…`) |
-| `user`, `password` | das eigene Konto (oben) |
+| `user`, `password` | nur QNAP: das eigene Konto (oben) |
+| `api_key` | nur Unraid: API-Key der Rolle Viewer (oben) |
 
 Den Fingerabdruck gibt der Container selbst aus, ohne Anfrage ans NAS:
 
@@ -65,7 +76,7 @@ Den Fingerabdruck gibt der Container selbst aus, ohne Anfrage ans NAS:
 docker run --rm nas-collector:latest fingerprint https://192.168.1.20:443
 ```
 
-Er muss zu dem passen, den die Weboberfläche des NAS bzw. die App beim Hinzufügen zeigt. Eine fehlerhafte Konfiguration beendet den Container mit Exit 1; die Meldung nennt das Feld, nie das Passwort. Nach einer Änderung den Container neu starten.
+Er muss zu dem passen, den die Weboberfläche des NAS bzw. die App beim Hinzufügen zeigt. Eine fehlerhafte Konfiguration beendet den Container mit Exit 1; die Meldung nennt das Feld, nie Passwort oder API-Key. Nach einer Änderung den Container neu starten.
 
 ## Mit der App koppeln
 
@@ -91,9 +102,9 @@ Port 8743 ist nur für das Heimnetz gedacht. Im Router keine Portweiterleitung d
 
 ## Sperre aufheben
 
-Lehnt das NAS die Anmeldung ab (falsches Passwort, 2-Stufen-Verifizierung, geändertes Zertifikat), steht im Protokoll `… angehalten, bis sich der Zugang in der Konfiguration ändert`, und der Container fragt dieses NAS nicht mehr ab. Aufheben:
+Lehnt das NAS die Anmeldung ab (falsches Passwort, abgelehnter API-Key, 2-Stufen-Verifizierung, geändertes Zertifikat), steht im Protokoll `… angehalten, bis sich der Zugang in der Konfiguration ändert`, und der Container fragt dieses NAS nicht mehr ab. Aufheben:
 
-1. In `collector.toml` Benutzer, Passwort, Adresse oder Fingerabdruck korrigieren.
+1. In `collector.toml` Benutzer, Passwort, API-Key, Adresse oder Fingerabdruck korrigieren.
 2. Den Container neu starten.
 
 Ein geänderter Zugang hebt die Sperre auf. War der Zugang richtig und die Ursache auf dem NAS (z. B. 2-Stufen-Verifizierung inzwischen abgeschaltet), den gespeicherten Stand bei gestopptem Container löschen; im laufenden Container schriebe die nächste Abfrage eines anderen NAS ihn sofort neu:

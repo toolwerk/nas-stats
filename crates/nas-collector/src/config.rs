@@ -11,9 +11,17 @@
 //! fingerprint = "AB:CD:…"
 //! user = "nasstats"
 //! password = "…"
+//!
+//! [[nas]]
+//! id = "tower"
+//! provider = "unraid"
+//! base_url = "https://192.168.1.30"
+//! fingerprint = "AB:CD:…"
+//! api_key = "…"
 //! ```
 //!
-//! An error names the field, never the password.
+//! A QNAP needs `user` and `password`, an Unraid only `api_key`. An error
+//! names the field, never the password or the key.
 
 use std::fmt;
 use std::net::SocketAddr;
@@ -47,7 +55,9 @@ pub struct NasConfig {
     pub provider: nas_model::ProviderKind,
     pub base_url: String,
     pub fingerprint: Fingerprint,
+    /// User name; empty for Unraid.
     pub user: String,
+    /// Password; for Unraid the API key.
     pub password: String,
 }
 
@@ -113,8 +123,9 @@ struct RawNas {
     provider: String,
     base_url: String,
     fingerprint: String,
-    user: String,
-    password: String,
+    user: Option<String>,
+    password: Option<String>,
+    api_key: Option<String>,
 }
 
 /// Reads and checks the file at `path`.
@@ -175,9 +186,10 @@ fn check_nas(raw: RawNas) -> Result<NasConfig, ConfigError> {
     let field = |name: &str| format!("nas {:?}: {name}", raw.id);
     let provider = match raw.provider.as_str() {
         "qnap" => nas_model::ProviderKind::Qnap,
+        "unraid" => nas_model::ProviderKind::Unraid,
         other => {
             return Err(ConfigError(format!(
-                "{}: nur \"qnap\" wird unterstützt, eingetragen {other:?}",
+                "{}: nur \"qnap\" und \"unraid\" werden unterstützt, eingetragen {other:?}",
                 field("provider")
             )));
         }
@@ -192,19 +204,39 @@ fn check_nas(raw: RawNas) -> Result<NasConfig, ConfigError> {
         .fingerprint
         .parse()
         .map_err(|e: ProviderError| ConfigError(format!("{}: {e}", field("fingerprint"))))?;
-    if raw.user.is_empty() {
-        return Err(ConfigError(format!("{}: leer", field("user"))));
-    }
-    if raw.password.is_empty() {
-        return Err(ConfigError(format!("{}: leer", field("password"))));
-    }
+    // A key of blanks is empty; a password of blanks is allowed.
+    let filled = |name: &str, value: Option<String>| match value {
+        None => Err(ConfigError(format!("{}: fehlt", field(name)))),
+        Some(value) if value.is_empty() || (name == "api_key" && value.trim().is_empty()) => {
+            Err(ConfigError(format!("{}: leer", field(name))))
+        }
+        Some(value) => Ok(value),
+    };
+    let unused = |name: &str, value: &Option<String>, provider: &str| match value {
+        Some(_) => Err(ConfigError(format!(
+            "{}: gilt nicht für {provider}",
+            field(name)
+        ))),
+        None => Ok(()),
+    };
+    let (user, password) = match provider {
+        nas_model::ProviderKind::Unraid => {
+            unused("user", &raw.user, "unraid")?;
+            unused("password", &raw.password, "unraid")?;
+            (String::new(), filled("api_key", raw.api_key)?)
+        }
+        _ => {
+            unused("api_key", &raw.api_key, "qnap")?;
+            (filled("user", raw.user)?, filled("password", raw.password)?)
+        }
+    };
     Ok(NasConfig {
         id: raw.id,
         provider,
         base_url: raw.base_url,
         fingerprint,
-        user: raw.user,
-        password: raw.password,
+        user,
+        password,
     })
 }
 
@@ -268,6 +300,26 @@ mod tests {
         let config = parse(text).expect("example parses");
         assert_eq!(config.interval_minutes, 5);
         assert_eq!(config.nas[0].id, "keller");
+        // The commented Unraid entry works once the hashes are gone.
+        let uncommented: String = text
+            .lines()
+            .map(|line| match line.strip_prefix("# ") {
+                Some(rest)
+                    if rest == "[[nas]]"
+                        || rest.split_once(" = ").is_some_and(|(key, _)| {
+                            key.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+                        }) =>
+                {
+                    rest
+                }
+                _ => line,
+            })
+            .map(|line| format!("{line}\n"))
+            .collect();
+        let config = parse(&uncommented).expect("example with Unraid parses");
+        assert_eq!(config.nas.len(), 2);
+        assert_eq!(config.nas[1].provider, nas_model::ProviderKind::Unraid);
+        assert_eq!(config.nas[1].password, "hier-der-api-key");
     }
 
     #[test]
@@ -302,6 +354,45 @@ mod tests {
         assert!(error(&unknown).contains("port"), "{}", error(&unknown));
         let missing = nas("a").replace("user = \"nasstats\"\n", "");
         assert!(error(&missing).contains("user"));
+    }
+
+    fn unraid(id: &str) -> String {
+        format!(
+            "[[nas]]\nid = \"{id}\"\nprovider = \"unraid\"\nbase_url = \"https://192.0.2.30\"\n\
+             fingerprint = \"{FP}\"\napi_key = \"schluessel-123\"\n"
+        )
+    }
+
+    #[test]
+    fn unraid_needs_only_the_api_key() {
+        let config = parse(&unraid("tower")).expect("config parses");
+        let tower = &config.nas[0];
+        assert_eq!(tower.provider, nas_model::ProviderKind::Unraid);
+        assert_eq!(tower.user, "");
+        assert_eq!(tower.password, "schluessel-123");
+        assert!(!format!("{tower:?}").contains("schluessel"));
+
+        let missing = unraid("a").replace("api_key = \"schluessel-123\"\n", "");
+        assert!(
+            error(&missing).contains("api_key: fehlt"),
+            "{}",
+            error(&missing)
+        );
+        let empty = unraid("a").replace("\"schluessel-123\"", "\"\"");
+        assert!(error(&empty).contains("api_key: leer"));
+        let blank = unraid("a").replace("\"schluessel-123\"", "\"  \"");
+        assert!(error(&blank).contains("api_key: leer"));
+        let with_user = format!("{}user = \"admin\"\n", unraid("a"));
+        assert!(error(&with_user).contains("user"));
+        let with_password = format!("{}password = \"x\"\n", unraid("a"));
+        assert!(error(&with_password).contains("password"));
+        let qnap_with_key = format!("{}api_key = \"x\"\n", nas("a"));
+        assert!(error(&qnap_with_key).contains("api_key"));
+        let qnap_without_password = nas("a").replace("password = \"geheim-123\"\n", "");
+        assert!(error(&qnap_without_password).contains("password: fehlt"));
+        for text in [missing, empty, with_user, with_password] {
+            assert!(!error(&text).contains("schluessel"), "{}", error(&text));
+        }
     }
 
     #[test]

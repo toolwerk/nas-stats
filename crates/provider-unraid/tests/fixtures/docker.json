@@ -1,0 +1,11 @@
+{
+  "data": {
+    "docker": {
+      "containers": [
+        { "id": "SERVERID:3f1c0aa1b2c3", "names": ["/container-1"], "state": "RUNNING" },
+        { "id": "SERVERID:9b2d0aa1b2c4", "names": ["/container-2"], "state": "EXITED" },
+        { "id": "SERVERID:7e4f0aa1b2c5", "names": [], "state": "paused" }
+      ]
+    }
+  }
+}

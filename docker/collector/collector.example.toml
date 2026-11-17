@@ -1,6 +1,6 @@
 # Konfiguration des Sammel-Containers von NAS Stats.
-# Kopieren nach collector.toml und anpassen. Die Datei enthält das Passwort
-# im Klartext: nur für den Container lesbar ablegen (siehe docs/collector.md).
+# Kopieren nach collector.toml und anpassen. Die Datei enthält Passwort bzw.
+# API-Key im Klartext: nur für den Container lesbar ablegen (siehe docs/collector.md).
 
 # Adresse der Schnittstelle für die Apps. Den Port im Router nicht freigeben.
 listen = "0.0.0.0:8743"
@@ -11,7 +11,7 @@ interval_minutes = 5
 [[nas]]
 # Eigene Kennung, nur Buchstaben, Ziffern, '.', '_' und '-'.
 id = "keller"
-# Derzeit nur "qnap".
+# "qnap" oder "unraid".
 provider = "qnap"
 # Adresse des NAS, nur https://. Vom Container aus gesehen, also die
 # IP-Adresse im Heimnetz, nicht "localhost".
@@ -22,3 +22,14 @@ fingerprint = "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00
 # Eigenes Konto nur für den Container (auf QNAP derzeit ein Admin-Konto).
 user = "nasstats"
 password = "hier-das-passwort"
+
+# Ein Unraid (7.2 oder neuer) statt mit Benutzer und Passwort mit einem
+# API-Key der Rolle VIEWER. Unraid muss per HTTPS erreichbar sein (SSL in
+# Unraid einschalten, siehe docs/collector.md). Zum Nutzen die Raute vor den
+# Zeilen entfernen.
+# [[nas]]
+# id = "tower"
+# provider = "unraid"
+# base_url = "https://192.168.1.30"
+# fingerprint = "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"
+# api_key = "hier-der-api-key"

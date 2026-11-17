@@ -341,6 +341,48 @@ async fn bearer_get_sends_the_token() {
 }
 
 #[tokio::test]
+async fn api_key_post_sends_the_key() {
+    let server = server(Answer::Status(200)).await;
+    let client = NasClient::new(&server.url(), server.fingerprint()).unwrap();
+    let body = client
+        .post_json_text_api_key("graphql", r#"{"query":"{ vars { name } }"}"#, "key123")
+        .await
+        .unwrap();
+    assert_eq!(body, "hallo");
+    let heads = server.heads();
+    assert!(heads[0].starts_with("POST /graphql "), "{}", heads[0]);
+    assert_eq!(header(&heads[0], "x-api-key"), Some("key123"));
+    assert_eq!(header(&heads[0], "content-type"), Some("application/json"));
+    // The plain call sends no key.
+    client.post_json_text("graphql", "{}").await.unwrap();
+    assert_eq!(header(&server.heads()[1], "x-api-key"), None);
+}
+
+#[tokio::test]
+async fn api_key_post_with_rejected_key_is_login_failed() {
+    let server = server(Answer::Status(401)).await;
+    let client = NasClient::new(&server.url(), server.fingerprint()).unwrap();
+    let err = client
+        .post_json_text_api_key("graphql", "{}", "falsch")
+        .await
+        .unwrap_err();
+    assert_eq!(err, ProviderError::LoginFailed);
+    assert_eq!(server.requests(), 1);
+}
+
+#[tokio::test]
+async fn api_key_with_a_line_break_is_not_sent() {
+    let server = server(Answer::Status(200)).await;
+    let client = NasClient::new(&server.url(), server.fingerprint()).unwrap();
+    let err = client
+        .post_json_text_api_key("graphql", "{}", "key\r\nX-Evil: 1")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ProviderError::Parse(_)), "{err:?}");
+    assert_eq!(server.requests(), 0);
+}
+
+#[tokio::test]
 async fn get_with_headers_sends_the_headers() {
     let server = server(Answer::Status(200)).await;
     let client = NasClient::new(&server.url(), server.fingerprint()).unwrap();

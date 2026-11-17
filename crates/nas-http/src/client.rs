@@ -141,6 +141,29 @@ impl NasClient {
         .await
     }
 
+    /// Like [`NasClient::post_json_text`] with the header `x-api-key:
+    /// <api_key>`, for the GraphQL API of Unraid (#35). A 401 is
+    /// [`ProviderError::LoginFailed`].
+    pub async fn post_json_text_api_key(
+        &self,
+        path: &str,
+        body: &str,
+        api_key: &str,
+    ) -> Result<String, ProviderError> {
+        let url = self.url(path)?;
+        let mut key = reqwest::header::HeaderValue::from_str(api_key)
+            .map_err(|_| ProviderError::Parse("API-Key enthält ungültige Zeichen".into()))?;
+        key.set_sensitive(true);
+        self.send(
+            self.http
+                .post(url)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .header("x-api-key", key)
+                .body(body.to_owned()),
+        )
+        .await
+    }
+
     /// `path` relative to the base URL; it may not lead to another origin.
     fn url(&self, path: &str) -> Result<Url, ProviderError> {
         let url = self
