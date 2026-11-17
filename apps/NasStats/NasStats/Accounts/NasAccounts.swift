@@ -99,7 +99,7 @@ final class NasAccounts {
                 do {
                     try core.addNas(config: config, user: user, password: password)
                 } catch {
-                    registrationErrors[id] = connectionErrorText(error)
+                    registrationErrors[id] = connectionErrorText(error, provider: account.provider)
                     throw error
                 }
             }
@@ -190,7 +190,7 @@ final class NasAccounts {
             try core.addNas(config: config, user: stored.account.user, password: stored.password)
         } catch {
             try? keychain.save(old)
-            registrationErrors[id] = connectionErrorText(error)
+            registrationErrors[id] = connectionErrorText(error, provider: stored.account.provider)
             throw error
         }
         registrationErrors[id] = nil
@@ -216,7 +216,7 @@ final class NasAccounts {
             try core.addNas(config: config, user: stored.account.user, password: stored.password)
         } catch {
             Self.log.error("NAS \(id.uuidString, privacy: .public) not registered: \(String(describing: error), privacy: .public)")
-            registrationErrors[id] = connectionErrorText(error)
+            registrationErrors[id] = connectionErrorText(error, provider: stored.account.provider)
         }
     }
 
