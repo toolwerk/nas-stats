@@ -7,6 +7,7 @@ use nas_model::ProviderError;
 use tokio::sync::Mutex;
 
 use crate::auth::{LoginAnswer, encode_password, parse_login};
+use crate::backups::SeenStatuses;
 use crate::containers::CsSlot;
 use crate::system::FirmwareCache;
 use crate::transport::Transport;
@@ -40,6 +41,9 @@ pub struct QnapClient<T: Transport> {
     /// Grows with every user action that changes the account; a remembered
     /// Container Station state of an older generation is void.
     pub(crate) cs_generation: AtomicU64,
+    /// Unknown statuses of Hybrid Backup Sync already logged (see
+    /// `backups.rs`).
+    pub(crate) hbs_statuses: SeenStatuses,
 }
 
 impl<T: Transport> fmt::Debug for QnapClient<T> {
@@ -64,6 +68,7 @@ impl<T: Transport> QnapClient<T> {
             firmware_cache: FirmwareCache::default(),
             container_station: Mutex::new(CsSlot::default()),
             cs_generation: AtomicU64::new(0),
+            hbs_statuses: SeenStatuses::default(),
         }
     }
 

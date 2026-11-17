@@ -14,6 +14,9 @@
 //! (`None`) instead of guessing an error. The schedule is a cron line in
 //! the time zone of the NAS, so the next run stays unknown as well.
 
+use std::collections::{BTreeSet, HashSet};
+use std::sync::{Mutex, PoisonError};
+
 use nas_model::{BackupKind, BackupResult, BackupTask, ProviderError};
 use serde_json::Value;
 
@@ -24,6 +27,10 @@ const JOBS_PATH: &str = "/cc3/v1/users/system/jobs";
 
 /// The one status of HBS 3 known to mean a successful run.
 const STATUS_FINISHED: &str = "Finished";
+
+/// Unknown statuses of HBS 3 already logged by one client, so a job that
+/// keeps such a status is logged once, not on every poll.
+pub(crate) type SeenStatuses = Mutex<HashSet<String>>;
 
 impl<T: Transport> QnapClient<T> {
     /// Reads the enabled backup jobs of Hybrid Backup Sync 3 with their
@@ -60,7 +67,16 @@ impl<T: Transport> QnapClient<T> {
             Err(e) => return Err(e),
         };
         match serde_json::from_str::<Value>(&body) {
-            Ok(json) => Ok(parse_jobs(&json)),
+            Ok(json) => {
+                let mut unknown = BTreeSet::new();
+                let tasks = parse_jobs(&json, &mut unknown);
+                for status in first_seen(&self.hbs_statuses, unknown) {
+                    log::info!(
+                        "QNAP Hybrid Backup Sync status {status:?} is unknown, leaving it open"
+                    );
+                }
+                Ok(tasks)
+            }
             Err(_) => {
                 log::warn!("QNAP Hybrid Backup Sync answered no JSON, no backups");
                 Ok(Vec::new())
@@ -72,18 +88,31 @@ impl<T: Transport> QnapClient<T> {
 /// The backup jobs of a `jobs` answer. Left out: jobs without id or name,
 /// jobs of another kind than `backup` (a restore would warn as overdue) and
 /// disabled jobs (they would warn as overdue for good). A job without
-/// `enable` stays.
-pub(crate) fn parse_jobs(json: &Value) -> Vec<BackupTask> {
+/// `enable` stays. Statuses other than `Finished` of the kept jobs go to
+/// `unknown`.
+pub(crate) fn parse_jobs(json: &Value, unknown: &mut BTreeSet<String>) -> Vec<BackupTask> {
     let Some(jobs) = json.get("jobs").and_then(Value::as_array) else {
         return Vec::new();
     };
     if json.get("has_more").and_then(Value::as_bool) == Some(true) {
         log::info!("QNAP Hybrid Backup Sync has more jobs than one page, reading the first");
     }
-    jobs.iter().filter_map(parse_job).collect()
+    jobs.iter()
+        .filter_map(|job| parse_job(job, unknown))
+        .collect()
 }
 
-fn parse_job(job: &Value) -> Option<BackupTask> {
+/// The statuses of `unknown` not logged before by this client; they count
+/// as logged from now on.
+fn first_seen(seen: &SeenStatuses, unknown: BTreeSet<String>) -> Vec<String> {
+    let mut seen = seen.lock().unwrap_or_else(PoisonError::into_inner);
+    unknown
+        .into_iter()
+        .filter(|status| seen.insert(status.clone()))
+        .collect()
+}
+
+fn parse_job(job: &Value, unknown: &mut BTreeSet<String>) -> Option<BackupTask> {
     let id = text(job, "_id")?;
     let name = text(job, "name")?;
     if job.get("job_type").and_then(Value::as_str) != Some("backup") {
@@ -103,7 +132,7 @@ fn parse_job(job: &Value) -> Option<BackupTask> {
     let last_result = match status {
         Some(STATUS_FINISHED) => Some(BackupResult::Ok),
         Some(other) => {
-            log::info!("QNAP Hybrid Backup Sync status {other:?} is unknown, leaving it open");
+            unknown.insert(other.to_owned());
             None
         }
         None => None,
@@ -149,5 +178,26 @@ mod tests {
         );
         assert_eq!(unix_seconds(""), None);
         assert_eq!(unix_seconds("gestern"), None);
+    }
+
+    #[test]
+    fn an_unknown_status_is_logged_once_per_client() {
+        let json: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/hbs_jobs_mixed.json"))
+                .expect("fixture");
+        let seen = SeenStatuses::default();
+
+        let mut unknown = BTreeSet::new();
+        parse_jobs(&json, &mut unknown);
+        // Left-out jobs (disabled, restore, without id) do not count.
+        assert_eq!(unknown, BTreeSet::from(["Running".to_owned()]));
+        assert_eq!(first_seen(&seen, unknown), vec!["Running".to_owned()]);
+
+        let mut again = BTreeSet::new();
+        parse_jobs(&json, &mut again);
+        assert!(first_seen(&seen, again).is_empty());
+
+        let other = BTreeSet::from(["Failed".to_owned(), "Running".to_owned()]);
+        assert_eq!(first_seen(&seen, other), vec!["Failed".to_owned()]);
     }
 }
