@@ -2,9 +2,9 @@ import Foundation
 
 /// German text for an error of the add dialog: from the core, the address
 /// check or the keychain.
-func connectionErrorText(_ error: any Error) -> String {
+func connectionErrorText(_ error: any Error, provider: ProviderKind? = nil) -> String {
     if let error = error as? FfiError {
-        return text(for: error)
+        return text(for: error, provider: provider)
     }
     if let error = error as? NasAddressError {
         return text(for: error)
@@ -16,7 +16,18 @@ func connectionErrorText(_ error: any Error) -> String {
     return "Verbindung fehlgeschlagen: \(error.localizedDescription)"
 }
 
-private func text(for error: FfiError) -> String {
+private func text(for error: FfiError, provider: ProviderKind?) -> String {
+    if provider == .unraid {
+        switch error {
+        case .LoginFailed:
+            return "Der API-Key ist falsch oder abgelaufen. NAS Stats versucht es "
+                + "nicht von selbst erneut."
+        case .PermissionDenied:
+            return "Dem API-Key fehlen Rechte. Legen Sie einen API-Key mit der Rolle „VIEWER“ an."
+        default:
+            break
+        }
+    }
     switch error {
     case .LoginFailed:
         return "Benutzername oder Passwort ist falsch. NAS Stats versucht es "

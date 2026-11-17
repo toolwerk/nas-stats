@@ -97,8 +97,10 @@ struct NasSettingsView: View {
                 LabeledContent("Modell") {
                     Text(verbatim: entry?.displayModel ?? account.model ?? String(localized: "unbekannt"))
                 }
-                LabeledContent("Benutzer") {
-                    Text(verbatim: account.user)
+                if !account.user.isEmpty {
+                    LabeledContent("Benutzer") {
+                        Text(verbatim: account.user)
+                    }
                 }
             }
             if let entry, entry.blocked || entry.localError != nil {
@@ -181,8 +183,14 @@ struct NasSettingsView: View {
         } header: {
             Text("Zertifikat")
         } footer: {
-            Text("Prüfen Sie den neuen Fingerabdruck in QTS unter Systemsteuerung › Sicherheit › Zertifikat, bevor Sie ihm vertrauen.")
+            Text(certificateFooter(for: account))
         }
+    }
+
+    /// New fingerprint to compare, with the place of the vendor.
+    private func certificateFooter(for account: NasAccount) -> String {
+        let place = (account.provider ?? .qnap).certificateHint
+        return place + " " + String(localized: "Vertrauen Sie dem neuen Zertifikat erst danach.")
     }
 
     private static func same(_ lhs: String, _ rhs: String) -> Bool {
@@ -201,7 +209,7 @@ struct NasSettingsView: View {
             try store.rename(id: id, to: name)
             errorText = nil
         } catch {
-            errorText = connectionErrorText(error)
+            errorText = connectionErrorText(error, provider: account.provider)
             name = account.name
         }
     }
@@ -240,7 +248,7 @@ struct NasSettingsView: View {
             do {
                 try await action()
             } catch {
-                errorText = connectionErrorText(error)
+                errorText = connectionErrorText(error, provider: account?.provider)
             }
         }
     }
@@ -306,20 +314,22 @@ private struct ChangeAccessView: View {
     private var form: some View {
         Form {
             Section {
-                TextField("Benutzer", text: $user)
-                    .autocorrectionDisabled()
-                    .textContentType(.username)
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    #endif
-                SecureField("Passwort", text: $password)
+                if vendor.usesUser {
+                    TextField("Benutzer", text: $user)
+                        .autocorrectionDisabled()
+                        .textContentType(.username)
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                }
+                SecureField(vendor.secretLabel, text: $password)
                     .textContentType(.password)
             } footer: {
                 if let errorText {
                     Text(errorText)
                         .foregroundStyle(.red)
                 } else if isRefused {
-                    Text("Das NAS hat diese Zugangsdaten abgelehnt. Ändern Sie Benutzer oder Passwort, um es erneut zu versuchen.")
+                    Text(vendor.refusedHint)
                         .foregroundStyle(.red)
                 }
             }
@@ -332,8 +342,10 @@ private struct ChangeAccessView: View {
         .onAppear { user = account.user }
     }
 
+    private var vendor: ProviderKind { account.provider ?? .qnap }
+
     private var trimmedUser: String {
-        user.trimmingCharacters(in: .whitespacesAndNewlines)
+        vendor.usesUser ? user.trimmingCharacters(in: .whitespacesAndNewlines) : ""
     }
 
     private var isRefused: Bool {
@@ -341,7 +353,7 @@ private struct ChangeAccessView: View {
     }
 
     private var canSave: Bool {
-        !busy && !trimmedUser.isEmpty && !password.isEmpty && !isRefused
+        !busy && (!vendor.usesUser || !trimmedUser.isEmpty) && !password.isEmpty && !isRefused
     }
 
     private func save() {
@@ -356,7 +368,7 @@ private struct ChangeAccessView: View {
                     id: account.id, user: credentials.user, password: credentials.password
                 )
             } catch {
-                errorText = connectionErrorText(error)
+                errorText = connectionErrorText(error, provider: account.provider)
                 return
             }
             // The core logs in with the query after the change; a refused
@@ -370,7 +382,7 @@ private struct ChangeAccessView: View {
                     // Not a wrong password: say how to unblock the address,
                     // and do not send the same access again meanwhile.
                     refused = credentials
-                    errorText = connectionErrorText(FfiError.IpBlocked)
+                    errorText = connectionErrorText(FfiError.IpBlocked, provider: account.provider)
                 default:
                     errorText = entry.localError ?? entry.problem?.message
                         ?? String(localized: "Das NAS bleibt angehalten.")

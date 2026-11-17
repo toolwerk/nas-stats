@@ -734,13 +734,17 @@ final class NasStore {
         // Before the answers, so `record` knows whether it may notify.
         await notifier?.refreshAuthorization()
         let core = accounts.core
+        let providers = Dictionary(
+            uniqueKeysWithValues: accounts.accounts.map { ($0.id, $0.provider) }
+        )
         await withTaskGroup(of: (UUID, NasState?, String?).self) { group in
             for id in ids {
+                let provider = providers[id] ?? nil
                 group.addTask {
                     do {
                         return (id, try await core.refresh(nasId: id.uuidString), nil)
                     } catch {
-                        return (id, nil, connectionErrorText(error))
+                        return (id, nil, connectionErrorText(error, provider: provider))
                     }
                 }
             }

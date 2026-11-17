@@ -13,6 +13,7 @@ struct NasAccount: Codable, Identifiable, Sendable, Equatable {
     var baseUrl: String
     /// SHA-256 fingerprint the user confirmed, `AB:CD:…`.
     var fingerprint: String
+    /// Empty for a vendor with an API key instead of a user (Unraid).
     var user: String
     /// Model from the test query, `nil` if the NAS did not report it.
     var model: String?
@@ -20,15 +21,22 @@ struct NasAccount: Codable, Identifiable, Sendable, Equatable {
     var syncsViaICloud: Bool
 
     static let qnapKey = "qnap"
+    static let unraidKey = "unraid"
+
+    /// The vendor for the core; `nil` for a vendor this version cannot
+    /// talk to.
+    var provider: ProviderKind? {
+        switch providerKey {
+        case Self.qnapKey: .qnap
+        case Self.unraidKey: .unraid
+        default: nil
+        }
+    }
 
     /// Configuration for the core; `nil` for a vendor this version cannot
     /// talk to.
     var config: NasConfig? {
-        let provider: ProviderKind
-        switch providerKey {
-        case Self.qnapKey: provider = .qnap
-        default: return nil
-        }
+        guard let provider else { return nil }
         return NasConfig(
             id: id.uuidString,
             provider: provider,
@@ -41,5 +49,6 @@ struct NasAccount: Codable, Identifiable, Sendable, Equatable {
 /// Content of one keychain entry: the whole NAS and its password.
 struct StoredAccount: Codable, Sendable, Equatable {
     var account: NasAccount
+    /// Password, or the API key for a vendor without user and password.
     var password: String
 }

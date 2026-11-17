@@ -45,7 +45,7 @@ struct AccountsTests {
             .PermissionDenied,
             .Unreachable(detail: "refused"),
         ]
-        let texts = errors.map(connectionErrorText)
+        let texts = errors.map { connectionErrorText($0) }
         #expect(texts.allSatisfy { !$0.isEmpty })
         #expect(Set(texts).count == errors.count)
         #expect(connectionErrorText(FfiError.PermissionDenied).contains("System Monitoring"))
@@ -55,7 +55,7 @@ struct AccountsTests {
     }
 
     @Test func addressErrorsHaveTexts() {
-        let texts = [NasAddressError.empty, .notHTTPS, .invalid].map(connectionErrorText)
+        let texts = [NasAddressError.empty, .notHTTPS, .invalid].map { connectionErrorText($0) }
         #expect(Set(texts).count == 3)
         #expect(texts.allSatisfy { !$0.isEmpty })
     }
@@ -84,6 +84,33 @@ struct AccountsTests {
         #expect(config.provider == .qnap)
         #expect(config.baseUrl == account.baseUrl)
         #expect(config.fingerprint == account.fingerprint)
+    }
+
+    @Test func unraidAccountGivesACoreConfig() throws {
+        var account = account()
+        account.providerKey = NasAccount.unraidKey
+        account.user = ""
+        #expect(account.provider == .unraid)
+        #expect(try #require(account.config).provider == .unraid)
+    }
+
+    @Test func onlyQnapAndUnraidAreSelectable() {
+        let selectable = [ProviderKind.qnap, .synology, .trueNas, .unraid].filter(\.isSelectable)
+        #expect(selectable == [.qnap, .unraid])
+        #expect(selectable.allSatisfy { $0.accountKey != nil })
+        #expect(ProviderKind.unraid.usesUser == false)
+        #expect(ProviderKind.qnap.usesUser)
+    }
+
+    @Test func unraidErrorsSpeakOfTheApiKey() {
+        let login = connectionErrorText(FfiError.LoginFailed, provider: .unraid)
+        let denied = connectionErrorText(FfiError.PermissionDenied, provider: .unraid)
+        #expect(login.contains("API-Key"))
+        #expect(denied.contains("VIEWER"))
+        #expect(login != connectionErrorText(FfiError.LoginFailed))
+        #expect(denied != connectionErrorText(FfiError.PermissionDenied))
+        // Other errors keep the shared text.
+        #expect(connectionErrorText(FfiError.Timeout, provider: .unraid) == connectionErrorText(FfiError.Timeout))
     }
 
     @Test func unknownProviderGivesNoConfig() {

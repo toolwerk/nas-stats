@@ -15,6 +15,7 @@ struct AddNasView: View {
     @Environment(\.dismiss) private var dismiss
     #endif
 
+    @State private var vendor: ProviderKind = .qnap
     @State private var address = ""
     @State private var name = ""
     @State private var user = ""
@@ -36,7 +37,7 @@ struct AddNasView: View {
         let password: String
     }
 
-    private static let vendors = ["Synology", "TrueNAS", "Unraid"]
+    private static let vendors: [ProviderKind] = [.qnap, .unraid, .synology, .trueNas]
 
     var body: some View {
         #if os(macOS)
@@ -81,9 +82,16 @@ struct AddNasView: View {
             Section {
                 LabeledContent("Hersteller") {
                     HStack(spacing: 6) {
-                        chip("QNAP", selected: true)
-                        ForEach(Self.vendors, id: \.self) { vendor in
-                            chip("\(vendor) · folgt", selected: false)
+                        ForEach(Self.vendors, id: \.self) { kind in
+                            if kind.isSelectable {
+                                Button { vendor = kind } label: {
+                                    chip(kind.displayName, selected: vendor == kind)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(busy)
+                            } else {
+                                chip("\(kind.displayName) · folgt", selected: false)
+                            }
                         }
                     }
                 }
@@ -100,16 +108,18 @@ struct AddNasView: View {
                         .foregroundStyle(.secondary)
                 }
                 TextField("Name", text: $name, prompt: Text("optional"))
-                TextField("Benutzer", text: $user)
-                    .autocorrectionDisabled()
-                    .textContentType(.username)
-                    #if os(iOS)
-                    .textInputAutocapitalization(.never)
-                    #endif
-                SecureField("Passwort", text: $password)
+                if vendor.usesUser {
+                    TextField("Benutzer", text: $user)
+                        .autocorrectionDisabled()
+                        .textContentType(.username)
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                }
+                SecureField(vendor.secretLabel, text: $password)
                     .textContentType(.password)
             } footer: {
-                Text("Empfohlen: eigenes Konto mit der Rolle „System Monitoring“ (ab QTS 5.1), ohne 2-Schritt-Bestätigung. NAS Stats liest nur.")
+                Text(vendor.accessHint)
             }
             .disabled(busy)
 
@@ -118,7 +128,7 @@ struct AddNasView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Zertifikat bestätigen")
                             .font(.headline)
-                        Text("Prüfen Sie den Fingerabdruck in QTS unter Systemsteuerung › Sicherheit › Zertifikat.")
+                        Text(vendor.certificateHint)
                             .font(.footnote)
                         Text(verbatim: "SHA-256 \(fingerprint)")
                             .font(.footnote.monospaced())
@@ -142,7 +152,7 @@ struct AddNasView: View {
                         .font(.footnote)
                         .foregroundStyle(.red)
                 } else if credentialsRefused {
-                    Text("Das NAS hat diese Zugangsdaten abgelehnt. Ändern Sie Benutzer oder Passwort, um es erneut zu versuchen.")
+                    Text(vendor.refusedHint)
                         .font(.footnote)
                         .foregroundStyle(.red)
                 }
@@ -160,6 +170,13 @@ struct AddNasView: View {
         .onChange(of: address) {
             certificate = nil
             errorText = nil
+        }
+        .onChange(of: vendor) {
+            // The secret of one vendor is no secret of another; the
+            // certificate belongs to the address, not to the vendor.
+            password = ""
+            errorText = nil
+            refusedCredentials = nil
         }
     }
 
@@ -189,12 +206,14 @@ struct AddNasView: View {
         }
     }
 
+    /// Empty for a vendor with an API key instead of a user.
     private var trimmedUser: String {
-        user.trimmingCharacters(in: .whitespacesAndNewlines)
+        vendor.usesUser ? user.trimmingCharacters(in: .whitespacesAndNewlines) : ""
     }
 
     private var canFetch: Bool {
-        !busy && normalizedAddress != nil && !trimmedUser.isEmpty && !password.isEmpty
+        !busy && normalizedAddress != nil && (!vendor.usesUser || !trimmedUser.isEmpty)
+            && !password.isEmpty
     }
 
     /// The fingerprint, as long as it belongs to the current address.
@@ -226,7 +245,7 @@ struct AddNasView: View {
                 let fingerprint = try await fetchFingerprint(baseUrl: baseUrl)
                 certificate = (baseUrl, fingerprint)
             } catch {
-                errorText = connectionErrorText(error)
+                errorText = connectionErrorText(error, provider: vendor)
             }
         }
     }
@@ -236,10 +255,12 @@ struct AddNasView: View {
         else { return }
         busy = true
         errorText = nil
+        guard let providerKey = vendor.accountKey else { return }
+        let vendor = vendor
         let draft = NasAccount(
             id: UUID(),
             name: "",
-            providerKey: NasAccount.qnapKey,
+            providerKey: providerKey,
             baseUrl: baseUrl,
             fingerprint: fingerprint,
             user: trimmedUser,
@@ -282,7 +303,7 @@ struct AddNasView: View {
                 default:
                     break
                 }
-                errorText = connectionErrorText(error)
+                errorText = connectionErrorText(error, provider: vendor)
             }
         }
     }
