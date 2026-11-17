@@ -1244,6 +1244,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "provider-synology"
+version = "0.1.0"
+dependencies = [
+ "nas-http",
+ "nas-model",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "psl-types"
 version = "2.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"

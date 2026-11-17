@@ -1,0 +1,19 @@
+[package]
+name = "provider-synology"
+description = "Synology DSM provider for NAS Stats: API catalog over SYNO.API.Info, login over SYNO.API.Auth with a session, a one-time second factor with a device token and a hard stop after a rejected login or a blocked IP."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+nas-model = { workspace = true }
+nas-http = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true
