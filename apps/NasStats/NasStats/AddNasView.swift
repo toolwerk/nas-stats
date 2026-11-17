@@ -32,6 +32,7 @@ struct AddNasView: View {
     @State private var attempt = UUID()
 
     private struct Credentials: Equatable {
+        let vendor: ProviderKind
         let baseUrl: String
         let user: String
         let password: String
@@ -173,10 +174,10 @@ struct AddNasView: View {
         }
         .onChange(of: vendor) {
             // The secret of one vendor is no secret of another; the
-            // certificate belongs to the address, not to the vendor.
+            // certificate belongs to the address, not to the vendor. A
+            // refusal stays: it names its vendor.
             password = ""
             errorText = nil
-            refusedCredentials = nil
         }
     }
 
@@ -211,9 +212,14 @@ struct AddNasView: View {
         vendor.usesUser ? user.trimmingCharacters(in: .whitespacesAndNewlines) : ""
     }
 
+    /// The password as typed; an API key without the blanks a paste adds.
+    private var secret: String {
+        vendor.usesUser ? password : password.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var canFetch: Bool {
         !busy && normalizedAddress != nil && (!vendor.usesUser || !trimmedUser.isEmpty)
-            && !password.isEmpty
+            && !secret.isEmpty
     }
 
     /// The fingerprint, as long as it belongs to the current address.
@@ -225,7 +231,7 @@ struct AddNasView: View {
     private var credentialsRefused: Bool {
         guard let refusedCredentials, let baseUrl = normalizedAddress else { return false }
         return refusedCredentials
-            == Credentials(baseUrl: baseUrl, user: trimmedUser, password: password)
+            == Credentials(vendor: vendor, baseUrl: baseUrl, user: trimmedUser, password: secret)
     }
 
     private var canConnect: Bool {
@@ -253,9 +259,9 @@ struct AddNasView: View {
     private func connect() {
         guard canConnect, let baseUrl = normalizedAddress, let fingerprint = currentFingerprint
         else { return }
+        guard let providerKey = vendor.accountKey else { return }
         busy = true
         errorText = nil
-        guard let providerKey = vendor.accountKey else { return }
         let vendor = vendor
         let draft = NasAccount(
             id: UUID(),
@@ -268,7 +274,7 @@ struct AddNasView: View {
             // The store sets it from the setting of the settings (#113).
             syncsViaICloud: false
         )
-        let password = password
+        let password = secret
         let typedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let started = attempt
         Task {
@@ -293,9 +299,9 @@ struct AddNasView: View {
                 close()
             } catch {
                 switch error as? FfiError {
-                case .LoginFailed?, .SecondFactorRequired?, .IpBlocked?:
+                case .LoginFailed?, .SecondFactorRequired?, .IpBlocked?, .PermissionDenied?:
                     refusedCredentials = Credentials(
-                        baseUrl: baseUrl, user: account.user, password: password
+                        vendor: vendor, baseUrl: baseUrl, user: account.user, password: password
                     )
                 case .CertificateChanged?:
                     // Offers "Zertifikat abrufen" again.

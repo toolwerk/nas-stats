@@ -344,21 +344,26 @@ private struct ChangeAccessView: View {
 
     private var vendor: ProviderKind { account.provider ?? .qnap }
 
+    /// The password as typed; an API key without the blanks a paste adds.
+    private var secret: String {
+        vendor.usesUser ? password : password.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var trimmedUser: String {
         vendor.usesUser ? user.trimmingCharacters(in: .whitespacesAndNewlines) : ""
     }
 
     private var isRefused: Bool {
-        refused == Credentials(user: trimmedUser, password: password)
+        refused == Credentials(user: trimmedUser, password: secret)
     }
 
     private var canSave: Bool {
-        !busy && (!vendor.usesUser || !trimmedUser.isEmpty) && !password.isEmpty && !isRefused
+        !busy && (!vendor.usesUser || !trimmedUser.isEmpty) && !secret.isEmpty && !isRefused
     }
 
     private func save() {
         guard canSave else { return }
-        let credentials = Credentials(user: trimmedUser, password: password)
+        let credentials = Credentials(user: trimmedUser, password: secret)
         busy = true
         errorText = nil
         Task {
@@ -376,7 +381,7 @@ private struct ChangeAccessView: View {
             let entry = store.entries.first { $0.id == account.id.uuidString }
             if let entry, entry.blocked {
                 switch entry.problem?.kind {
-                case .loginFailed?, .secondFactorRequired?:
+                case .loginFailed?, .secondFactorRequired?, .permissionDenied?:
                     refused = credentials
                 case .ipBlocked?:
                     // Not a wrong password: say how to unblock the address,
