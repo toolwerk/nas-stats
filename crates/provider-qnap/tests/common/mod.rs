@@ -80,6 +80,32 @@ impl Transport for &FakeTransport {
         })
     }
 
+    /// Recorded as `GET` with each header as param `header:<name>` after
+    /// the query.
+    fn get_text_with_headers<'a>(
+        &'a self,
+        path: &'a str,
+        query: &'a [(&'a str, &'a str)],
+        headers: &'a [(&'a str, &'a str)],
+    ) -> BoxFuture<'a, Result<String, ProviderError>> {
+        let names: Vec<String> = headers.iter().map(|(k, _)| format!("header:{k}")).collect();
+        let mut params: Vec<(&str, &str)> = query.to_vec();
+        params.extend(
+            names
+                .iter()
+                .map(String::as_str)
+                .zip(headers.iter().map(|(_, v)| *v)),
+        );
+        let result = self.answer("GET", path, &params);
+        let slow = self.slow;
+        Box::pin(async move {
+            if slow {
+                tokio::task::yield_now().await;
+            }
+            result
+        })
+    }
+
     fn post_form_text<'a>(
         &'a self,
         path: &'a str,

@@ -14,6 +14,14 @@ pub trait Transport: Send + Sync {
         query: &'a [(&'a str, &'a str)],
     ) -> BoxFuture<'a, Result<String, ProviderError>>;
 
+    /// `GET <base><path>?<query>` with extra request headers.
+    fn get_text_with_headers<'a>(
+        &'a self,
+        path: &'a str,
+        query: &'a [(&'a str, &'a str)],
+        headers: &'a [(&'a str, &'a str)],
+    ) -> BoxFuture<'a, Result<String, ProviderError>>;
+
     /// `POST <base><path>` with a URL-encoded form.
     fn post_form_text<'a>(
         &'a self,
@@ -36,6 +44,15 @@ impl Transport for NasClient {
         query: &'a [(&'a str, &'a str)],
     ) -> BoxFuture<'a, Result<String, ProviderError>> {
         Box::pin(NasClient::get_text(self, path, query))
+    }
+
+    fn get_text_with_headers<'a>(
+        &'a self,
+        path: &'a str,
+        query: &'a [(&'a str, &'a str)],
+        headers: &'a [(&'a str, &'a str)],
+    ) -> BoxFuture<'a, Result<String, ProviderError>> {
+        Box::pin(NasClient::get_text_with_headers(self, path, query, headers))
     }
 
     fn post_form_text<'a>(
