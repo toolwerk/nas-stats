@@ -235,10 +235,7 @@ mod tests {
                 "https://nas-büro.local/",
                 "wss://xn--nas-bro-r2a.local/api/current",
             ),
-            (
-                "https://leser@nas.local/",
-                "wss://nas.local/api/current",
-            ),
+            ("https://leser@nas.local/", "wss://nas.local/api/current"),
             (
                 "https://proxy.lan/truenas//",
                 "wss://proxy.lan/truenas/api/current",

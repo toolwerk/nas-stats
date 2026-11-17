@@ -313,6 +313,28 @@ mod tests {
     #[test]
     fn unknown_signature_algorithm_has_no_binding() {
         assert_eq!(channel_binding(b"kein Zertifikat"), None);
+        // RFC 5929 names no hash for Ed25519, so there is no binding.
+        let key =
+            rcgen::KeyPair::generate_for(&rcgen::PKCS_ED25519).unwrap_or_else(|e| panic!("{e}"));
+        let cert = rcgen::CertificateParams::new(vec!["truenas.example".to_owned()])
+            .and_then(|p| p.self_signed(&key))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(channel_binding(cert.der()), None);
+    }
+
+    #[test]
+    fn signature_hash_picks_the_binding_hash() {
+        for (alg, len) in [
+            (&rcgen::PKCS_ECDSA_P256_SHA256, 32),
+            (&rcgen::PKCS_ECDSA_P384_SHA384, 48),
+        ] {
+            let key = rcgen::KeyPair::generate_for(alg).unwrap_or_else(|e| panic!("{e}"));
+            let cert = rcgen::CertificateParams::new(vec!["truenas.example".to_owned()])
+                .and_then(|p| p.self_signed(&key))
+                .unwrap_or_else(|e| panic!("{e}"));
+            let binding = channel_binding(cert.der()).unwrap_or_default();
+            assert_eq!(binding.len(), len, "{alg:?}");
+        }
     }
 
     fn client() -> ClientFirst {

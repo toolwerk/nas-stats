@@ -227,6 +227,8 @@ enum Reply {
     Noise(Vec<Value>, Value),
     Silent,
     Close,
+    /// A text frame that is not JSON.
+    Garbage,
 }
 
 impl Connection {
@@ -298,6 +300,7 @@ impl Connection {
             })),
             "test.silent" => Reply::Silent,
             "test.close" => Reply::Close,
+            "test.garbage" => Reply::Garbage,
             _ => Reply::Error(json!({"code": -32601, "message": "Method does not exist"})),
         }
     }
@@ -423,6 +426,9 @@ async fn send(ws: &mut Ws, id: &Value, reply: Reply) -> bool {
                 .await;
         }
         Reply::Silent => {}
+        Reply::Garbage => {
+            let _ = ws.send(Message::text("kein JSON {")).await;
+        }
         Reply::Close => {
             let _ = ws.close(None).await;
             return true;

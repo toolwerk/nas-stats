@@ -55,6 +55,14 @@ async fn silent_server_is_timeout() {
 }
 
 #[tokio::test]
+async fn answer_that_is_not_json_is_parse() {
+    let server = start(Config::new(Version::V25)).await;
+    let mut session = session(&server, Duration::from_secs(5)).await;
+    let err = session.call("test.garbage", json!([])).await.unwrap_err();
+    assert!(matches!(err, ProviderError::Parse(_)), "{err:?}");
+}
+
+#[tokio::test]
 async fn closed_connection_is_unreachable() {
     let server = start(Config::new(Version::V25)).await;
     let mut session = session(&server, Duration::from_secs(5)).await;
