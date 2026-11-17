@@ -240,7 +240,16 @@ impl<T: Transport> SynologyClient<T> {
                 ("method", "query"),
                 ("query", query.as_str()),
             ];
-            let body = self.transport.get_text(INFO_PATH, &params).await?;
+            let body = match self.transport.get_text(INFO_PATH, &params).await {
+                Ok(body) => body,
+                // HTTP 403 or 429: the web server refuses or throttles this
+                // address, like on the login; stop until the user acts.
+                Err(ProviderError::PermissionDenied | ProviderError::Http(429)) => {
+                    state.blocked = Some(ProviderError::IpBlocked);
+                    return Err(ProviderError::IpBlocked);
+                }
+                Err(e) => return Err(e),
+            };
             state.catalog = Some(parse_catalog(&body)?);
         }
         state

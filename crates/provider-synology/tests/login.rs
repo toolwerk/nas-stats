@@ -621,3 +621,24 @@ async fn server_errors_on_login_do_not_block() {
     assert_eq!(info(&client).await, Err(ProviderError::Http(503)));
     assert_eq!(info(&client).await, Ok(data()));
 }
+
+#[tokio::test]
+async fn http_403_and_429_on_the_catalog_block_like_an_ip_block() {
+    for status in [ProviderError::PermissionDenied, ProviderError::Http(429)] {
+        let fake = FakeTransport::new(vec![Err(status.clone()), Ok(API_INFO), Ok(LOGIN_OK)]);
+        let client = SynologyClient::new(&fake, "admin", "pw", None);
+        assert_eq!(
+            info(&client).await,
+            Err(ProviderError::IpBlocked),
+            "{status}"
+        );
+        assert_eq!(
+            info(&client).await,
+            Err(ProviderError::IpBlocked),
+            "{status}"
+        );
+        assert_eq!(calls(&fake).len(), 1, "{status}");
+        // The user action asks again.
+        assert_eq!(client.login().await, Ok(()), "{status}");
+    }
+}
