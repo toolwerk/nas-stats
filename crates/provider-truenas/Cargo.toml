@@ -16,6 +16,7 @@ ring = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["time", "rt"] }
 tokio-tungstenite = { workspace = true }
+url = { workspace = true }
 x509-parser = { workspace = true }
 
 [dev-dependencies]

@@ -64,25 +64,25 @@ impl std::fmt::Debug for Session {
 }
 
 /// `wss://<host[:port]><path without trailing />/api/current` for an
-/// `https://` address.
+/// `https://` address. The address is read like `nas_http` reads it, so an
+/// international host name arrives as Punycode and user info, query and
+/// fragment are left out.
 pub(crate) fn endpoint_url(base_url: &str) -> Result<String, ProviderError> {
-    let scheme = "https://";
-    let rest = base_url
-        .get(..scheme.len())
-        .filter(|s| s.eq_ignore_ascii_case(scheme))
-        .map(|_| &base_url[scheme.len()..])
-        .ok_or_else(|| ProviderError::Parse("Adresse des NAS: nur https:// ist erlaubt".into()))?;
-    let rest = rest.split(['?', '#']).next().unwrap_or_default();
-    let (authority, path) = match rest.find('/') {
-        Some(slash) => rest.split_at(slash),
-        None => (rest, ""),
-    };
-    if authority.is_empty() {
-        return Err(ProviderError::Parse("Adresse des NAS: Host fehlt".into()));
+    let base = url::Url::parse(base_url)
+        .map_err(|e| ProviderError::Parse(format!("Adresse des NAS: {e}")))?;
+    if base.scheme() != "https" {
+        return Err(ProviderError::Parse(
+            "Adresse des NAS: nur https:// ist erlaubt".into(),
+        ));
     }
+    let host = base
+        .host_str()
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| ProviderError::Parse("Adresse des NAS: Host fehlt".into()))?;
+    let port = base.port().map(|p| format!(":{p}")).unwrap_or_default();
     Ok(format!(
-        "wss://{authority}{}{ENDPOINT}",
-        path.trim_end_matches('/')
+        "wss://{host}{port}{}{ENDPOINT}",
+        base.path().trim_end_matches('/')
     ))
 }
 
@@ -227,8 +227,17 @@ mod tests {
                 "wss://nas.local:8443/api/current",
             ),
             (
-                "https://[2001:db8::1]:443",
-                "wss://[2001:db8::1]:443/api/current",
+                "https://[2001:db8::1]:8443",
+                "wss://[2001:db8::1]:8443/api/current",
+            ),
+            ("https://nas.local:443/", "wss://nas.local/api/current"),
+            (
+                "https://nas-büro.local/",
+                "wss://xn--nas-bro-r2a.local/api/current",
+            ),
+            (
+                "https://leser@nas.local/",
+                "wss://nas.local/api/current",
             ),
             (
                 "https://proxy.lan/truenas//",
