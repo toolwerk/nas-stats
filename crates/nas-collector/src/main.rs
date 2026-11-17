@@ -29,8 +29,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use nas_http::NasClient;
-use nas_model::Thresholds;
+use nas_model::{Provider, ProviderKind, Thresholds};
 use provider_qnap::{QnapClient, QnapProvider};
+use provider_unraid::{UnraidClient, UnraidProvider};
 use stats_core::{Clock, HistoryStore, Planner, PollSink, PollState, archive_poll, system_clock};
 use tokio::sync::Notify;
 
@@ -185,15 +186,46 @@ impl PollSink for Sink {
     }
 }
 
+/// A connected NAS: its provider, and how its session ends.
+enum Connected {
+    Qnap(Arc<QnapProvider<NasClient>>),
+    /// No session: the API key needs no logout.
+    Unraid(Arc<UnraidProvider<NasClient>>),
+}
+
+impl Connected {
+    fn provider(&self) -> Arc<dyn Provider> {
+        match self {
+            Connected::Qnap(p) => Arc::clone(p) as Arc<dyn Provider>,
+            Connected::Unraid(p) => Arc::clone(p) as Arc<dyn Provider>,
+        }
+    }
+
+    /// Ends the session on the NAS, if there is one; the answer is ignored.
+    async fn logout(&self) {
+        if let Connected::Qnap(p) = self {
+            let _ = p.client().logout().await;
+        }
+    }
+}
+
 /// Provider for one NAS, as the app builds it. Needs a runtime context.
-fn provider(nas: &NasConfig) -> Result<Arc<QnapProvider<NasClient>>, String> {
+fn provider(nas: &NasConfig) -> Result<Connected, String> {
     let http = NasClient::new(&nas.base_url, nas.fingerprint)
         .map_err(|e| format!("nas {:?}: base_url: {e}", nas.id))?;
-    Ok(Arc::new(QnapProvider::new(
-        nas.id.clone(),
-        nas.base_url.clone(),
-        QnapClient::new(http, nas.user.clone(), nas.password.clone()),
-    )))
+    Ok(match nas.provider {
+        // The configuration carries the API key in `password`.
+        ProviderKind::Unraid => Connected::Unraid(Arc::new(UnraidProvider::new(
+            nas.id.clone(),
+            nas.base_url.clone(),
+            UnraidClient::new(http, nas.password.clone()),
+        ))),
+        _ => Connected::Qnap(Arc::new(QnapProvider::new(
+            nas.id.clone(),
+            nas.base_url.clone(),
+            QnapClient::new(http, nas.user.clone(), nas.password.clone()),
+        ))),
+    })
 }
 
 fn run() -> ExitCode {
@@ -265,7 +297,7 @@ async fn serve(config: config::Config, dir: &Path) -> Result<(), String> {
                 nas.id
             ));
         }
-        planner.add(&nas.id, Arc::clone(provider) as _, last_attempt_at, blocked);
+        planner.add(&nas.id, provider.provider(), last_attempt_at, blocked);
     }
 
     let listener = tokio::net::TcpListener::bind(config.listen)
@@ -305,7 +337,7 @@ async fn serve(config: config::Config, dir: &Path) -> Result<(), String> {
     }
     // End the sessions on the NAS, without waiting long for them.
     for (_, provider) in &providers {
-        let _ = tokio::time::timeout(Duration::from_secs(5), provider.client().logout()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), provider.logout()).await;
     }
     Ok(())
 }
