@@ -148,6 +148,7 @@ async fn a_stopped_hybrid_backup_sync_leaves_only_backups_empty() {
             Ok(LOGIN_OK),
             Ok(SYSINFO),
             Ok(HEALTH_WARNING),
+            Ok(UPS),
             Ok(FIRMWARE_NONE),
             Ok(USAGE),
             Ok(SMART),
