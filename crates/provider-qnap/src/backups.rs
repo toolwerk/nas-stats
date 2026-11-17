@@ -173,7 +173,8 @@ fn schedule_interval(job: &Value) -> Option<i64> {
 /// Longest gap in seconds between two runs of a cron line with five fields
 /// (minute hour day month weekday). Minute and hour are not evaluated.
 /// Understood: every day, a weekday set (`0`, `1,4`, `1-5`; `7` is Sunday)
-/// and a day-of-month set (`1`, `1,15`, counted with a month of 31 days).
+/// and a day-of-month set (`1`, `1,15`, counted with a month of 31 days, 62 days
+/// when it holds a day from 29 on).
 /// Everything else (a month, both day fields, steps, names) is `None`.
 fn cron_interval(line: &str) -> Option<i64> {
     let fields: Vec<&str> = line.split_whitespace().collect();
@@ -192,7 +193,16 @@ fn cron_interval(line: &str) -> Option<i64> {
                 .collect();
             longest_gap(&set, 7)
         }
-        (day, "*") => longest_gap(&cron_set(day, 1, 31)?, 31),
+        (day, "*") => {
+            let set = cron_set(day, 1, 31)?;
+            // Cron skips a month without the day (31st: 31 August to
+            // 31 October), so a plan with days 29 to 31 can idle 62 days.
+            if set.last().is_some_and(|last| *last >= 29) {
+                62
+            } else {
+                longest_gap(&set, 31)
+            }
+        }
         _ => return None,
     };
     Some(days * DAY_SECS)
@@ -277,6 +287,7 @@ mod tests {
             ("0 3 * * 1-5", 3),
             ("0 4 1 * *", 31),
             ("0 4 1,15 * *", 17),
+            ("0 4 31 * *", 62),
         ] {
             assert_eq!(cron_interval(line), Some(days * DAY), "{line}");
         }
