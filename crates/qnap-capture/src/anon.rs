@@ -66,6 +66,7 @@ fn is_descriptive(key: &str) -> bool {
         "domain",
         "workgroup",
         "email",
+        "community",
     ]
     .iter()
     .any(|s| k.contains(s))
@@ -97,7 +98,14 @@ pub fn classify(key: &str, json: bool) -> Option<Kind> {
         || k == "suid"
         || k == "sid"
         || [
-            "token", "pwd", "password", "cuid", "session", "jwt", "cookie",
+            "token",
+            "pwd",
+            "password",
+            "cuid",
+            "session",
+            "jwt",
+            "cookie",
+            "community",
         ]
         .iter()
         .any(|s| has(s))
@@ -843,6 +851,10 @@ mod tests {
         assert_eq!(classify("jwt", true), Some(Kind::Secret));
         assert_eq!(classify("session_id", true), Some(Kind::Secret));
         assert_eq!(classify("Cookie", true), Some(Kind::Secret));
+        // The SNMP community string of the UPS page is a password.
+        assert_eq!(classify("community", false), Some(Kind::Secret));
+        assert_eq!(classify("snmp_community", false), Some(Kind::Secret));
+        assert!(!is_descriptive("community_status"));
         assert_eq!(classify("username", false), Some(Kind::Personal));
         assert_eq!(classify("email", false), Some(Kind::Personal));
         assert_eq!(classify("ddns_host", false), Some(Kind::Personal));

@@ -3,13 +3,16 @@
 mod common;
 
 use common::{FakeTransport, calls, logins};
-use nas_model::{Alert, AlertLevel, Health, NetInterface, Provider, ProviderError, ProviderKind};
+use nas_model::{
+    Alert, AlertLevel, Health, NetInterface, Provider, ProviderError, ProviderKind, Ups, UpsState,
+};
 use provider_qnap::{QnapClient, QnapProvider};
 
 const LOGIN_OK: &str = include_str!("fixtures/login.xml");
 const LOGIN_WRONG: &str = include_str!("fixtures/login_wrong_password.xml");
 const SYSINFO: &str = include_str!("fixtures/sysinfo.xml");
 const HEALTH_WARNING: &str = include_str!("fixtures/syshealth.xml");
+const UPS: &str = include_str!("fixtures/ups.xml");
 const FIRMWARE_NONE: &str = include_str!("fixtures/firmware.xml");
 const USAGE: &str = include_str!("fixtures/disk_usage.xml");
 const SMART: &str = include_str!("fixtures/qsmart.xml");
@@ -26,6 +29,7 @@ async fn snapshot_holds_every_part() {
         Ok(LOGIN_OK),
         Ok(SYSINFO),
         Ok(HEALTH_WARNING),
+        Ok(UPS),
         Ok(FIRMWARE_NONE),
         Ok(USAGE),
         Ok(SMART),
@@ -68,7 +72,14 @@ async fn snapshot_holds_every_part() {
             since: None,
         }]
     );
-    assert_eq!(snapshot.ups, None);
+    assert_eq!(
+        snapshot.ups,
+        Some(Ups {
+            state: Some(UpsState::Online),
+            charge_percent: Some(100.0),
+            runtime_seconds: Some(3720),
+        })
+    );
     assert_eq!(snapshot.volumes.len(), 3);
     assert_eq!(snapshot.disks.len(), 9);
     assert_eq!(
@@ -92,6 +103,7 @@ async fn snapshot_holds_every_part() {
             "/cgi-bin/authLogin.cgi",
             "/cgi-bin/management/manaRequest.cgi",
             "/cgi-bin/management/manaRequest.cgi",
+            "/cgi-bin/devices/devRequest.cgi",
             "/cgi-bin/sys/sysRequest.cgi",
             "/cgi-bin/management/chartReq.cgi",
             "/cgi-bin/disk/qsmart.cgi",
@@ -111,6 +123,7 @@ async fn an_http_error_of_storage_leaves_only_storage_empty() {
         Ok(LOGIN_OK),
         Ok(SYSINFO),
         Ok(HEALTH_WARNING),
+        Ok(UPS),
         Ok(FIRMWARE_NONE),
         Err(ProviderError::Http(500)),
         Ok(BANDWIDTH),
@@ -135,6 +148,7 @@ async fn a_stopped_hybrid_backup_sync_leaves_only_backups_empty() {
             Ok(LOGIN_OK),
             Ok(SYSINFO),
             Ok(HEALTH_WARNING),
+            Ok(UPS),
             Ok(FIRMWARE_NONE),
             Ok(USAGE),
             Ok(SMART),
@@ -162,6 +176,7 @@ async fn a_timeout_of_the_network_fails_the_snapshot() {
         Ok(LOGIN_OK),
         Ok(SYSINFO),
         Ok(HEALTH_WARNING),
+        Ok(UPS),
         Ok(FIRMWARE_NONE),
         Ok(USAGE),
         Ok(SMART),
@@ -173,7 +188,7 @@ async fn a_timeout_of_the_network_fails_the_snapshot() {
         ProviderError::Timeout
     );
     // No request to the Container Station after the failure.
-    assert_eq!(calls(&fake).len(), 7);
+    assert_eq!(calls(&fake).len(), 8);
 }
 
 #[tokio::test]
