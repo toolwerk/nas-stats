@@ -24,6 +24,9 @@ private func text(for error: FfiError) -> String {
     case .SecondFactorRequired:
         return "Das Konto verlangt eine 2-Schritt-Bestätigung. Nehmen Sie ein "
             + "eigenes Konto ohne 2-Schritt-Bestätigung."
+    case .IpBlocked:
+        return "Das NAS hat diese Adresse gesperrt. Entsperren Sie sie in DSM unter "
+            + "Systemsteuerung › Sicherheit › Schutz oder warten Sie die Sperrzeit ab."
     case .PermissionDenied:
         return "Dem Konto fehlen Rechte. Geben Sie ihm die Rolle „System Monitoring“."
     case .Unreachable, .Timeout:

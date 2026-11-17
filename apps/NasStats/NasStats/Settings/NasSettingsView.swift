@@ -364,7 +364,7 @@ private struct ChangeAccessView: View {
             let entry = store.entries.first { $0.id == account.id.uuidString }
             if let entry, entry.blocked {
                 switch entry.problem?.kind {
-                case .loginFailed?, .secondFactorRequired?:
+                case .loginFailed?, .secondFactorRequired?, .ipBlocked?:
                     refused = credentials
                 default:
                     errorText = entry.localError ?? entry.problem?.message
