@@ -272,7 +272,7 @@ struct AddNasView: View {
                 close()
             } catch {
                 switch error as? FfiError {
-                case .LoginFailed?, .SecondFactorRequired?:
+                case .LoginFailed?, .SecondFactorRequired?, .IpBlocked?:
                     refusedCredentials = Credentials(
                         baseUrl: baseUrl, user: account.user, password: password
                     )

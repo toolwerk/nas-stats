@@ -16,6 +16,8 @@ pub enum FfiError {
     LoginFailed,
     #[error("NAS verlangt einen zweiten Faktor")]
     SecondFactorRequired,
+    #[error("NAS hat diese Adresse gesperrt")]
+    IpBlocked,
     #[error("Konto hat keine Rechte für diese Abfrage")]
     PermissionDenied,
     #[error("Zertifikat des NAS hat sich geändert (vorher {old}, jetzt {new})")]
@@ -57,6 +59,7 @@ impl From<ProviderError> for FfiError {
             ProviderError::Timeout => Self::Timeout,
             ProviderError::LoginFailed => Self::LoginFailed,
             ProviderError::SecondFactorRequired => Self::SecondFactorRequired,
+            ProviderError::IpBlocked => Self::IpBlocked,
             ProviderError::PermissionDenied => Self::PermissionDenied,
             ProviderError::CertificateChanged { old, new } => Self::CertificateChanged { old, new },
             ProviderError::Parse(detail) => Self::Parse { detail },
@@ -76,6 +79,7 @@ mod tests {
             ProviderError::Timeout,
             ProviderError::LoginFailed,
             ProviderError::SecondFactorRequired,
+            ProviderError::IpBlocked,
             ProviderError::PermissionDenied,
             ProviderError::CertificateChanged {
                 old: "AA".into(),
