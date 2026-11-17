@@ -106,6 +106,15 @@ impl<T: Transport> QnapClient<T> {
         }
     }
 
+    /// The current QTS session id, logging in when there is none, for
+    /// interfaces that take the session in a header (Hybrid Backup Sync).
+    /// While logins are blocked, the blocking error without a request;
+    /// after [`QnapClient::logout`], [`ProviderError::LoginFailed`].
+    pub(crate) async fn session_id(&self) -> Result<String, ProviderError> {
+        let mut state = self.state.lock().await;
+        self.session(&mut state).await
+    }
+
     /// User action „Erneut anmelden“: lifts the block and logs in once.
     pub async fn login(&self) -> Result<(), ProviderError> {
         let result = {
