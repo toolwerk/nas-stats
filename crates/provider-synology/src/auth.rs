@@ -10,14 +10,14 @@ use crate::api::parse_envelope;
 pub const DEVICE_NAME: &str = "NAS Stats";
 
 /// Hint for the app: DSM lets only administrators read system values.
-pub const ADMIN_HINT: &str = "Synology DSM gibt Systemwerte nur an Konten der Gruppe „administrators“ heraus. Trage ein Administrator-Konto ein; NAS Stats liest nur und ändert nichts.";
+pub const ADMIN_HINT: &str = "Synology DSM gibt Systemwerte nur an Konten der Gruppe „administrators“ heraus. Tragen Sie ein Administrator-Konto ein; NAS Stats liest nur und ändert nichts.";
 
 /// Hint for the app when DSM asks for the second factor: the code is entered
 /// once, after that the NAS remembers this device.
-pub const SECOND_FACTOR_HINT: &str = "Für dieses Konto ist die 2-Faktor-Authentifizierung aktiv. Gib einmal den aktuellen Code aus der Authenticator-App ein; danach merkt sich das NAS dieses Gerät als „NAS Stats“ und fragt nicht mehr danach.";
+pub const SECOND_FACTOR_HINT: &str = "Für dieses Konto ist die 2-Faktor-Authentifizierung aktiv. Geben Sie einmal den aktuellen Code aus der Authenticator-App ein; danach merkt sich das NAS dieses Gerät als „NAS Stats“ und fragt nicht mehr danach.";
 
 /// Hint for the app after DSM error 407.
-pub const IP_BLOCKED_HINT: &str = "Das NAS hat die Adresse dieses Geräts nach zu vielen fehlgeschlagenen Anmeldungen gesperrt. Entsperre sie in DSM unter Systemsteuerung › Sicherheit › Schutz oder warte die Sperrzeit ab, dann melde dich erneut an.";
+pub const IP_BLOCKED_HINT: &str = "Das NAS hat die Adresse dieses Geräts nach zu vielen fehlgeschlagenen Anmeldungen gesperrt. Entsperren Sie sie in DSM unter Systemsteuerung › Sicherheit › Schutz oder warten Sie die Sperrzeit ab, dann melden Sie sich erneut an.";
 
 /// What the NAS said to a login.
 #[derive(Debug, Clone, PartialEq, Eq)]
