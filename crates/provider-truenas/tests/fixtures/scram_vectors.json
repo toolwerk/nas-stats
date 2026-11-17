@@ -1,0 +1,25 @@
+{
+  "source": "truenas/api_client ecc1f7a, truenas_api_client/py_scram",
+  "username": "nasstats",
+  "api_key": "1-Xq7Lm2Pz9Rt4Wv6Yb8Nc3Kd5Fg1Hj0Sa",
+  "iterations": 500000,
+  "client_nonce": "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+  "server_nonce": "ZWZnaGlqa2xtbm9wcXJzdHV2d3h5ent8fX5/gIGCg4Q=",
+  "salt": "yMnKy8zNzs/Q0dLT1NXW1w==",
+  "cert_der": "MIIBZTCCAQqgAwIBAgIUKYs4I0Tg9YWnJgaGbeoEswGabnYwCgYIKoZIzj0EAwIwITEfMB0GA1UEAwwWcmNnZW4gc2VsZiBzaWduZWQgY2VydDAgFw03NTAxMDEwMDAwMDBaGA80MDk2MDEwMTAwMDAwMFowITEfMB0GA1UEAwwWcmNnZW4gc2VsZiBzaWduZWQgY2VydDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABEz5jhT3JCWkG8eNauoVcvwXcsssxhS2b4Mu5vgJMM18Y1H+8/23eB1ZceC1y9vUfNEeq4unT6pmdZMjJJkdQ2WjHjAcMBoGA1UdEQQTMBGCD3RydWVuYXMuZXhhbXBsZTAKBggqhkjOPQQDAgNJADBGAiEA4u7LX8eBXRZreP2+N3Ox10AwJXPqdNGb6v/njs2cFHsCIQDSKOCBpwcCmbU3wg6IAE+TduErhNkYLuFLeCPaC9snaw==",
+  "cert_binding": "ODCXwq4YqmJv3dp8Qjp5PFQy+uTI0DFrO7sLAePZYRY=",
+  "unbound": {
+    "client_first": "n,,n=nasstats:1,r=AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+    "server_first": "r=AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyBlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn+AgYKDhA==,s=yMnKy8zNzs/Q0dLT1NXW1w==,i=500000",
+    "client_final": "c=biws,r=AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyBlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn+AgYKDhA==,p=zX4rxnan0h4QhXrzNkdS+EbZ4/y5bGwfI6CaVTQS0NEttn5VdshOFrcdbaAiLf7T+R3Jg00m0LeLajb3nAIByQ==",
+    "server_final": "v=0eeXpMMRtdNI50Yh9v2egZwuvxe7rFGYVHLdPJ/9PwZjCKXj5Osgj42F+CbhJUZ6YmdRyHbNwsdnqf5AQUG/og==",
+    "server_final_signature": "0eeXpMMRtdNI50Yh9v2egZwuvxe7rFGYVHLdPJ/9PwZjCKXj5Osgj42F+CbhJUZ6YmdRyHbNwsdnqf5AQUG/og=="
+  },
+  "bound": {
+    "client_first": "p=tls-server-end-point,,n=nasstats:1,r=AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+    "server_first": "r=AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyBlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn+AgYKDhA==,s=yMnKy8zNzs/Q0dLT1NXW1w==,i=500000",
+    "client_final": "c=cD10bHMtc2VydmVyLWVuZC1wb2ludCwsODCXwq4YqmJv3dp8Qjp5PFQy+uTI0DFrO7sLAePZYRY=,r=AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyBlZmdoaWprbG1ub3BxcnN0dXZ3eHl6e3x9fn+AgYKDhA==,p=kRk9i+PBlsN+FpKBaBfe99hU+hlkmp+B0m+5RMcKgtVKDKwoQEr0cvrpwHy4hVfrRkxETxSStN7TICp0Nebkyw==",
+    "server_final": "v=uE3quZkCGn7ZNK+Y5Ui3FTQXyBuLBXFDsXyIZkmhllXpRzMllZjUbzFgNuCruG/KdCfHfs3/TrVeANHzqKq9Vw==",
+    "server_final_signature": "uE3quZkCGn7ZNK+Y5Ui3FTQXyBuLBXFDsXyIZkmhllXpRzMllZjUbzFgNuCruG/KdCfHfs3/TrVeANHzqKq9Vw=="
+  }
+}

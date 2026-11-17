@@ -8,6 +8,7 @@ members = [
     "crates/provider-qnap",
     "crates/provider-synology",
     "crates/provider-unraid",
+    "crates/provider-truenas",
     "crates/stats-core",
     "crates/stats-ffi",
     "crates/uniffi-bindgen",
@@ -28,6 +29,7 @@ stats-core = { path = "crates/stats-core" }
 provider-qnap = { path = "crates/provider-qnap" }
 provider-synology = { path = "crates/provider-synology" }
 provider-unraid = { path = "crates/provider-unraid" }
+provider-truenas = { path = "crates/provider-truenas" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
@@ -49,6 +51,12 @@ roxmltree = "0.21"
 uniffi = "0.32.2"
 rusqlite = { version = "0.41.0", features = ["bundled"] }
 jiff = "0.2"
+# WebSocket for TrueNAS over the pinned TLS stream of nas-http; no own TLS.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+ring = "0.17"
+x509-parser = "0.18"
+url = "2.5"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
